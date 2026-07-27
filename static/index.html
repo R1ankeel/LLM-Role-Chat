@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AI Roleplay Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Left sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h2>Чаты</h2>
+        <button id="btn-new-chat" class="btn btn-primary btn-sm">+ Новый чат</button>
+      </div>
+      <div id="chat-list"></div>
+    </aside>
+
+    <!-- Main area -->
+    <main id="main">
+      <!-- Chat header -->
+      <header id="chat-header" class="hidden">
+        <div class="header-left">
+          <h3 id="chat-title">Выберите чат</h3>
+          <span id="chat-model" class="header-model"></span>
+        </div>
+        <div class="header-right">
+          <button id="btn-clear-history" class="btn btn-sm" title="Очистить историю">🗑️</button>
+          <button id="btn-settings" class="btn btn-icon" title="Настройки">⚙️</button>
+        </div>
+      </header>
+
+      <!-- Messages area -->
+      <div id="messages-container">
+        <div id="messages"></div>
+        <div id="typing-indicator" class="hidden">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span id="typing-text"></span>
+        </div>
+      </div>
+
+      <!-- Input area -->
+      <footer id="input-area" class="hidden">
+        <textarea id="message-input" rows="2" placeholder="Введите сообщение..." disabled></textarea>
+        <button id="btn-send" class="btn btn-primary" disabled>▶</button>
+      </footer>
+    </main>
+  </div>
+
+  <!-- New Chat Modal -->
+  <div id="modal-new-chat" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Новый чат</h3>
+      <label>Название <input type="text" id="new-chat-name" required></label>
+      <label>Сюжет / общий промпт
+        <textarea id="new-chat-prompt" rows="3" placeholder="Опишите мир и сюжет..."></textarea>
+      </label>
+      <label>Модель Ollama
+        <input type="text" id="new-chat-model" value="qwen3-coder:30b-a3b-q4_K_M">
+      </label>
+      <div class="modal-actions">
+        <button id="btn-new-chat-cancel" class="btn">Отмена</button>
+        <button id="btn-new-chat-confirm" class="btn btn-primary">Создать</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal modal-wide">
+      <h3>Настройки чата</h3>
+      <div class="tabs">
+        <button class="tab active" data-tab="general">Основное</button>
+        <button class="tab" data-tab="characters">Персонажи</button>
+        <button class="tab" data-tab="memories">Память</button>
+      </div>
+
+      <!-- General tab -->
+      <div class="tab-content active" id="tab-general">
+        <label>Название <input type="text" id="settings-name"></label>
+        <label>Сюжет / общий промпт
+          <textarea id="settings-prompt" rows="3"></textarea>
+        </label>
+        <label>Модель <input type="text" id="settings-model"></label>
+        <label>История (сообщений) <input type="number" id="settings-history" min="5" max="200"></label>
+        <button id="btn-save-settings" class="btn btn-primary">Сохранить</button>
+      </div>
+
+      <!-- Characters tab -->
+      <div class="tab-content" id="tab-characters">
+        <div id="character-list"></div>
+        <button id="btn-add-character" class="btn btn-primary btn-sm">+ Добавить персонажа</button>
+      </div>
+
+      <!-- Memories tab -->
+      <div class="tab-content" id="tab-memories">
+        <div id="memories-list"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="btn-settings-close" class="btn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Character editor modal -->
+  <div id="modal-character" class="modal-overlay hidden">
+    <div class="modal">
+      <h3 id="char-editor-title">Персонаж</h3>
+      <input type="hidden" id="char-editor-id">
+      <label>Имя <input type="text" id="char-editor-name" required></label>
+      <label>Личность
+        <textarea id="char-editor-personality" rows="2" placeholder="Напр. добрый, мудрый старец"></textarea>
+      </label>
+      <label>Черты
+        <textarea id="char-editor-traits" rows="2" placeholder="Напр. любит чай, боится пауков"></textarea>
+      </label>
+      <label>Порядок <input type="number" id="char-editor-order" min="0" value="0"></label>
+      <div class="modal-actions">
+        <button id="btn-char-cancel" class="btn">Отмена</button>
+        <button id="btn-char-save" class="btn btn-primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
