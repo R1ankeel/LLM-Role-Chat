@@ -298,6 +298,9 @@ html, body {
   display: flex;
   gap: 10px;
   align-items: flex-end;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
 }
 
 #message-input {
@@ -312,6 +315,7 @@ html, body {
   resize: none;
   outline: none;
   transition: border-color 0.2s;
+  min-height: 40px;
 }
 
 #message-input:focus { border-color: var(--accent); }
@@ -574,6 +578,22 @@ html, body {
     display: flex;
   }
   
+  /* Mobile back button */
+  .mobile-back-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 20px;
+    cursor: pointer;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+  
   /* Compact message styles for mobile */
   .message {
     margin-bottom: 8px;
@@ -609,7 +629,7 @@ html, body {
     font-size: 13px;
   }
   
-.message-content {
+  .message-content {
     font-size: 15px;
     padding: 8px 12px;
     border-radius: 16px 16px 4px 16px;
@@ -629,7 +649,7 @@ html, body {
     border-radius: 16px 16px 16px 4px;
   }
   
-#messages-container {
+  #messages-container {
     width: 100%;
     padding: 8px 12px;
     box-sizing: border-box;
@@ -638,11 +658,18 @@ html, body {
     min-width: 0;
     display: flex;
     flex-direction: column;
+    /* Add padding to prevent overlap with input area */
+    padding-bottom: calc(72px + 8px); /* 72px is input height + 8px padding */
   }
   
   #input-area {
     padding: 8px 12px;
     padding-bottom: env(safe-area-inset-bottom, 8px);
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    /* Ensure input area doesn't overlap messages */
+    height: 72px; /* Fixed height to prevent layout shifts */
   }
   
   #message-input {
@@ -650,6 +677,20 @@ html, body {
     padding: 8px 12px;
     width: 100%;
     box-sizing: border-box;
+  }
+}
+
+/* Mobile back button - visible on mobile devices */
+@media (max-width: 768px) {
+  .mobile-back-btn {
+    display: inline-flex;
+  }
+}
+
+/* Hide back button on desktop */
+@media (min-width: 769px) {
+  .mobile-back-btn {
+    display: none;
   }
 }
 

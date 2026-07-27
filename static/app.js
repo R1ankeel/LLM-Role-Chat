@@ -33,6 +33,41 @@ function updateView() {
     // For desktop, always show both sidebar and main area
     appContainer.className = "";
   }
+  
+  // Ensure input area is properly positioned on mobile
+  if (isMobile) {
+    const inputArea = document.getElementById("input-area");
+    if (inputArea) {
+      inputArea.style.position = "sticky";
+      inputArea.style.bottom = "0";
+      inputArea.style.zIndex = "10";
+    }
+  }
+}
+
+// ===== Add mobile back button functionality =====
+function setupMobileBackButton() {
+  const mobileBackBtn = document.getElementById('mobileBackBtn');
+  if (mobileBackBtn) {
+    mobileBackBtn.addEventListener('click', () => {
+      // Hide chat-area, show sidebar
+      const appContainer = document.getElementById("app");
+      appContainer.classList.remove('view-chat');
+      appContainer.classList.add('view-list');
+      // Optional: reset active chat in state
+      AppState.currentChatId = null;
+// Update header title
+document.getElementById('chat-title').textContent = '';
+    });
+  }
+}
+
+// ===== Show mobile back button when entering chat view =====
+function showMobileBackButton() {
+  const mobileBackBtn = document.getElementById('mobileBackBtn');
+  if (mobileBackBtn && isMobile) {
+    mobileBackBtn.style.display = 'inline-flex';
+  }
 }
 
 // ===== Handle window resize =====
@@ -160,6 +195,7 @@ async function selectChat(chatId) {
     // Update view for mobile
     if (isMobile) {
       updateView();
+      showMobileBackButton(); // Show back button when entering chat view
     }
   } catch (e) {
     showToast("Ошибка загрузки чата: " + e.message);
@@ -605,3 +641,4 @@ if (!localStorage.getItem("ai_roleplay_visited")) {
 }
 
 loadChats();
+setupMobileBackButton();
