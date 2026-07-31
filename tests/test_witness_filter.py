@@ -144,13 +144,14 @@ def test_format_history_integration_with_locations(character_names):
     assert "Character A: A speaks" not in filtered_for_b
 
 
-def test_presence_persisted_in_crud(db_session, chat):
-    characters = create_characters(db_session, chat.id, 2)
-    user_message = crud.create_message(
+@pytest.mark.asyncio
+async def test_presence_persisted_in_crud(db_session, chat):
+    characters = await create_characters(db_session, chat.id, 2)
+    user_message = await crud.create_message(
         db_session,
         schemas.MessageCreate(chat_id=chat.id, role="user", content="Hi"),
     )
-    char_message = crud.create_message(
+    char_message = await crud.create_message(
         db_session,
         schemas.MessageCreate(
             chat_id=chat.id,
@@ -160,7 +161,7 @@ def test_presence_persisted_in_crud(db_session, chat):
         ),
     )
 
-    crud.upsert_message_presence_batch(
+    await crud.upsert_message_presence_batch(
         db_session,
         [
             schemas.MessagePresenceCreate(
@@ -176,7 +177,7 @@ def test_presence_persisted_in_crud(db_session, chat):
         ],
     )
 
-    presence_for_b = crud.get_presence_map(
+    presence_for_b = await crud.get_presence_map(
         db_session,
         [user_message.id, char_message.id],
         characters[1].id,
@@ -187,13 +188,13 @@ def test_presence_persisted_in_crud(db_session, chat):
 
 @pytest.mark.asyncio
 async def test_memory_service_uses_filtered_text(db_session, chat, db_engine):
-    characters = create_characters(db_session, chat.id, 2)
+    characters = await create_characters(db_session, chat.id, 2)
     character_a, character_b = characters
-    user_message = crud.create_message(
+    user_message = await crud.create_message(
         db_session,
         schemas.MessageCreate(chat_id=chat.id, role="user", content="Hello"),
     )
-    message_a = crud.create_message(
+    message_a = await crud.create_message(
         db_session,
         schemas.MessageCreate(
             chat_id=chat.id,
@@ -211,7 +212,7 @@ async def test_memory_service_uses_filtered_text(db_session, chat, db_engine):
         for c in characters
     ]
 
-    crud.upsert_message_presence_batch(
+    await crud.upsert_message_presence_batch(
         db_session,
         [
             schemas.MessagePresenceCreate(
@@ -233,14 +234,14 @@ async def test_memory_service_uses_filtered_text(db_session, chat, db_engine):
         captured_texts[character.name] = text
         return []
 
-    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    test_session_factory = sessionmaker(bind=db_engine)
+    test_session_factory = async_sessionmaker(bind=db_engine, expire_on_commit=False)
 
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory_service.AsyncSessionLocal", test_session_factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,

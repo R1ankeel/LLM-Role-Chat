@@ -4,6 +4,10 @@ The KV window (``num_ctx``) starts at ``MIN_CTX`` and only ever grows, and
 only when the actual assembled prompt outgrows it (``prompt_tokens + buffer
 > current_ctx``). This keeps early responses fast (small cache) while long
 conversations still get the context they need, capped by ``MAX_CTX``.
+
+A safety factor is applied to estimated prompt tokens to account for
+tokenizer estimation variance (especially with non-English text), preventing
+silent truncation by Ollama when actual tokens exceed the estimated count.
 """
 
 from __future__ import annotations
@@ -40,11 +44,12 @@ class ContextState:
 
         The window changes only when the prompt strictly exceeds the current
         window (``prompt_tokens > current_ctx``); it then becomes
-        ``prompt_tokens + CTX_BUFFER_TOKENS`` and never shrinks. Growth is
-        clamped to ``MAX_CTX``.
+        ``prompt_tokens * safety_factor + CTX_BUFFER_TOKENS`` and never shrinks.
+        Growth is clamped to ``MAX_CTX``.
         """
         buffer = max(0, settings.ctx_buffer_tokens)
-        needed = min(int(prompt_tokens) + buffer, settings.max_ctx_tokens)
+        safety_factor = max(1.0, settings.ctx_safety_factor)
+        needed = min(int(prompt_tokens * safety_factor) + buffer, settings.max_ctx_tokens)
         with self._lock:
             current = self._ctx.get(chat_id, settings.min_ctx_tokens)
             if int(prompt_tokens) > current:

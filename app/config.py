@@ -128,6 +128,7 @@ class Settings(BaseSettings):
     min_ctx_tokens: int = Field(default=8192, alias="MIN_CTX")
     max_ctx_tokens: int = Field(default=32778, alias="MAX_CTX")
     ctx_buffer_tokens: int = Field(default=100, alias="CTX_BUFFER_TOKENS")
+    ctx_safety_factor: float = Field(default=1.3, alias="CTX_SAFETY_FACTOR")
 
     # Rate limiting
     rate_limit_seconds: int = Field(default=5, alias="RATE_LIMIT_SECONDS")

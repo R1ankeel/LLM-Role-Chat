@@ -260,6 +260,17 @@ class ContextBuilder:
         content_available = max(
             0, budget.total_tokens - budget.reserve_tokens - fixed_tokens
         )
+
+        # Overflow diagnostic: if fixed portion itself exceeds budget, record it
+        if fixed_tokens > budget.total_tokens - budget.reserve_tokens:
+            dropped.append(
+                schemas.DroppedItem(
+                    component="scene",
+                    reason="fixed_budget_exceeded",
+                    preview=scene_block[:60],
+                )
+            )
+
         content_used = summary_tokens + mem_tokens + retrieved_tokens + recent_tokens
         overrun = content_used - content_available
 
@@ -334,7 +345,7 @@ class ContextBuilder:
 
         component_tokens = {
             "system": system_tokens,
-            "scene_state": scene_tokens,
+            "scene": scene_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -350,6 +361,7 @@ class ContextBuilder:
             dialogue_text=dialogue_text,
             recent_text=recent_text,
             retrieved_text=retrieved_text,
+            scene_text=scene_block,
             summary_text=summary_text or None,
             memories=mem_list,
             total_tokens=total_tokens,

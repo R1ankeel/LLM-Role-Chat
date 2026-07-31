@@ -141,8 +141,7 @@ class TestBuildSystemPrompt:
             ),
             general_prompt="Лесная тропа",
         )
-        assert "<scene>" in prompt
-        assert "Лесная тропа" in prompt
+        assert "<scene>" not in prompt
         assert "<examples>" in prompt
         assert "Привет." in prompt
 

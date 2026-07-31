@@ -227,6 +227,66 @@ def filter_history_for_character(
     return "\n".join(lines)
 
 
+def filter_history_for_character_with_presence(
+    messages: list,
+    viewer_character_id: int,
+    character_names: dict[int, str],
+    presence_map: dict[int, Presence] | None = None,
+    *,
+    same_round_ids: set[int] | None = None,
+    viewer_location: str | None = None,
+    character_locations: dict[int, str] | None = None,
+    max_replies_per_character: int = 0,
+    max_len: int | None = None,
+) -> list:
+    """Return a list of message objects filtered by witness perception.
+
+    Unlike filter_history_for_character which returns formatted text, this
+    returns the original message objects that the character can perceive
+    (present/told/mentioned). Use for vocabulary borrowing checks and
+    repetition detection which operate on message objects.
+    """
+    if not settings.enable_witness_filter:
+        return messages
+
+    if max_len is None:
+        max_len = len(messages) or 1
+    recent = messages[-max_len:] if len(messages) > max_len else messages
+    filtered: list = []
+    char_count: dict[int, int] = {}
+
+    for message in reversed(recent):
+        presence = resolve_presence(
+            message,
+            viewer_character_id,
+            character_names,
+            presence_map,
+            same_round_ids=same_round_ids,
+            viewer_location=viewer_location,
+            character_locations=character_locations,
+        )
+
+        # Skip absent messages
+        if presence == "absent":
+            continue
+
+        cid = _get_attr(message, "character_id")
+        is_self = (cid is not None and int(cid) == viewer_character_id)
+
+        if not is_self and max_replies_per_character > 0 and cid is not None:
+            cid_key = int(cid)
+            if cid_key not in char_count:
+                char_count[cid_key] = 0
+            if char_count[cid_key] >= max_replies_per_character:
+                continue
+            char_count[cid_key] += 1
+
+        filtered.append(message)
+
+    filtered.reverse()
+    return filtered
+
+
 @dataclass
 class ObservableEventLine:
     """One message included in a character's memory-observable context."""

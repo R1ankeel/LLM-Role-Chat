@@ -102,12 +102,13 @@ class TestGoldenSystemPrompt:
         result = build_system_prompt(char, general_prompt="Scene")
 
         char_pos = result.find("<character>")
-        scene_pos = result.find("<scene>")
         ex_pos = result.find("<examples>")
         rules_pos = result.find("<rules>")
         isolation_pos = result.find("ТЕКУЩИЙ ПЕРСОНАЖ: Боб")
 
-        assert char_pos < scene_pos < ex_pos < rules_pos < isolation_pos
+        # Scene is no longer in system prompt (built by ContextBuilder instead)
+        assert "<scene>" not in result
+        assert char_pos < ex_pos < rules_pos < isolation_pos
 
 
 class TestGoldenAntiMimicry:

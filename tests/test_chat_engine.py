@@ -30,7 +30,7 @@ async def test_sequential_generation_order_and_context(
     db_session, chat, mock_client
 ):
     """TEST 5: characters generate in order_index order and see prior replies."""
-    characters = create_characters(db_session, chat.id, 3)
+    characters = await create_characters(db_session, chat.id, 3)
     call_log: list[dict] = []
 
     async def fake_generate(**kwargs):
@@ -85,7 +85,7 @@ async def test_sequential_generation_order_and_context(
     assert call_log[1]["viewer_character_id"] == characters[1].id
     assert call_log[2]["viewer_character_id"] == characters[2].id
 
-    saved = crud.get_messages_by_chat(db_session, chat.id)
+    saved = await crud.get_messages_by_chat(db_session, chat.id)
     character_messages = [m for m in saved if m.role == "character"]
     assert [m.character_id for m in character_messages] == [
         characters[0].id,
@@ -97,7 +97,7 @@ async def test_sequential_generation_order_and_context(
 @pytest.mark.asyncio
 async def test_memory_isolation_per_character(db_session, chat, mock_client):
     """TEST 8: each character receives only its own memories in generate()."""
-    characters = create_characters(db_session, chat.id, 3)
+    characters = await create_characters(db_session, chat.id, 3)
     memory_map = {}
     for character, content in zip(
         characters,
@@ -107,7 +107,7 @@ async def test_memory_isolation_per_character(db_session, chat, mock_client):
             "Memory unique to Character C",
         ],
     ):
-        crud.create_memory(
+        await crud.create_memory(
             db_session,
             schemas.MemoryCreate(
                 chat_id=chat.id,
@@ -117,14 +117,14 @@ async def test_memory_isolation_per_character(db_session, chat, mock_client):
         )
         memory_map[character.id] = content
 
-    crud.upsert_character_summary(
+    await crud.upsert_character_summary(
         db_session,
         chat.id,
         characters[0].id,
         "Summary only for Character A",
         through_message_id=0,
     )
-    crud.upsert_character_summary(
+    await crud.upsert_character_summary(
         db_session,
         chat.id,
         characters[1].id,
@@ -178,7 +178,7 @@ async def test_per_character_memory_extraction_called(
     db_session, chat, mock_client, db_engine
 ):
     """Verify per-character memory extraction runs via background task with snapshots."""
-    create_characters(db_session, chat.id, 2)
+    await create_characters(db_session, chat.id, 2)
     background_tasks: list = []
 
     extracted_calls = []
@@ -194,7 +194,8 @@ async def test_per_character_memory_extraction_called(
         background_tasks.append(task)
         return task
 
-    test_session_factory = sessionmaker(bind=db_engine)
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    test_session_factory = async_sessionmaker(bind=db_engine, expire_on_commit=False)
 
     async def fake_generate(**kwargs):
         yield {"type": "response", "text": "Valid reply here."}
@@ -225,7 +226,7 @@ async def test_memory_extraction_with_snapshots_after_session_closed(
     db_session, chat, mock_client, db_engine
 ):
     """Regression: background memory extraction must not touch detached ORM objects."""
-    characters = create_characters(db_session, chat.id, 2)
+    characters = await create_characters(db_session, chat.id, 2)
     character_snapshots = [
         chat_engine._character_to_snapshot(c) for c in characters
     ]
@@ -251,7 +252,8 @@ async def test_memory_extraction_with_snapshots_after_session_closed(
 
     db_session.close()
 
-    test_session_factory = sessionmaker(bind=db_engine)
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    test_session_factory = async_sessionmaker(bind=db_engine, expire_on_commit=False)
 
     async def fake_extract_for_character(client, model, character, text):
         return [f"Fact for {character.name}"]
@@ -259,7 +261,7 @@ async def test_memory_extraction_with_snapshots_after_session_closed(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract_for_character,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory_service.AsyncSessionLocal", test_session_factory):
         await memory_service._extract_and_save_memories(
             mock_client,
             chat_id,
@@ -271,10 +273,10 @@ async def test_memory_extraction_with_snapshots_after_session_closed(
     verify_session = test_session_factory()
     try:
         for snapshot in character_snapshots:
-            memories = crud.get_memories_by_character(
+            memories = await crud.get_memories_by_character(
                 verify_session, snapshot["id"]
             )
             assert len(memories) == 1
             assert memories[0].content == f"Fact for {snapshot['name']}"
     finally:
-        verify_session.close()
+        await verify_session.close()

@@ -541,6 +541,7 @@ class BuiltContext(BaseModel):
     dialogue_text: str = ""
     recent_text: str = ""
     retrieved_text: str = ""
+    scene_text: str = ""
     summary_text: Optional[str] = None
     memories: list = Field(default_factory=list)
     total_tokens: int = 0

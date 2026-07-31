@@ -8,6 +8,7 @@ from app.context_state import ContextState
 MIN = settings.min_ctx_tokens
 MAX = settings.max_ctx_tokens
 BUF = settings.ctx_buffer_tokens
+SAFETY = settings.ctx_safety_factor
 
 
 @pytest.fixture()
@@ -30,25 +31,30 @@ def test_prompt_just_under_min_keeps_min(state):
 
 
 def test_prompt_above_min_grows_to_prompt_plus_buffer(state):
-    num_ctx = state.apply_prompt(1, MIN + 2000)
-    assert num_ctx == MIN + 2000 + BUF
-    assert state.get(1) == MIN + 2000 + BUF
+    prompt = MIN + 2000
+    expected = int(prompt * SAFETY) + BUF
+    num_ctx = state.apply_prompt(1, prompt)
+    assert num_ctx == expected
+    assert state.get(1) == expected
 
 
 def test_ctx_is_monotonic_never_shrinks(state):
     state.apply_prompt(1, 15000)
-    assert state.get(1) == 15000 + BUF
+    assert state.get(1) == int(15000 * SAFETY) + BUF
     state.apply_prompt(1, 12000)
-    assert state.get(1) == 15000 + BUF
+    assert state.get(1) == int(15000 * SAFETY) + BUF
 
 
 def test_ctx_only_grows_when_prompt_outgrows_current(state):
     state.apply_prompt(1, 9000)
-    assert state.get(1) == 9000 + BUF
+    first = int(9000 * SAFETY) + BUF
+    assert state.get(1) == first
     state.apply_prompt(1, 9000 + BUF)
-    assert state.get(1) == 9000 + BUF
-    state.apply_prompt(1, 9000 + BUF + 1)
-    assert state.get(1) == 9000 + BUF + 1 + BUF
+    assert state.get(1) == first
+    # Next prompt must exceed current num_ctx to trigger growth
+    state.apply_prompt(1, first + 1)
+    second = int((first + 1) * SAFETY) + BUF
+    assert state.get(1) == second
 
 
 def test_ctx_is_capped_at_max(state):
@@ -66,8 +72,8 @@ def test_reset_returns_to_min(state):
 def test_chats_are_isolated(state):
     state.apply_prompt(1, 20000)
     state.apply_prompt(2, 9000)
-    assert state.get(1) == 20000 + BUF
-    assert state.get(2) == 9000 + BUF
+    assert state.get(1) == int(20000 * SAFETY) + BUF
+    assert state.get(2) == int(9000 * SAFETY) + BUF
 
 
 def test_remove_forgets_chat(state):

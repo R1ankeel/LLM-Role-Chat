@@ -192,23 +192,24 @@ def test_empty_locations_backward_compatible():
     assert witness_model.compute_mvp_presence(event, 2, names) == "present"
 
 
-def test_compute_and_save_presence_uses_locations(db_session, chat):
-    crud.update_chat(
+@pytest.mark.asyncio
+async def test_compute_and_save_presence_uses_locations(db_session, chat):
+    await crud.update_chat(
         db_session,
         chat.id,
         schemas.ChatUpdate(player_location="living_room"),
     )
-    a = crud.create_character(
+    a = await crud.create_character(
         db_session,
         chat.id,
         schemas.CharacterCreate(name="Alice", location="living_room", order_index=1),
     )
-    b = crud.create_character(
+    b = await crud.create_character(
         db_session,
         chat.id,
         schemas.CharacterCreate(name="Bob", location="street", order_index=2),
     )
-    msg = crud.create_message(
+    msg = await crud.create_message(
         db_session,
         schemas.MessageCreate(
             chat_id=chat.id,
@@ -218,12 +219,12 @@ def test_compute_and_save_presence_uses_locations(db_session, chat):
             visibility="local",
         ),
     )
-    result = crud.compute_and_save_presence_for_message(
+    result = await crud.compute_and_save_presence_for_message(
         db_session, msg, [a, b], {a.id: a.name, b.id: b.name}
     )
     assert result[a.id] == "present"
     assert result[b.id] == "absent"
-    presence = crud.get_presence_map(db_session, [msg.id], b.id)
+    presence = await crud.get_presence_map(db_session, [msg.id], b.id)
     assert presence[msg.id] == "absent"
 
 
@@ -231,17 +232,17 @@ def test_compute_and_save_presence_uses_locations(db_session, chat):
 async def test_sequential_generation_respects_locations(db_session, chat, mock_client=None):
     """Character B must not receive Alice's reply when in another location."""
     client = httpx.AsyncClient(base_url="http://test")
-    crud.update_chat(
+    await crud.update_chat(
         db_session, chat.id, schemas.ChatUpdate(player_location="living_room")
     )
-    alice = crud.create_character(
+    alice = await crud.create_character(
         db_session,
         chat.id,
         schemas.CharacterCreate(
             name="Alice", location="living_room", order_index=1
         ),
     )
-    bob = crud.create_character(
+    bob = await crud.create_character(
         db_session,
         chat.id,
         schemas.CharacterCreate(name="Bob", location="street", order_index=2),
@@ -289,12 +290,12 @@ async def test_sequential_generation_respects_locations(db_session, chat, mock_c
     assert "Reply from Alice" not in captured_history["Bob"]
 
     # Presence rows persisted
-    messages = crud.get_messages_by_chat(db_session, chat.id)
+    messages = await crud.get_messages_by_chat(db_session, chat.id)
     user_msg = next(m for m in messages if m.role == "user")
     alice_msg = next(
         m for m in messages if m.role == "character" and m.character_id == alice.id
     )
-    bob_map = crud.get_presence_map(
+    bob_map = await crud.get_presence_map(
         db_session, [user_msg.id, alice_msg.id], bob.id
     )
     assert bob_map[user_msg.id] == "absent"

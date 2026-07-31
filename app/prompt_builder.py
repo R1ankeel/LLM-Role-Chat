@@ -297,12 +297,8 @@ def build_system_prompt(
     strict: bool = False,
     relationships_block: str = "",
 ) -> str:
-    """Assemble full system prompt: card → scene → examples → rules (with negative) → isolation (per 3.5 full localization)."""
+    """Assemble full system prompt: card → examples → rules (with negative) → isolation (per 3.5 full localization)."""
     parts = [build_character_card(character)]
-
-    scene = build_scene_block(general_prompt)
-    if scene:
-        parts.append(scene)
 
     examples = build_examples_block(_character_field(character, "example_messages"))
     if examples:
