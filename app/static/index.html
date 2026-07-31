@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AI Roleplay Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Left sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h2>Чаты</h2>
+        <button id="btn-new-chat" class="btn btn-primary btn-sm">+ Новый чат</button>
+      </div>
+      <div id="chat-list"></div>
+    </aside>
+
+    <!-- Main area -->
+    <main id="main">
+<!-- Chat header -->
+<header id="chat-header" class="hidden">
+  <div class="header-left">
+    <button class="mobile-back-btn" id="mobileBackBtn" title="Назад к чатам">←</button>
+    <h3 id="chat-title">Выберите чат</h3>
+    <span id="chat-model" class="header-model"></span>
+    <button type="button" id="btn-thinking-toggle" class="mode-badge" title="Переключить режим генерации">🧠 Thinking</button>
+  </div>
+  <div class="header-right">
+    <button id="btn-clear-history" class="btn btn-sm" title="Очистить историю">🗑️</button>
+    <button id="btn-settings" class="btn btn-icon" title="Настройки">⚙️</button>
+  </div>
+</header>
+
+      <!-- Messages area -->
+      <div id="messages-container">
+        <div id="messages"></div>
+        <div id="typing-indicator" class="hidden">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span id="typing-text"></span>
+        </div>
+      </div>
+
+      <!-- Input area -->
+      <footer id="input-area" class="hidden">
+        <textarea id="message-input" rows="2" placeholder="Введите сообщение..." disabled></textarea>
+        <button id="btn-send" class="btn btn-primary" disabled>▶</button>
+        <button id="btn-stop" class="btn btn-danger hidden">■</button>
+      </footer>
+    </main>
+  </div>
+
+  <!-- New Chat Modal -->
+  <div id="modal-new-chat" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Новый чат</h3>
+      <label>Название <input type="text" id="new-chat-name" required></label>
+      <label>Сюжет / общий промпт
+        <textarea id="new-chat-prompt" rows="3" placeholder="Опишите мир и сюжет..."></textarea>
+      </label>
+      <label>Модель Ollama
+        <input type="text" id="new-chat-model" value="qwen3-coder:30b-a3b-q4_K_M">
+      </label>
+      <div class="field-block">
+        <span class="field-label">Режим генерации</span>
+        <div class="mode-toggle" id="new-chat-mode" role="group" aria-label="Режим генерации">
+          <button type="button" class="mode-option" data-thinking="false">⚡ Быстрый</button>
+          <button type="button" class="mode-option active" data-thinking="true">🧠 С размышлением</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-new-chat-cancel" class="btn">Отмена</button>
+        <button id="btn-new-chat-confirm" class="btn btn-primary">Создать</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal modal-wide">
+      <h3>Настройки чата</h3>
+      <div class="tabs">
+        <button class="tab active" data-tab="general">Основное</button>
+        <button class="tab" data-tab="characters">Персонажи</button>
+        <button class="tab" data-tab="memories">Память</button>
+        <button class="tab" data-tab="scene">Сцена</button>
+        <button class="tab" data-tab="relationships">Отношения</button>
+      </div>
+
+      <!-- General tab -->
+      <div class="tab-content active" id="tab-general">
+        <label>Название <input type="text" id="settings-name"></label>
+        <label>Сюжет / общий промпт
+          <textarea id="settings-prompt" rows="3"></textarea>
+        </label>
+        <label>Модель <select id="settings-model"></select></label>
+        <label>История (сообщений) <input type="number" id="settings-history" min="5" max="200"></label>
+        <label>Локации мира
+          <textarea id="settings-locations" rows="3" placeholder="Напр. гостиная, улица, таверна (через запятую)"></textarea>
+        </label>
+        <p class="field-hint">Персонажи и игрок могут перемещаться только по этим локациям. LLM не будет создавать новые.</p>
+        <div class="field-block">
+          <span class="field-label">Режим генерации</span>
+          <div class="mode-toggle" id="settings-mode" role="group" aria-label="Режим генерации">
+            <button type="button" class="mode-option" data-thinking="false">⚡ Быстрый</button>
+            <button type="button" class="mode-option" data-thinking="true">🧠 С размышлением</button>
+          </div>
+          <p class="field-hint">Быстрый — без think. С размышлением — модель думает дольше, ответы обычно качественнее.</p>
+        </div>
+        <button id="btn-save-settings" class="btn btn-primary">Сохранить</button>
+      </div>
+
+      <!-- Characters tab -->
+      <div class="tab-content" id="tab-characters">
+        <div id="character-list"></div>
+        <button id="btn-add-character" class="btn btn-primary btn-sm">+ Добавить персонажа</button>
+      </div>
+
+      <!-- Memories tab -->
+      <div class="tab-content" id="tab-memories">
+        <div id="memories-list"></div>
+      </div>
+
+      <!-- Scene Tracker tab (P3) -->
+      <div class="tab-content" id="tab-scene">
+        <div class="field-block">
+          <span class="field-label">Локации</span>
+          <div id="scene-char-locations"></div>
+          <div class="char-location-row" id="scene-player-location-row" style="margin-top:6px;">
+            <span class="char-location-name">Игрок</span>
+            <input type="text" class="char-location-input" id="scene-player-location"
+                   placeholder="Локация игрока">
+          </div>
+        </div>
+        <div class="field-block">
+          <span class="field-label">Время суток</span>
+          <input type="text" id="scene-time" placeholder="Напр. ночь, утро, закат, 14:30">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Погода</span>
+          <input type="text" id="scene-weather" placeholder="Напр. дождь, туман, ясно, снег">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Настроение сцены</span>
+          <input type="text" id="scene-mood" placeholder="Напр. напряжённое, спокойное, тревожное, весёлое">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Напряжение (0–1)</span>
+          <input type="range" id="scene-tension" min="0" max="1" step="0.1" value="0">
+          <span id="scene-tension-value">0.0</span>
+        </div>
+        <div class="field-block">
+          <span class="field-label">Активная цель</span>
+          <input type="text" id="scene-goal" placeholder="Напр. найти артефакт, сбежать, договориться">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Важные объекты (через запятую)</span>
+          <input type="text" id="scene-objects" placeholder="Напр. ключ, карта, меч, письмо">
+        </div>
+        <div class="field-block">
+          <span class="field-label">События (через запятую)</span>
+          <input type="text" id="scene-events" placeholder="Напр. битва началась, найден след, NPC ушёл">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Прогрессия времени</span>
+          <input type="text" id="scene-time-progression" placeholder="Напр. прошло 2 часа, ночь сменяет утро">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Сюжетные флаги (через запятую)</span>
+          <input type="text" id="scene-plot-flags" placeholder="Напр. quest_started, met_guard, found_clue">
+        </div>
+        <div class="field-block">
+          <span class="field-label">Присутствующие персонажи</span>
+          <div id="scene-present-characters" class="field-hint">(обновляется автоматически)</div>
+        </div>
+        <button id="btn-save-scene" class="btn btn-primary">Сохранить состояние сцены</button>
+        <button id="btn-refresh-scene" class="btn btn-secondary btn-sm">Обновить</button>
+      </div>
+
+      <!-- Relationships tab -->
+      <div class="tab-content" id="tab-relationships">
+        <p class="field-hint">Динамические отношения между персонажами и игроком. Можно редактировать вручную. Обновляются автоматически после каждого раунда.</p>
+        <div id="relationships-view"></div>
+        <button id="btn-refresh-relationships" class="btn btn-secondary btn-sm">Обновить</button>
+      </div>
+
+      <div class="modal-actions">
+        <button id="btn-settings-close" class="btn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Character editor modal -->
+  <div id="modal-character" class="modal-overlay hidden">
+    <div class="modal modal-wide">
+      <h3 id="char-editor-title">Персонаж</h3>
+      <input type="hidden" id="char-editor-id">
+      <label>Имя <input type="text" id="char-editor-name" required></label>
+      <label>Личность
+        <textarea id="char-editor-personality" rows="2" placeholder="Напр. добрый, мудрый старец"></textarea>
+      </label>
+      <label>Черты
+        <textarea id="char-editor-traits" rows="2" placeholder="Напр. любит чай, боится пауков"></textarea>
+      </label>
+      <label>Предыстория
+        <textarea id="char-editor-background" rows="2" placeholder="Прошлое персонажа, события до начала сюжета"></textarea>
+      </label>
+      <label>Стиль речи
+        <textarea id="char-editor-speech-style" rows="2" placeholder="Напр. короткие фразы, сарказм, обращается на «ты»"></textarea>
+      </label>
+      <label>Примеры реплик
+        <textarea id="char-editor-examples" rows="4" placeholder="Многострочные примеры. Разделяйте только строкой ---"></textarea>
+      </label>
+      <div class="field-block">
+        <span class="field-label">Начальные отношения к другим</span>
+        <p class="field-hint">Настройте начальные отношения этого персонажа к другим NPC и игроку.</p>
+        <div id="char-editor-init-rels"></div>
+      </div>
+      <label>Границы роли
+        <textarea id="char-editor-boundaries" rows="2" placeholder="Напр. не выходит из роли торговца, не знает магии"></textarea>
+      </label>
+      <label>Температура
+        <input type="number" id="char-editor-temperature" min="0" max="2" step="0.05" placeholder="По умолчанию">
+      </label>
+      <label>Порядок <input type="number" id="char-editor-order" min="0" value="0"></label>
+      <div class="modal-actions">
+        <button id="btn-char-cancel" class="btn">Отмена</button>
+        <button id="btn-char-save" class="btn btn-primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Memory editor modal -->
+  <div id="modal-memory" class="modal-overlay hidden">
+    <div class="modal">
+      <h3 id="mem-editor-title">Память</h3>
+      <input type="hidden" id="mem-editor-id">
+      <input type="hidden" id="mem-editor-character-id">
+      <label>Содержимое <textarea id="mem-editor-content" rows="3" required></textarea></label>
+      <label>Категория
+        <select id="mem-editor-category">
+          <option value="event">event</option>
+          <option value="relationship">relationship</option>
+          <option value="location">location</option>
+          <option value="item">item</option>
+          <option value="other">other</option>
+        </select>
+      </label>
+      <label>Важность (0–1)
+        <input type="number" id="mem-editor-importance" min="0" max="1" step="0.05" value="0.5">
+      </label>
+      <div class="modal-actions">
+        <button id="btn-mem-cancel" class="btn">Отмена</button>
+        <button id="btn-mem-save" class="btn btn-primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

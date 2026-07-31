@@ -1,0 +1,69 @@
+name: "style_consistency"
+chat:
+  prompt: "A scholar and a thief explore an ancient ruin together."
+  model: "test-model"
+  characters:
+    - name: "Professor Aldric"
+      personality: "Learned, pedantic, fascinated by history"
+      traits: "Archaeologist, polyglot, absent-minded"
+      background: "University professor, seeks the Lost Codex of Thule"
+      speech_style: "Academic vocabulary, Latin phrases, tangential explanations, *adjusts spectacles*"
+    - name: "Kaelen"
+      personality: "Street-smart, pragmatic, impatient with academia"
+      traits: "Thief, acrobat, survivalist"
+      background: "Grew up in the Undercity, knows every tunnel"
+      speech_style: "Slang, contractions, action-focused, *checks blade*, *moves silently*"
+turns:
+  - user: "You enter the first chamber. Dust motes dance in the light from above. What do you do?"
+    expect:
+      - character: "Professor Aldric"
+        must_contain: ["chamber", "architecture", "ancient", "fascinating"]
+        must_not_contain: ["loot", "grab", "steal", "quick"]
+      - character: "Kaelen"
+        must_contain: ["traps", "exit", "loot", "move"]
+        must_not_contain: ["architecture", "fascinating", "centuries", "hypothesis"]
+  - user: "A pressure plate clicks beneath Aldric's foot. The walls begin to close."
+    expect:
+      - character: "Professor Aldric"
+        must_contain: ["mechanism", "engineering", "remarkable", "pressure plate"]
+        must_not_contain: ["run", "fast", "escape", "Kaelen grabs"]
+      - character: "Kaelen"
+        must_contain: ["run", "move", "now", "door", "lever"]
+        must_not_contain: ["remarkable", "engineering", "analyze", "Professor"]
+  - user: "You find a pedestal with a golden idol. Kaelen reaches for it."
+    expect:
+      - character: "Professor Aldric"
+        must_contain: ["artifact", "cultural", "significance", "preserve", "document"]
+        must_not_contain: ["take it", "grab", "sell", "gold"]
+      - character: "Kaelen"
+        must_contain: ["gold", "take", "worth", "fortune", "pocket"]
+        must_not_contain: ["cultural", "significance", "preserve", "document"]
+  - user: "The idol triggers a dart trap. Kaelen pulls Aldric aside just in time."
+    expect:
+      - character: "Professor Aldric"
+        must_contain: ["grateful", "reflexes", "debt", "remarkable", "survival"]
+        must_not_contain: ["dives", "rolls", "combat", "strikes"]
+      - character: "Kaelen"
+        must_contain: ["watch", "step", "careful", "alive", "debt"]
+        must_not_contain: ["lecture", "history", "ancient", "fascinating"]
+  - user: "You find the Codex. Aldric weeps; Kaelen checks for traps on the case."
+    expect:
+      - character: "Professor Aldric"
+        must_contain: ["Codex", "Thule", "tears", "lifetime", "work", "vindicated"]
+        must_not_contain: ["traps", "check", "value", "sell"]
+      - character: "Kaelen"
+        must_contain: ["case", "traps", "open", "careful", "Professor"]
+        must_not_contain: ["weeps", "tears", "vindicated", "lifetime"]
+style_similarity_expectations:
+  Professor Aldric:
+    min_similarity: 0.6
+    reference_examples:
+      - "*adjusts spectacles* A most remarkable discovery, indeed."
+      - "The architecture suggests late Thulian period, circa third century."
+      - "We must document this properly. *produces notebook*"
+  Kaelen:
+    min_similarity: 0.6
+    reference_examples:
+      - "*checks tripwire* Pressure plate. Classic."
+      - "Less talking, more moving. *sprints toward exit*"
+      - "Shiny. Valuable. Mine. *pockets gem*"

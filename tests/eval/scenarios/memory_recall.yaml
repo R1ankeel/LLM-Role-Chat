@@ -1,0 +1,71 @@
+name: "memory_recall"
+chat:
+  prompt: "A merchant and a guard discuss a stolen artifact in a market square."
+  model: "test-model"
+  characters:
+    - name: "Marcus"
+      personality: "Cautious merchant, values profit, paranoid about theft"
+      traits: "Wealthy, connected, secretive"
+      background: "Runs the largest trading house in the city"
+      speech_style: "Calculating, trade metaphors, pauses, weighs words"
+      location: "market"
+    - name: "Captain Varrick"
+      personality: "Dutiful guard, suspicious of merchants, methodical"
+      traits: "Honest, thorough, hates corruption"
+      background: "20 years in city guard, seen every scam"
+      speech_style: "Direct, military, short sentences, procedural"
+      location: "market"
+turns:
+  - user: "Marcus, you reported the Emerald Eye stolen three nights ago. Tell the captain exactly what happened."
+    expect:
+      - character: "Marcus"
+        must_contain: ["Emerald Eye", "stolen", "three nights", "vault", "Silas"]
+        must_not_contain: ["Varrick thinks", "he suspects", "captain believes", "guard thinks"]
+      - character: "Captain Varrick"
+        must_contain: ["investigate", "witnesses", "locks", "access", "vault"]
+        must_not_contain: ["Marcus hides", "he lies", "merchant schemes", "Marcus thinks"]
+  - user: "Who had access to the vault, Marcus?"
+    expect:
+      - character: "Marcus"
+        must_contain: ["only", "me", "Silas", "steward", "key"]
+        must_not_contain: ["Varrick writes", "he nods", "captain thinks", "Varrick believes"]
+      - character: "Captain Varrick"
+        must_contain: ["Silas", "question", "alibi", "whereabouts", "three nights"]
+        must_not_contain: ["Marcus sweats", "he glances", "merchant fears", "Marcus lies"]
+  - user: "Three weeks later, the Emerald Eye is found in a pawn shop. Captain Varrick confronts Marcus."
+    expect:
+      - character: "Marcus"
+        must_contain: ["stolen", "fence", "Silas", "betrayed", "pawn", "shop"]
+        must_not_contain: ["Varrick thinks", "he believes", "captain knows", "Varrick smiles"]
+      - character: "Captain Varrick"
+        must_contain: ["arrest", "Silas", "recovered", "evidence", "pawn", "shop"]
+        must_not_contain: ["Marcus plots", "he plans", "merchant schemes", "Marcus thinks"]
+  - user: "Marcus, do you remember what you told me about the vault access?"
+    expect:
+      - character: "Marcus"
+        must_contain: ["only me", "Silas", "steward", "three nights", "vault", "key"]
+        must_not_contain: ["Varrick said", "captain asked", "Varrick thinks", "he believes"]
+      - character: "Captain Varrick"
+        must_contain: ["vault", "access", "only you", "Silas", "steward", "confirmed"]
+        must_not_contain: ["Marcus lies", "merchant fabricates", "he invents", "Marcus thinks"]
+  - user: "Silas is brought in. He confesses Marcus paid him to steal it."
+    expect:
+      - character: "Marcus"
+        must_contain: ["lie", "frame", "innocent", "never", "paid", "false"]
+        must_not_contain: ["Varrick believes", "he arrests", "Varrick smiles", "captain thinks"]
+      - character: "Captain Varrick"
+        must_contain: ["confession", "evidence", "arrest", "Marcus", "Silas", "paid"]
+        must_not_contain: ["Marcus confesses", "he breaks", "merchant admits", "Marcus thinks"]
+expected_facts:
+  Marcus:
+    - "Emerald Eye stolen from my vault three nights ago"
+    - "Only Marcus and Silas had vault access"
+    - "Silas betrayed Marcus and fenced the Emerald Eye"
+  Captain Varrick:
+    - "Emerald Eye stolen from Marcus vault"
+    - "Silas is prime suspect in theft"
+    - "Emerald Eye recovered at pawn shop"
+    - "Silas confesses Marcus paid him to steal"
+recall_metrics:
+  min_recall_at_5: 0.8  # 80% of expected facts recalled within 5 turns
+  fact_accuracy: 1.0    # No hallucinated facts

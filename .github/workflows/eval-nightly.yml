@@ -1,0 +1,72 @@
+name: Eval Harness (Real Ollama - Nightly)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  eval-real:
+    name: Run Evaluation Harness (Real Ollama)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull qwen3-coder:30b-a3b-q4_K_M  # Or smaller model for CI
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd ai-roleplay-chat
+          pip install -r requirements.txt
+          pip install pyyaml
+
+      - name: Run Eval Harness (Real Ollama)
+        run: |
+          cd ai-roleplay-chat
+          python -m tests.eval.run_eval --mode real --verbose --junit-xml eval-real-results.xml
+
+      - name: Upload JUnit Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-real-results
+          path: ai-roleplay-chat/eval-real-results.xml
+          retention-days: 14
+
+      - name: Comment PR with Results
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const xml = fs.readFileSync('ai-roleplay-chat/eval-real-results.xml', 'utf8');
+            // Parse and post summary
+            const { execSync } = require('child_process');
+            const summary = execSync('python -c "import xml.etree.ElementTree as ET; t=ET.parse(\"ai-roleplay-chat/eval-real-results.xml\"); r=t.getroot(); print(f\"Passed: {r.attrib.get(\"tests\", \"?\")}\")', {cwd: process.cwd()}).toString();
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Nightly Eval Results:\n\`\`\`\n${summary}\n\`\`\``
+            });

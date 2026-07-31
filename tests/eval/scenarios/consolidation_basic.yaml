@@ -1,0 +1,63 @@
+name: "consolidation_basic"
+chat:
+  prompt: "Long campaign: characters accumulate many similar memories over time. Consolidation job should merge duplicates."
+  model: "test-model"
+  characters:
+    - name: "Aldric"
+      personality: "Scholar, records everything meticulously"
+      traits: "Obsessive note-taker, pattern seeker"
+      background: "Archivist of the Royal Library"
+      speech_style: "Precise, categorical, *notes in ledger*"
+      location: "library"
+    - name: "Branwen"
+      personality: "Practical, forgets details, remembers essence"
+      traits: "Intuitive, merges experiences naturally"
+      background: "Ranger, survives by pattern recognition"
+      speech_style: "Earthy, metaphorical, *tracks*, *senses*"
+      location: "wilds"
+turns:
+  - user: "Turn 1: Aldric reads a tome about the Red Dragon of Mount Vael. Branwen tracks a red-scaled beast in the foothills."
+    expect:
+      - character: "Aldric"
+        must_contain: ["Red Dragon", "Mount Vael", "tome", "reads", "ledger", "records"]
+        must_not_contain: ["Branwen", "tracks", "foothills", "beast", "senses"]
+      - character: "Branwen"
+        must_contain: ["red-scaled", "beast", "foothills", "tracks", "senses", "smell", "sulphur"]
+        must_not_contain: ["Aldric", "tome", "Mount Vael", "ledger", "library", "reads"]
+  - user: "Turn 2: Aldric finds another scroll mentioning the Red Dragon. Branwen sees claw marks matching her tracks."
+    expect:
+      - character: "Aldric"
+        must_contain: ["scroll", "Red Dragon", "Mount Vael", "confirms", "ledger", "cross-references"]
+        must_not_contain: ["Branwen", "claw", "tracks", "foothills", "senses"]
+      - character: "Branwen"
+        must_contain: ["claw marks", "matches", "tracks", "Red Dragon", "confirms", "sulphur", "foothills"]
+        must_not_contain: ["Aldric", "scroll", "library", "ledger", "Mount Vael"]
+  - user: "Turn 3: Aldric hears a bard sing of the Red Dragon. Branwen finds a shed scale."
+    expect:
+      - character: "Aldric"
+        must_contain: ["bard", "song", "Red Dragon", "Mount Vael", "corroborates", "ledger", "entry"]
+        must_not_contain: ["Branwen", "scale", "shed", "foothills", "tracks"]
+      - character: "Branwen"
+        must_contain: ["shed scale", "Red Dragon", "foothills", "confirms", "tracks", "collection", "pouch"]
+        must_not_contain: ["Aldric", "bard", "song", "library", "ledger", "Mount Vael"]
+  - user: "Turn 10: Consolidation job runs. How many distinct Red Dragon facts remain per character?"
+    expect:
+      - character: "Aldric"
+        must_contain: ["Red Dragon", "Mount Vael", "consolidated", "three", "sources", "merged", "single", "entry"]
+        must_not_contain: ["duplicate", "separate", "tome", "scroll", "bard", "song", "three entries"]
+      - character: "Branwen"
+        must_contain: ["Red Dragon", "foothills", "consolidated", "three", "signs", "merged", "one", "memory"]
+        must_not_contain: ["duplicate", "separate", "tracks", "claw marks", "scale", "three memories"]
+  - user: "Turn 15: Both recall the Red Dragon. Are their memories consistent but distinct?"
+    expect:
+      - character: "Aldric"
+        must_contain: ["Red Dragon", "Mount Vael", "library", "records", "historical", "scholarly"]
+        must_not_contain: ["foothills", "tracks", "scale", "sulphur", "ranger", "Branwen"]
+      - character: "Branwen"
+        must_contain: ["Red Dragon", "foothills", "tracks", "scale", "sulphur", "ranger", "lived"]
+        must_not_contain: ["Mount Vael", "library", "tome", "scroll", "bard", "scholarly", "Aldric"]
+consolidation_metrics:
+  max_dedup_rate: 0.8      # At least 80% of similar facts merged
+  min_distinct_facts: 1    # At least 1 distinct fact per entity
+  max_cross_contamination: 0.0  # No character gets other's perspective
+  fact_integrity: 1.0      # Merged fact preserves key info

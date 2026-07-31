@@ -1,0 +1,56 @@
+name: Nightly Evaluation Harness
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  eval-mock:
+    name: Mock Evaluation (Fast)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          cd ai-roleplay-chat
+          pip install -r requirements.txt
+      - name: Run mock evaluation
+        run: |
+          cd ai-roleplay-chat
+          python -m tests.eval.run_eval --mode mock --junit-xml eval-results.xml
+      - name: Upload mock results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: ai-roleplay-chat/eval-results.xml
+
+  eval-real:
+    name: Real Model Evaluation (Nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          cd ai-roleplay-chat
+          pip install -r requirements.txt
+      - name: Check Ollama availability
+        run: |
+          ollama list
+          ollama ps
+      - name: Run real evaluation
+        run: |
+          cd ai-roleplay-chat
+          python -m tests.eval.run_eval --mode real --junit-xml eval-real-results.xml
+      - name: Upload real results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-real-results
+          path: ai-roleplay-chat/eval-real-results.xml

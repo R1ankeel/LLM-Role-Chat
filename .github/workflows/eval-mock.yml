@@ -1,0 +1,137 @@
+name: Eval Harness (Mock Mode)
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  eval-mock:
+    name: Run Evaluation Harness (Mock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd ai-roleplay-chat
+          pip install -r requirements.txt
+          pip install pyyaml  # For scenario parsing
+
+      - name: Run Eval Harness (Mock)
+        run: |
+          cd ai-roleplay-chat
+          python -m tests.eval.run_eval --mode mock --verbose --junit-xml eval-results.xml
+
+      - name: Upload JUnit Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: ai-roleplay-chat/eval-results.xml
+          retention-days: 7
+
+      - name: Upload Test Output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-output
+          path: ai-roleplay-chat/tests/artifacts/test_output.txt
+          retention-days: 7
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd ai-roleplay-chat
+          pip install -r requirements.txt
+
+      - name: Run Unit Tests
+        run: |
+          cd ai-roleplay-chat
+          python -m pytest tests/ -v --junit-xml unit-test-results.xml --ignore=tests/eval --ignore=tests/golden
+
+      - name: Upload Unit Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: ai-roleplay-chat/unit-test-results.xml
+          retention-days: 7
+
+  golden-tests:
+    name: Golden Tests (Prompt Snapshots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd ai-roleplay-chat
+          pip install -r requirements.txt
+
+      - name: Run Golden Tests
+        run: |
+          cd ai-roleplay-chat
+          python -m pytest tests/golden/ -v --junit-xml golden-test-results.xml
+
+      - name: Upload Golden Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-test-results
+          path: ai-roleplay-chat/golden-test-results.xml
+          retention-days: 7

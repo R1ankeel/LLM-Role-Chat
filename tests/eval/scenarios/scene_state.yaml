@@ -1,0 +1,109 @@
+name: "scene_state"
+chat:
+  prompt: "Multi-location campaign with time progression. SceneState tracks location, time, and present characters."
+  model: "test-model"
+  characters:
+    - name: "Kaelen"
+      personality: "Ranger, always aware of location and time"
+      traits: "Navigational, temporal awareness, territorial"
+      background: "Wilderness guide, knows every path"
+      speech_style: "Directional, temporal, *checks sun*, *marks position*"
+      location: "forest_camp"
+    - name: "Seraphina"
+      personality: "Bard, sings of places and times"
+      traits: "Poetic timekeeping, location-inspired"
+      background: "Court bard turned wanderer"
+      speech_style: "Lyrical, references hours, *verse*, *chorus*"
+      location: "forest_camp"
+    - name: "Garrick"
+      personality: "Mercenary, contract-focused, location-aware"
+      traits: "Professional, positional, deadline-driven"
+      background: "Sellsword captain, fights where paid"
+      speech_style: "Tactical, monetary, *position*, *deploy*"
+      location: "crossroads_tavern"
+    - name: "Mira"
+      personality: "Healer, stationary when needed, patient"
+      traits: "Compassionate, place-bound, timeless care"
+      background: "Temple healer, serves where needed"
+      speech_style: "Gentle, clinical, *tends*, *prays*, *watches*"
+      location: "sun_temple"
+turns:
+  - user: "Dawn at Forest Camp. Kaelen and Seraphina break camp. Noon: they reach Crossroads Tavern. Garrick waits. Evening: Kaelen scouts ahead. Mira at Sun Temple all day."
+    expect:
+      - character: "Kaelen"
+        must_contain: ["dawn", "forest camp", "breaks camp", "Seraphina", "noon", "crossroads tavern", "Garrick", "evening", "scouts", "ahead"]
+        must_not_contain: ["sun temple", "Mira", "prays", "tends", "all day"]
+      - character: "Seraphina"
+        must_contain: ["dawn", "forest camp", "breaks camp", "Kaelen", "noon", "crossroads tavern", "Garrick", "song", "verse"]
+        must_not_contain: ["sun temple", "Mira", "prays", "tends", "all day", "evening", "scouts"]
+      - character: "Garrick"
+        must_contain: ["noon", "crossroads tavern", "waits", "Kaelen", "Seraphina", "contract", "deploy", "position"]
+        must_not_contain: ["forest camp", "dawn", "breaks camp", "sun temple", "Mira", "evening", "scouts"]
+      - character: "Mira"
+        must_contain: ["sun temple", "all day", "tends", "wounded", "prays", "watches", "dawn", "noon", "evening"]
+        must_not_contain: ["forest camp", "crossroads tavern", "Kaelen", "Seraphina", "Garrick", "breaks camp", "contract"]
+  - user: "Midnight. Kaelen returns to camp. Seraphina sings by fire. Garrick drinks at tavern. Mira sleeps at temple."
+    expect:
+      - character: "Kaelen"
+        must_contain: ["midnight", "returns", "camp", "forest", "scouted", "fire", "Seraphina", "sings"]
+        must_not_contain: ["tavern", "Garrick", "drinks", "temple", "Mira", "sleeps"]
+      - character: "Seraphina"
+        must_contain: ["midnight", "fire", "sings", "camp", "forest", "Kaelen", "returns", "chorus", "verse"]
+        must_not_contain: ["tavern", "Garrick", "drinks", "temple", "Mira", "sleeps"]
+      - character: "Garrick"
+        must_contain: ["midnight", "tavern", "drinks", "crossroads", "contract", "coin", "Kaelen", "Seraphina", "absent"]
+        must_not_contain: ["forest", "camp", "fire", "sings", "temple", "Mira", "sleeps"]
+      - character: "Mira"
+        must_contain: ["midnight", "temple", "sleeps", "dreams", "prays", "wounded", "rest"]
+        must_not_contain: ["forest", "camp", "fire", "tavern", "crossroads", "Kaelen", "Seraphina", "Garrick"]
+  - user: "Next dawn. All four meet at Crossroads Tavern. SceneState updates: location=crossroads_tavern, time=dawn, present=[Kaelen, Seraphina, Garrick, Mira]."
+    expect:
+      - character: "Kaelen"
+        must_contain: ["dawn", "crossroads tavern", "meet", "Seraphina", "Garrick", "Mira", "all four", "present"]
+        must_not_contain: ["forest camp", "scouts", "fire", "midnight"]
+      - character: "Seraphina"
+        must_contain: ["dawn", "crossroads tavern", "meet", "Kaelen", "Garrick", "Mira", "all four", "song"]
+        must_not_contain: ["forest camp", "fire", "midnight", "chorus"]
+      - character: "Garrick"
+        must_contain: ["dawn", "crossroads tavern", "meet", "Kaelen", "Seraphina", "Mira", "contract", "all four", "deploy"]
+        must_not_contain: ["tavern midnight", "drinks", "alone", "night"]
+      - character: "Mira"
+        must_contain: ["dawn", "crossroads tavern", "meet", "Kaelen", "Seraphina", "Garrick", "temple", "left", "all four"]
+        must_not_contain: ["temple midnight", "sleeps", "dreams", "prays", "alone"]
+scene_state_expectations:
+  initial:
+    location: "forest_camp"
+    time_of_day: "dawn"
+    present: ["Kaelen", "Seraphina"]
+  turn_1_noon:
+    location: "crossroads_tavern"
+    time_of_day: "noon"
+    present: ["Kaelen", "Seraphina", "Garrick"]
+  turn_1_evening:
+    location: "forest_camp"
+    time_of_day: "evening"
+    present: ["Kaelen"]
+  turn_1_all_day:
+    location: "sun_temple"
+    time_of_day: "all_day"
+    present: ["Mira"]
+  turn_2_midnight:
+    location: "forest_camp"
+    time_of_day: "midnight"
+    present: ["Kaelen", "Seraphina"]
+  turn_2_midnight_tavern:
+    location: "crossroads_tavern"
+    time_of_day: "midnight"
+    present: ["Garrick"]
+  turn_2_midnight_temple:
+    location: "sun_temple"
+    time_of_day: "midnight"
+    present: ["Mira"]
+  turn_3_dawn:
+    location: "crossroads_tavern"
+    time_of_day: "dawn"
+    present: ["Kaelen", "Seraphina", "Garrick", "Mira"]
+scene_state_injection_tests:
+  - location_block_contains: ["crossroads_tavern", "dawn", "Kaelen", "Seraphina", "Garrick", "Mira"]
+  - witness_filter_uses_scene_state: true
+  - time_progression_consistent: true

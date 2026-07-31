@@ -1,0 +1,55 @@
+name: "isolation_basic"
+chat:
+  prompt: "Two knights argue in a tavern."
+  model: "test-model"
+  characters:
+    - name: "Sir Gallant"
+      personality: "Honorable, verbose, speaks of duty"
+      traits: "Noble, chivalrous, long-winded"
+      background: "Knight of the Silver Order"
+      speech_style: "Formal, archaic, references honor and duty"
+      location: "tavern"
+    - name: "Sir Cynic"
+      personality: "Sarcastic, brief, pragmatic"
+      traits: "Cynical, battle-scarred, efficient"
+      background: "Mercenary knight, no master"
+      speech_style: "Short, blunt, profane, dismissive of ideals"
+      location: "tavern"
+turns:
+  - user: "What do you think of the king?"
+    expect:
+      - character: "Sir Gallant"
+        must_contain: ["honor", "duty", "king", "crown", "realm"]
+        must_not_contain: ["Sir Cynic thinks", "he believes", "cynic feels", "cynic wants", "Cynic thought", "Cynic felt"]
+      - character: "Sir Cynic"
+        must_contain: ["king", "crown", "fool", "gold", "lies"]
+        must_not_contain: ["Sir Gallant thinks", "he believes", "Gallant feels", "Gallant wants", "Gallant thought", "Gallant felt", "honor", "duty", "chivalry"]
+  - user: "The king sends you on a suicide mission. Your response?"
+    expect:
+      - character: "Sir Gallant"
+        must_contain: ["mission", "honor", "duty", "obey", "crown", "realm"]
+        must_not_contain: ["Cynic", "suicide", "foolish", "refuse", "Cynic says", "Cynic thinks"]
+      - character: "Sir Cynic"
+        must_contain: ["suicide", "fool", "gold", "contract", "pay", "refuse"]
+        must_not_contain: ["Gallant", "honor", "duty", "obey", "Gallant says", "Gallant thinks", "Gallant feels"]
+  - user: "A barmaid trips. Wine spills on both of you."
+    expect:
+      - character: "Sir Gallant"
+        must_contain: ["barmaid", "wine", "apologize", "gentle", "lady", "honor"]
+        must_not_contain: ["Cynic laughs", "Cynic mocks", "Cynic says", "Cynic thinks", "Cynic feels"]
+      - character: "Sir Cynic"
+        must_contain: ["wine", "waste", "shame", "gold", "clean"]
+        must_not_contain: ["Gallant apologizes", "Gallant helps", "Gallant says", "Gallant thinks", "Gallant feels", "honor", "lady", "gentle"]
+  - user: "The king's messenger arrives with a pardon for one of you. Who deserves it?"
+    expect:
+      - character: "Sir Gallant"
+        must_contain: ["pardon", "king", "mercy", "justice", "Cynic", "deserves", "redemption"]
+        must_not_contain: ["I deserve", "me", "my honor", "my duty", "Cynic thinks", "Cynic feels"]
+      - character: "Sir Cynic"
+        must_contain: ["pardon", "paper", "worthless", "Gallant", "take", "keep"]
+        must_not_contain: ["I deserve", "me", "my", "Gallant thinks", "Gallant feels", "honor", "duty"]
+isolation_metrics:
+  max_hard_violations: 0
+  max_soft_violations: 2
+  max_foreign_markers: 0
+  min_style_distinction: 0.5  # Gallant vs Cynic should be distinct

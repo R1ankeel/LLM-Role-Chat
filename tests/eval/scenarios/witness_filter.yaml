@@ -1,0 +1,91 @@
+name: "witness_filter"
+chat:
+  prompt: "A street kiss and a home conversation happen simultaneously. Characters must only know what they witness."
+  model: "test-model"
+  characters:
+    - name: "Maxim"
+      personality: "Bold, romantic, acts on impulse"
+      traits: "Passionate, public with affection"
+      background: "Noble's son, used to getting his way"
+      speech_style: "Confident, declarative, romantic"
+      location: "street"
+    - name: "Katya"
+      personality: "Shy but responsive, blushes easily"
+      traits: "Modest, surprised by bold gestures"
+      background: "Merchant's daughter, proper upbringing"
+      speech_style: "Soft, hesitant, *blushes*, *looks down*"
+      location: "street"
+    - name: "Alina"
+      personality: "Domestic, observant, manages household"
+      traits: "Practical, sharp-tongued, caring"
+      background: "Runs the household, knows all gossip"
+      speech_style: "Matter-of-fact, domestic metaphors, *stirs tea*"
+      location: "home"
+    - name: "Oleg"
+      personality: "Scholarly, detached, reads constantly"
+      traits: "Intellectual, oblivious to romance"
+      background: "Retired professor, lives with Alina"
+      speech_style: "Academic, distracted, *turns page*, quotes"
+      location: "home"
+turns:
+  - user: "Maxim kisses Katya on the street. Alina and Oleg are at home drinking tea. What does each perceive?"
+    expect:
+      - character: "Maxim"
+        must_contain: ["kiss", "Katya", "street", "lips", "passion"]
+        must_not_contain: ["Alina", "Oleg", "tea", "home", "book", "reads"]
+      - character: "Katya"
+        must_contain: ["kiss", "Maxim", "street", "blush", "heart"]
+        must_not_contain: ["Alina", "Oleg", "tea", "home", "book", "reads"]
+      - character: "Alina"
+        must_contain: ["tea", "Oleg", "home", "kitchen", "stirs", "book"]
+        must_not_contain: ["kiss", "Maxim", "Katya", "street", "lips", "passion"]
+      - character: "Oleg"
+        must_contain: ["tea", "Alina", "home", "book", "reads", "page", "chapter"]
+        must_not_contain: ["kiss", "Maxim", "Katya", "street", "lips", "passion"]
+  - user: "Katya runs home and tells Alina: 'Maxim kissed me on the street!' Oleg is still reading."
+    expect:
+      - character: "Katya"
+        must_contain: ["ran", "home", "Alina", "Maxim", "kissed", "street", "tell"]
+        must_not_contain: ["Oleg", "book", "reads", "tea"]
+      - character: "Alina"
+        must_contain: ["Katya", "Maxim", "kissed", "street", "tea", "spills", "stirs"]
+        must_not_contain: ["Oleg", "book", "reads", "chapter"]
+      - character: "Oleg"
+        must_contain: ["book", "reads", "page", "chapter", "tea", "Alina"]
+        must_not_contain: ["Katya", "Maxim", "kiss", "street", "ran", "home", "tell"]
+      - character: "Maxim"
+        must_contain: ["street", "waits", "Katya", "kiss", "alone", "thinks"]
+        must_not_contain: ["Alina", "Oleg", "home", "tea", "book", "tell"]
+  - user: "Alina confronts Maxim: 'Katya told me you kissed her.' Maxim is on the street. Oleg still reads."
+    expect:
+      - character: "Alina"
+        must_contain: ["Maxim", "Katya", "kissed", "told", "street", "confront"]
+        must_not_contain: ["Oleg", "book", "reads", "tea"]
+      - character: "Maxim"
+        must_contain: ["Alina", "Katya", "kiss", "street", "admit", "proud"]
+        must_not_contain: ["Oleg", "book", "reads", "home", "tea"]
+      - character: "Oleg"
+        must_contain: ["book", "reads", "Alina", "voice", "background", "ignores"]
+        must_not_contain: ["Maxim", "Katya", "kiss", "street", "confront", "told"]
+      - character: "Katya"
+        must_contain: ["hides", "behind", "Alina", "Maxim", "blush", "street"]
+        must_not_contain: ["Oleg", "book", "reads", "tea", "chapter"]
+  - user: "News reaches Oleg: the street where Maxim kissed Katya is now blocked by festival. He learns from Alina."
+    expect:
+      - character: "Oleg"
+        must_contain: ["street", "blocked", "festival", "Alina", "told", "Maxim", "Katya", "kiss"]
+        must_not_contain: ["witnessed", "saw", "read", "book", "page"]
+      - character: "Alina"
+        must_contain: ["Oleg", "street", "blocked", "festival", "Maxim", "Katya", "kiss", "told"]
+        must_not_contain: ["witnessed", "saw", "read", "book"]
+      - character: "Maxim"
+        must_contain: ["street", "blocked", "festival", "Katya", "waits", "alternative"]
+        must_not_contain: ["Oleg", "Alina", "told", "learns", "home", "book"]
+      - character: "Katya"
+        must_contain: ["festival", "street", "blocked", "Maxim", "alternative", "route"]
+        must_not_contain: ["Oleg", "Alina", "told", "learns", "home", "book", "reads"]
+witness_metrics:
+  street_leakage_to_home: 0.0    # Home chars must NOT know street events until told
+  home_leakage_to_street: 0.0    # Street chars must NOT know home events until told
+  told_transfer_accuracy: 1.0    # When told, info must transfer correctly
+  mention_detection: 1.0         # Being mentioned creates "mentioned" presence

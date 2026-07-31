@@ -1,0 +1,1148 @@
+"""CRUD-функции для работы с базой данных (Async)."""
+
+import logging
+import random
+from datetime import datetime
+from typing import Literal, Optional, Tuple
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from . import embedding_service
+from . import memory_service
+from . import models
+from . import perception
+from . import schemas
+from . import witness_model
+from .config import settings
+from .database import memory_content_hash
+
+logger = logging.getLogger(__name__)
+
+
+# ------------------------------ Chat ------------------------------
+async def create_chat(db: AsyncSession, chat: schemas.ChatCreate) -> models.Chat:
+    db_chat = models.Chat(**chat.model_dump())
+    db.add(db_chat)
+    await db.commit()
+    await db.refresh(db_chat)
+    return db_chat
+
+
+async def get_chat(db: AsyncSession, chat_id: int) -> models.Chat | None:
+    return await db.get(models.Chat, chat_id)
+
+
+async def get_chats(db: AsyncSession, skip: int = 0, limit: int = 100) -> list[models.Chat]:
+    stmt = (
+        select(models.Chat)
+        .order_by(models.Chat.created_at.desc(), models.Chat.id.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def update_chat(
+    db: AsyncSession, chat_id: int, chat_update: schemas.ChatUpdate
+) -> models.Chat | None:
+    db_chat = await get_chat(db, chat_id)
+    if db_chat is None:
+        return None
+    for field, value in chat_update.model_dump(exclude_unset=True).items():
+        setattr(db_chat, field, value)
+    await db.commit()
+    await db.refresh(db_chat)
+    return db_chat
+
+
+async def delete_chat(db: AsyncSession, chat_id: int) -> bool:
+    db_chat = await get_chat(db, chat_id)
+    if db_chat is None:
+        return False
+    await db.delete(db_chat)
+    await db.commit()
+    return True
+
+
+async def clear_chat_messages(db: AsyncSession, chat_id: int) -> bool:
+    """Delete all messages for a chat. Returns False if chat not found."""
+    if await get_chat(db, chat_id) is None:
+        return False
+    await db.execute(delete(models.Message).where(models.Message.chat_id == chat_id))
+    await db.commit()
+    return True
+
+
+async def clear_chat_memories(db: AsyncSession, chat_id: int) -> bool:
+    """Delete all memories for all characters in a chat. Returns False if chat not found."""
+    if await get_chat(db, chat_id) is None:
+        return False
+    character_ids = [c.id for c in await get_characters_by_chat(db, chat_id)]
+    if character_ids:
+        await db.execute(
+            delete(models.Memory).where(models.Memory.character_id.in_(character_ids))
+        )
+    await db.commit()
+    return True
+
+
+# ---------------------------- Character ----------------------------
+async def _order_index_taken(
+    db: AsyncSession, chat_id: int, order_index: int, exclude_id: int | None = None
+) -> bool:
+    stmt = select(models.Character).where(
+        models.Character.chat_id == chat_id,
+        models.Character.order_index == order_index,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(models.Character.id != exclude_id)
+    result = await db.execute(stmt)
+    return result.scalars().first() is not None
+
+
+async def create_character(
+    db: AsyncSession, chat_id: int, character: schemas.CharacterCreate
+) -> models.Character:
+    if await _order_index_taken(db, chat_id, character.order_index):
+        raise ValueError(
+            f"order_index={character.order_index} уже занят в этом чате"
+        )
+    char_data = character.model_dump()
+    initial_rels = char_data.pop("initial_relationships", [])
+    char_data.pop("is_player", None)  # prevent setting is_player from API
+    db_character = models.Character(chat_id=chat_id, **char_data)
+    db.add(db_character)
+    await db.commit()
+    await db.refresh(db_character)
+
+    if initial_rels:
+        for rel in initial_rels:
+            rel_exists = await db.execute(
+                select(models.CharacterRelationship).where(
+                    models.CharacterRelationship.source_character_id == db_character.id,
+                    models.CharacterRelationship.target_character_id == rel["target_id"],
+                )
+            )
+            if rel_exists.scalar_one_or_none() is not None:
+                continue
+            db_rel = models.CharacterRelationship(
+                chat_id=chat_id,
+                source_character_id=db_character.id,
+                target_character_id=rel["target_id"],
+                relationship_type=rel.get("relationship_type", models.DEFAULT_RELATIONSHIP_TYPE),
+                affection=rel.get("affection", models.DEFAULT_AFFECTION),
+                trust=rel.get("trust", models.DEFAULT_TRUST),
+                attraction=rel.get("attraction", models.DEFAULT_ATTRACTION),
+                resentment=rel.get("resentment", models.DEFAULT_RESENTMENT),
+                jealousy=rel.get("jealousy", models.DEFAULT_JEALOUSY),
+                description=rel.get("description", ""),
+                initial_description=rel.get("description", ""),
+            )
+            db.add(db_rel)
+        await db.commit()
+        await db.refresh(db_character)
+
+    return db_character
+
+
+async def get_character(db: AsyncSession, character_id: int) -> models.Character | None:
+    return await db.get(models.Character, character_id)
+
+
+async def get_characters_by_chat(
+    db: AsyncSession, chat_id: int, include_player: bool = False
+) -> list[models.Character]:
+    stmt = (
+        select(models.Character)
+        .where(models.Character.chat_id == chat_id)
+        .order_by(models.Character.order_index, models.Character.id)
+    )
+    if not include_player:
+        stmt = stmt.where(models.Character.is_player == False)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_player_character(
+    db: AsyncSession, chat_id: int
+) -> models.Character | None:
+    stmt = select(models.Character).where(
+        models.Character.chat_id == chat_id,
+        models.Character.is_player == True,
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def create_player_character(
+    db: AsyncSession, chat_id: int, name: str = "Игрок"
+) -> models.Character:
+    existing = await get_player_character(db, chat_id)
+    if existing:
+        return existing
+    player = models.Character(
+        chat_id=chat_id,
+        name=name,
+        is_player=True,
+        order_index=9999,
+    )
+    db.add(player)
+    await db.commit()
+    await db.refresh(player)
+
+    # Create player<->NPC relationships for all NPCs
+    npcs = await get_characters_by_chat(db, chat_id)
+    for npc in npcs:
+        # NPC -> Player
+        rel_npc_player = models.CharacterRelationship(
+            chat_id=chat_id,
+            source_character_id=npc.id,
+            target_character_id=player.id,
+        )
+        db.add(rel_npc_player)
+        # Player -> NPC
+        rel_player_npc = models.CharacterRelationship(
+            chat_id=chat_id,
+            source_character_id=player.id,
+            target_character_id=npc.id,
+        )
+        db.add(rel_player_npc)
+    await db.commit()
+    await db.refresh(player)
+    return player
+
+
+async def update_character(
+    db: AsyncSession, character_id: int, character_update: schemas.CharacterUpdate
+) -> models.Character | None:
+    db_character = await get_character(db, character_id)
+    if db_character is None:
+        return None
+    update_data = character_update.model_dump(exclude_unset=True)
+    new_index = update_data.get("order_index")
+    if new_index is not None and new_index != db_character.order_index:
+        if await _order_index_taken(
+            db, db_character.chat_id, new_index, exclude_id=db_character.id
+        ):
+            raise ValueError(f"order_index={new_index} уже занят в этом чате")
+    for field, value in update_data.items():
+        setattr(db_character, field, value)
+    await db.commit()
+    await db.refresh(db_character)
+    return db_character
+
+
+async def delete_character(db: AsyncSession, character_id: int) -> bool:
+    db_character = await get_character(db, character_id)
+    if db_character is None:
+        return False
+    if db_character.is_player:
+        raise ValueError("Нельзя удалить игрока")
+    await db.delete(db_character)
+    await db.commit()
+    return True
+
+
+# ----------------------------- Message -----------------------------
+async def create_message(db: AsyncSession, message: schemas.MessageCreate) -> models.Message:
+    kwargs = message.orm_kwargs() if hasattr(message, "orm_kwargs") else message.model_dump()
+    if "target_character_ids" in kwargs and not isinstance(
+        kwargs["target_character_ids"], str
+    ):
+        kwargs["target_character_ids"] = perception.serialize_target_ids(
+            kwargs["target_character_ids"]
+        )
+    db_message = models.Message(**kwargs)
+    db.add(db_message)
+    await db.commit()
+    await db.refresh(db_message)
+    return db_message
+
+
+async def get_messages_by_chat(
+    db: AsyncSession, chat_id: int, limit: int | None = None
+) -> list[models.Message]:
+    stmt = (
+        select(models.Message)
+        .where(models.Message.chat_id == chat_id)
+        .options(selectinload(models.Message.character))
+    )
+    if limit is None:
+        stmt = stmt.order_by(models.Message.timestamp, models.Message.id)
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+    stmt = stmt.order_by(
+        models.Message.timestamp.desc(), models.Message.id.desc()
+    ).limit(limit)
+    result = await db.execute(stmt)
+    messages = list(result.scalars().all())
+    messages.reverse()
+    return messages
+
+
+async def get_messages_paginated(
+    db: AsyncSession, chat_id: int, limit: int = 50, offset: int = 0
+) -> list[models.Message]:
+    stmt = (
+        select(models.Message)
+        .where(models.Message.chat_id == chat_id)
+        .options(selectinload(models.Message.character))
+        .order_by(models.Message.timestamp, models.Message.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def count_messages_after(
+    db: AsyncSession, chat_id: int, after_message_id: int
+) -> int:
+    """Count messages in chat with id strictly greater than after_message_id."""
+    stmt = (
+        select(func.count())
+        .select_from(models.Message)
+        .where(
+            models.Message.chat_id == chat_id,
+            models.Message.id > after_message_id,
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalar() or 0
+
+
+async def get_messages_since(
+    db: AsyncSession,
+    chat_id: int,
+    after_message_id: int,
+    limit: int | None = None,
+) -> list[models.Message]:
+    """Return messages with id > after_message_id in chronological order."""
+    stmt = (
+        select(models.Message)
+        .where(
+            models.Message.chat_id == chat_id,
+            models.Message.id > after_message_id,
+        )
+        .options(selectinload(models.Message.character))
+        .order_by(models.Message.timestamp, models.Message.id)
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def delete_message(
+    db: AsyncSession, message_id: int, *, cascade_after: bool = False
+) -> bool:
+    """Delete a single message from the chat.
+
+    ``cascade_after`` deletes the message and every message that follows it in
+    the same chat (used for player messages: replies without the player's line
+    are meaningless). Presence records are removed by the FK ``CASCADE``.
+    Returns False if the message does not exist.
+    """
+    db_message = await db.get(models.Message, message_id)
+    if db_message is None:
+        return False
+    if cascade_after:
+        await db.execute(
+            delete(models.Message).where(
+                models.Message.chat_id == db_message.chat_id,
+                models.Message.id >= message_id,
+            )
+        )
+    else:
+        await db.delete(db_message)
+    await db.commit()
+    return True
+
+
+# ----------------------------- Memory ------------------------------
+async def _memory_exists(db: AsyncSession, character_id: int, content_hash: str) -> bool:
+    stmt = select(models.Memory.id).where(
+        models.Memory.character_id == character_id,
+        models.Memory.content_hash == content_hash,
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first() is not None
+
+
+async def create_memory(db: AsyncSession, memory: schemas.MemoryCreate, source_message_ids: list[int] | None = None) -> models.Memory | None:
+    content_hash = memory_content_hash(memory.content)
+    if await _memory_exists(db, memory.character_id, content_hash):
+        return None
+    import json
+    db_memory = models.Memory(
+        **memory.model_dump(),
+        content_hash=content_hash,
+        source_message_ids=json.dumps(source_message_ids or []),
+    )
+    db.add(db_memory)
+    await db.commit()
+    await db.refresh(db_memory)
+    return db_memory
+
+
+async def _count_memories_for_character(db: AsyncSession, character_id: int) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(models.Memory)
+        .where(models.Memory.character_id == character_id)
+    )
+    result = await db.execute(stmt)
+    return result.scalar() or 0
+
+
+async def _delete_lowest_value_memories(
+    db: AsyncSession, character_id: int, keep_count: int
+) -> None:
+    """Drop lowest-importance memories first, then oldest (P1 extraction quality)."""
+    stmt = select(models.Memory).where(models.Memory.character_id == character_id)
+    result = await db.execute(stmt)
+    memories = list(result.scalars().all())
+    if len(memories) <= keep_count:
+        return
+
+    def sort_key(mem: models.Memory):
+        importance = mem.importance if mem.importance is not None else 0.5
+        created = mem.created_at or datetime.min
+        return (importance, created, mem.id)
+
+    memories.sort(key=sort_key)
+    to_delete = memories[: len(memories) - keep_count]
+    delete_ids = [m.id for m in to_delete]
+    if not delete_ids:
+        return
+    await db.execute(delete(models.Memory).where(models.Memory.id.in_(delete_ids)))
+    await db.commit()
+
+
+async def _delete_oldest_memories(db: AsyncSession, character_id: int, keep_count: int) -> None:
+    """Backward-compatible alias → importance-aware eviction."""
+    await _delete_lowest_value_memories(db, character_id, keep_count)
+
+
+async def ensure_memory_limit(db: AsyncSession, character_id: int) -> None:
+    count = await _count_memories_for_character(db, character_id)
+    if count > settings.max_memories_per_character:
+        await _delete_lowest_value_memories(db, character_id, settings.max_memories_per_character)
+
+
+async def get_memories_by_character(
+    db: AsyncSession, character_id: int, limit: int | None = None
+) -> list[models.Memory]:
+    stmt = (
+        select(models.Memory)
+        .where(models.Memory.character_id == character_id)
+        .order_by(models.Memory.created_at.desc(), models.Memory.id.desc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    memories = list(result.scalars().all())
+    memories.reverse()
+    if memories:
+        await _touch_memory_access(db, [m.id for m in memories])
+    return memories
+
+
+WitnessQuality = Literal["direct", "hearsay"]
+
+
+async def filter_memories_by_witness(
+    db: AsyncSession,
+    memories: list[models.Memory],
+    viewer_character_id: int,
+) -> Tuple[list[models.Memory], dict[int, WitnessQuality]]:
+    """Filter memories so the character only keeps those they actually witnessed.
+
+    Checks each memory's *source_message_ids* against the MessagePresence table.
+    A memory is kept if at least one of its source messages has presence
+    ``present`` or ``told`` for *viewer_character_id*.
+
+    Returns ``(filtered_memories, quality_map)`` where *quality_map* maps
+    memory id → ``"direct"`` (at least one source with ``present``) or
+    ``"hearsay"`` (all sources are ``told`` only).
+    """
+    if not memories:
+        return [], {}
+
+    # Collect all unique source message IDs across all memories
+    import json
+    all_source_ids: set[int] = set()
+    mem_to_sources: dict[int, list[int]] = {}
+    for mem in memories:
+        try:
+            ids = json.loads(mem.source_message_ids or "[]")
+        except (json.JSONDecodeError, TypeError):
+            ids = []
+        mem_to_sources[mem.id] = ids
+        all_source_ids.update(ids)
+
+    if not all_source_ids:
+        # No source IDs means legacy memory — keep it (assume direct)
+        return memories, {mem.id: "direct" for mem in memories}
+
+    # Batch-query presence for all source messages
+    stmt = select(models.MessagePresence).where(
+        models.MessagePresence.character_id == viewer_character_id,
+        models.MessagePresence.message_id.in_(all_source_ids),
+    )
+    result = await db.execute(stmt)
+    presence_rows = list(result.scalars().all())
+    msg_presence: dict[int, str] = {row.message_id: row.presence for row in presence_rows}
+
+    OBSERVABLE = witness_model.MEMORY_OBSERVABLE_PRESENCES  # {"present", "told"}
+
+    filtered: list[models.Memory] = []
+    quality_map: dict[int, str] = {}
+    for mem in memories:
+        source_ids = mem_to_sources.get(mem.id, [])
+        if not source_ids:
+            filtered.append(mem)
+            quality_map[mem.id] = "direct"
+            continue
+        source_presences = [msg_presence.get(sid) for sid in source_ids]
+        if any(p == "present" for p in source_presences):
+            filtered.append(mem)
+            quality_map[mem.id] = "direct"
+        elif any(p in OBSERVABLE for p in source_presences):
+            filtered.append(mem)
+            quality_map[mem.id] = "hearsay"
+        # If all absent, memory is excluded
+
+    return filtered, quality_map
+
+
+def _apply_witness_boost(
+    selected: list[models.Memory],
+    quality_map: dict[int, WitnessQuality],
+    boost: float = 1.5,
+) -> list[models.Memory]:
+    """Re-rank so directly witnessed facts appear before hearsay at same score.
+
+    Sorts stable so that within equal positions, direct facts come first.
+    This is a gentle nudge, not a hard cutoff.
+    """
+    if not selected or not quality_map:
+        return selected
+    return sorted(
+        selected,
+        key=lambda m: (
+            0 if quality_map.get(m.id) == "direct" else 1,
+        ),
+    )
+
+
+async def decay_memory_importance(db: AsyncSession) -> None:
+    """Periodic decay of importance for memories not accessed recently.
+
+    Reduces ``importance`` by ``settings.memory_importance_decay_factor`` for
+    every full ``settings.memory_importance_decay_days`` since last access.
+    """
+    import math
+    from datetime import datetime, timedelta
+
+    decay_days = settings.memory_importance_decay_days
+    decay_factor = settings.memory_importance_decay_factor
+    if decay_days <= 0 or decay_factor <= 0:
+        return
+
+    cutoff = datetime.utcnow() - timedelta(days=decay_days)
+    stmt = (
+        select(models.Memory)
+        .where(models.Memory.last_accessed_at < cutoff)
+        .where(models.Memory.importance > 0.1)
+    )
+    result = await db.execute(stmt)
+    stale = list(result.scalars().all())
+    if not stale:
+        return
+
+    for mem in stale:
+        days_unused = (datetime.utcnow() - (mem.last_accessed_at or mem.created_at)).days
+        periods = max(1, days_unused // decay_days)
+        decayed = mem.importance * (decay_factor ** periods)
+        mem.importance = max(0.05, round(decayed, 2))
+
+    await db.commit()
+    logger.info("Decayed importance for %d stale memories", len(stale))
+
+
+async def _touch_memory_access(db: AsyncSession, memory_ids: list[int]) -> None:
+    """Update last_accessed_at for retrieved memories."""
+    if not memory_ids:
+        return
+    from datetime import datetime
+    await db.execute(
+        models.Memory.__table__.update()
+        .where(models.Memory.id.in_(memory_ids))
+        .values(last_accessed_at=datetime.utcnow())
+    )
+    await db.commit()
+
+
+async def get_memories_for_characters(
+    db: AsyncSession, character_ids: list[int], limit: int | None = None
+) -> dict[int, list[models.Memory]]:
+    """Load memories for multiple characters in one query."""
+    if not character_ids:
+        return {}
+    stmt = (
+        select(models.Memory)
+        .where(models.Memory.character_id.in_(character_ids))
+        .order_by(
+            models.Memory.character_id,
+            models.Memory.created_at.desc(),
+            models.Memory.id.desc(),
+        )
+    )
+    result = await db.execute(stmt)
+    all_memories = list(result.scalars().all())
+    grouped: dict[int, list[models.Memory]] = {cid: [] for cid in character_ids}
+    for mem in all_memories:
+        bucket = grouped[mem.character_id]
+        if limit is None or len(bucket) < limit:
+            bucket.append(mem)
+    for cid in grouped:
+        grouped[cid].reverse()
+    return grouped
+
+
+async def _build_scoring_context(
+    context_text: str,
+    character_summaries: dict[int, str] | None,
+    cid: int,
+) -> str:
+    """Augment the BM25 scoring context with the character's summary when available."""
+    if not character_summaries:
+        return context_text
+    summary = character_summaries.get(cid)
+    if not summary:
+        return context_text
+    return f"{context_text}\n\n{summary}"
+
+
+async def get_relevant_memories_for_characters(
+    db: AsyncSession,
+    character_ids: list[int],
+    context_text: str,
+    top_k: int | None = None,
+    *,
+    witness_filter: bool = True,
+    character_summaries: dict[int, str] | None = None,
+) -> dict[int, list[models.Memory]]:
+    """Load and rank memories by BM25 relevance to current context (P1).
+
+    When *witness_filter* is True (default), memories whose *source_message_ids*
+    reference messages the character did not witness (present/told) are filtered
+    out before ranking.
+
+    When *character_summaries* is provided, each character's summary is appended
+    to the scoring context so BM25 biases toward memories relevant to the
+    character's current state.
+    """
+    if not character_ids:
+        return {}
+    if not settings.enable_relevant_memory_selection:
+        return await get_memories_for_characters(
+            db, character_ids, top_k or settings.memory_relevance_top_k
+        )
+
+    candidate_limit = (top_k or settings.memory_relevance_top_k) * 4
+    # Decay importance periodically (approx every 20th call)
+    if random.random() < 0.05:
+        await decay_memory_importance(db)
+    relevant: dict[int, list[models.Memory]] = {}
+    for cid in character_ids:
+        candidates = await get_memories_by_character(db, cid, candidate_limit)
+        quality_map: dict[int, WitnessQuality] = {}
+        if witness_filter and settings.enable_witness_memory_filter:
+            candidates, quality_map = await filter_memories_by_witness(db, candidates, cid)
+        scoring_context = await _build_scoring_context(context_text, character_summaries, cid)
+        selected = memory_service.select_relevant_memories(
+            candidates, scoring_context, top_k or settings.memory_relevance_top_k
+        )
+        if quality_map:
+            selected = _apply_witness_boost(selected, quality_map)
+        # Touch last_accessed_at for selected memories
+        if selected:
+            now = datetime.utcnow()
+            for mem in selected:
+                mem.last_accessed_at = now
+            await db.commit()
+        relevant[cid] = selected
+    return relevant
+
+
+async def get_hybrid_memories_for_characters(
+    db: AsyncSession,
+    character_ids: list[int],
+    context_text: str,
+    top_k: int | None = None,
+    bm25_weight: float | None = None,
+    vector_weight: float | None = None,
+    *,
+    witness_filter: bool = True,
+    character_summaries: dict[int, str] | None = None,
+) -> dict[int, list[models.Memory]]:
+    """
+    Hybrid retrieval: BM25 (lexical) + Vector (semantic) with RRF fusion (P3).
+
+    When *witness_filter* is True (default), memories whose *source_message_ids*
+    reference messages the character did not witness are filtered out first.
+
+    When *character_summaries* is provided, each character's summary is appended
+    to the BM25 scoring context.
+    
+    Returns top_k memories per character ranked by reciprocal rank fusion.
+    """
+    if not character_ids:
+        return {}
+    
+    if not settings.embedding_enabled:
+        logger.info("Embeddings disabled, falling back to BM25-only")
+        return await get_relevant_memories_for_characters(
+            db, character_ids, context_text, top_k,
+            witness_filter=witness_filter,
+            character_summaries=character_summaries,
+        )
+    
+    bm25_w = bm25_weight if bm25_weight is not None else settings.hybrid_bm25_weight
+    vector_w = vector_weight if vector_weight is not None else settings.hybrid_vector_weight
+    rrf_k = settings.hybrid_rrf_k
+    
+    top_k = top_k or settings.memory_relevance_top_k
+    candidate_limit = top_k * 8  # Get more candidates for better fusion
+    
+    emb_service = embedding_service.get_embedding_service()
+    query_embedding = await emb_service.embed_single(context_text)
+    
+    if not query_embedding:
+        logger.warning("Failed to generate query embedding, falling back to BM25")
+        return await get_relevant_memories_for_characters(
+            db, character_ids, context_text, top_k,
+            witness_filter=witness_filter,
+            character_summaries=character_summaries,
+        )
+    
+    # Decay importance periodically (approx every 20th call)
+    if random.random() < 0.05:
+        await decay_memory_importance(db)
+    relevant: dict[int, list[models.Memory]] = {}
+    
+    for cid in character_ids:
+        candidates = await get_memories_by_character(db, cid, candidate_limit)
+        quality_map: dict[int, WitnessQuality] = {}
+        if witness_filter and settings.enable_witness_memory_filter:
+            candidates, quality_map = await filter_memories_by_witness(db, candidates, cid)
+        
+        if not candidates:
+            relevant[cid] = []
+            continue
+        
+        scoring_context = await _build_scoring_context(context_text, character_summaries, cid)
+        
+        # BM25 ranking
+        bm25_results = memory_service.select_relevant_memories(
+            candidates, scoring_context, candidate_limit
+        )
+        bm25_rank = {mem.id: rank for rank, mem in enumerate(bm25_results)}
+        
+        # Vector ranking
+        vector_scores = []
+        for mem in candidates:
+            if mem.embedding:
+                mem_emb = emb_service.unpack_embedding(mem.embedding)
+                if mem_emb:
+                    sim = emb_service.cosine_similarity(query_embedding, mem_emb)
+                    vector_scores.append((sim, mem))
+        
+        vector_scores.sort(key=lambda x: x[0], reverse=True)
+        vector_rank = {mem.id: rank for rank, (_, mem) in enumerate(vector_scores)}
+        
+        # RRF fusion
+        all_mem_ids = set(bm25_rank.keys()) | set(vector_rank.keys())
+        rrf_scores = {}
+        
+        for mem_id in all_mem_ids:
+            bm25_r = bm25_rank.get(mem_id, len(bm25_results))
+            vec_r = vector_rank.get(mem_id, len(vector_scores))
+            rrf = bm25_w / (rrf_k + bm25_r + 1) + vector_w / (rrf_k + vec_r + 1)
+            rrf_scores[mem_id] = rrf
+        
+        # Sort by RRF score
+        sorted_mem_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        top_mem_ids = sorted_mem_ids[:top_k]
+        
+        # Get memory objects
+        mem_map = {mem.id: mem for mem in candidates}
+        selected = [mem_map[mid] for mid in top_mem_ids if mid in mem_map]
+        
+        # Apply witness boost — direct facts rank before hearsay
+        if quality_map:
+            selected = _apply_witness_boost(selected, quality_map)
+        
+        # Touch last_accessed_at
+        if selected:
+            now = datetime.utcnow()
+            for mem in selected:
+                mem.last_accessed_at = now
+            await db.commit()
+        
+        relevant[cid] = selected
+    
+    return relevant
+
+
+async def delete_memory(db: AsyncSession, memory_id: int) -> bool:
+    db_memory = await db.get(models.Memory, memory_id)
+    if db_memory is None:
+        return False
+    await db.delete(db_memory)
+    await db.commit()
+    return True
+
+
+async def update_memory(
+    db: AsyncSession, memory_id: int, memory_update: schemas.MemoryUpdate
+) -> models.Memory | None:
+    """Update memory content/importance/category."""
+    db_memory = await db.get(models.Memory, memory_id)
+    if db_memory is None:
+        return None
+    update_data = memory_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_memory, field, value)
+    await db.commit()
+    await db.refresh(db_memory)
+    return db_memory
+
+
+# ------------------------ Character Summary ----------------------
+async def get_character_summary(
+    db: AsyncSession, character_id: int
+) -> models.CharacterSummary | None:
+    stmt = select(models.CharacterSummary).where(
+        models.CharacterSummary.character_id == character_id
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_summaries_for_characters(
+    db: AsyncSession, character_ids: list[int]
+) -> dict[int, models.CharacterSummary]:
+    if not character_ids:
+        return {}
+    stmt = select(models.CharacterSummary).where(
+        models.CharacterSummary.character_id.in_(character_ids)
+    )
+    result = await db.execute(stmt)
+    summaries = list(result.scalars().all())
+    return {summary.character_id: summary for summary in summaries}
+
+
+async def upsert_character_summary(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    content: str,
+    through_message_id: int,
+) -> models.CharacterSummary:
+    existing = await get_character_summary(db, character_id)
+    now = datetime.utcnow()
+    if existing is None:
+        db_summary = models.CharacterSummary(
+            chat_id=chat_id,
+            character_id=character_id,
+            content=content,
+            through_message_id=through_message_id,
+            updated_at=now,
+        )
+        db.add(db_summary)
+    else:
+        existing.content = content
+        existing.through_message_id = through_message_id
+        existing.updated_at = now
+        db_summary = existing
+    await db.commit()
+    await db.refresh(db_summary)
+    return db_summary
+
+
+async def reset_character_summaries_for_chat(db: AsyncSession, chat_id: int) -> None:
+    await db.execute(
+        delete(models.CharacterSummary).where(
+            models.CharacterSummary.chat_id == chat_id
+        )
+    )
+    await db.commit()
+
+
+# ------------------------ Message Presence -----------------------
+async def upsert_message_presence_batch(
+    db: AsyncSession, records: list[schemas.MessagePresenceCreate]
+) -> None:
+    if not records:
+        return
+    for record in records:
+        stmt = select(models.MessagePresence).where(
+            models.MessagePresence.message_id == record.message_id,
+            models.MessagePresence.character_id == record.character_id,
+        )
+        result = await db.execute(stmt)
+        existing = result.scalars().first()
+        if existing is None:
+            db.add(models.MessagePresence(**record.model_dump()))
+        else:
+            existing.presence = record.presence
+    await db.commit()
+
+
+async def get_presence_map(
+    db: AsyncSession, message_ids: list[int], character_id: int
+) -> dict[int, str]:
+    if not message_ids:
+        return {}
+    stmt = select(models.MessagePresence).where(
+        models.MessagePresence.character_id == character_id,
+        models.MessagePresence.message_id.in_(message_ids),
+    )
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
+    return {row.message_id: row.presence for row in rows}
+
+
+async def compute_and_save_presence_for_message(
+    db: AsyncSession,
+    message,
+    characters: list,
+    character_names: dict[int, str] | None = None,
+) -> dict[int, str]:
+    """Compute and persist presence for one event for all characters.
+
+    Returns {character_id: presence} for the given message.
+    """
+    names = character_names or {c.id: c.name for c in characters}
+    locations = {c.id: getattr(c, "location", "") or "" for c in characters}
+    message_id = getattr(message, "id", None)
+    if message_id is None:
+        return {}
+
+    records: list[schemas.MessagePresenceCreate] = []
+    result: dict[int, str] = {}
+    for character in characters:
+        presence = witness_model.compute_mvp_presence(
+            message,
+            character.id,
+            names,
+            viewer_location=locations.get(character.id, ""),
+            character_locations=locations,
+        )
+        result[character.id] = presence
+        records.append(
+            schemas.MessagePresenceCreate(
+                message_id=message_id,
+                character_id=character.id,
+                presence=presence,
+            )
+        )
+    await upsert_message_presence_batch(db, records)
+    return result
+
+
+async def compute_and_save_presence_for_round(
+    db: AsyncSession,
+    round_messages: list,
+    character_ids: list[int],
+    character_names: dict[int, str],
+    *,
+    characters: list | None = None,
+    character_locations: dict[int, str] | None = None,
+) -> None:
+    """Persist perception-based presence for all messages in a completed round."""
+    if characters is None:
+        characters = []
+        for cid in character_ids:
+            char = await get_character(db, cid)
+            if char is not None:
+                characters.append(char)
+
+    locations = character_locations or {
+        c.id: getattr(c, "location", "") or "" for c in characters
+    }
+    if not locations and character_ids:
+        locations = {cid: "" for cid in character_ids}
+
+    records: list[schemas.MessagePresenceCreate] = []
+    for message in round_messages:
+        message_id = getattr(message, "id", None)
+        if message_id is None:
+            continue
+        for character_id in character_ids:
+            presence = witness_model.compute_mvp_presence(
+                message,
+                character_id,
+                character_names,
+                viewer_location=locations.get(character_id, ""),
+                character_locations=locations,
+            )
+            records.append(
+                schemas.MessagePresenceCreate(
+                    message_id=message_id,
+                    character_id=character_id,
+                    presence=presence,
+                )
+            )
+    await upsert_message_presence_batch(db, records)
+
+
+# ------------------------ Character Location --------------------------
+async def update_character_location(
+    db: AsyncSession, character_id: int, location: str
+) -> models.Character | None:
+    """Manually override a character's location."""
+    db_character = await get_character(db, character_id)
+    if db_character is None:
+        return None
+    db_character.location = location
+    await db.commit()
+    await db.refresh(db_character)
+    return db_character
+
+
+async def get_character_locations_by_chat(
+    db: AsyncSession, chat_id: int
+) -> dict[int, str]:
+    """Get current locations for all characters in a chat."""
+    characters = await get_characters_by_chat(db, chat_id)
+    return {c.id: c.location or "" for c in characters}
+
+
+async def update_character_locations_batch(
+    db: AsyncSession, chat_id: int, locations: dict[int, str]
+) -> None:
+    """Batch-update character locations from scene extraction."""
+    characters = await get_characters_by_chat(db, chat_id)
+    char_map = {c.id: c for c in characters}
+    changed = False
+    for cid, loc in locations.items():
+        cid_int = int(cid)
+        if cid_int in char_map:
+            char = char_map[cid_int]
+            new_loc = loc.strip()
+            if char.location != new_loc:
+                char.location = new_loc
+                changed = True
+    if changed:
+        await db.commit()
+
+
+# ----------------------------- Scene State -----------------------------
+async def get_scene_state(db: AsyncSession, chat_id: int) -> models.SceneState | None:
+    """Get scene state for a chat."""
+    return await db.get(models.SceneState, chat_id)
+
+
+async def upsert_scene_state(
+    db: AsyncSession, chat_id: int, scene_update: schemas.SceneStateUpdate
+) -> models.SceneState:
+    """Create or update scene state for a chat."""
+    scene = await get_scene_state(db, chat_id)
+    if scene is None:
+        scene = models.SceneState(chat_id=chat_id)
+        db.add(scene)
+
+    import json
+
+    update_data = scene_update.model_dump(exclude_unset=True)
+    if "custom_state" in update_data and update_data["custom_state"] is not None:
+        cs = update_data["custom_state"]
+        if hasattr(cs, "model_dump_json"):
+            update_data["custom_state"] = cs.model_dump_json()
+        elif isinstance(cs, dict):
+            update_data["custom_state"] = json.dumps(cs)
+
+    if "character_locations" in update_data and update_data["character_locations"] is not None:
+        cl = update_data["character_locations"]
+        if isinstance(cl, dict):
+            update_data["character_locations"] = json.dumps(cl)
+
+    for field, value in update_data.items():
+        setattr(scene, field, value)
+
+    await db.commit()
+    await db.refresh(scene)
+    return scene
+
+
+async def get_present_character_ids(db: AsyncSession, chat_id: int) -> list[int]:
+    """Get character IDs with presence 'present' or 'told' for latest messages."""
+    from sqlalchemy import select, desc
+
+    # Get latest message IDs for this chat
+    stmt = (
+        select(models.Message.id)
+        .where(models.Message.chat_id == chat_id)
+        .order_by(desc(models.Message.timestamp), desc(models.Message.id))
+        .limit(20)
+    )
+    result = await db.execute(stmt)
+    message_ids = [row[0] for row in result.fetchall()]
+
+    if not message_ids:
+        return []
+
+    # Get presence records for these messages
+    stmt = select(models.MessagePresence).where(
+        models.MessagePresence.message_id.in_(message_ids),
+        models.MessagePresence.presence.in_(["present", "told"]),
+    )
+    result = await db.execute(stmt)
+    presence_records = result.scalars().all()
+
+    return list({pr.character_id for pr in presence_records})
+
+
+async def get_scene_state_with_presence(
+    db: AsyncSession, chat_id: int
+) -> schemas.SceneStateRead:
+    """Get scene state with computed present character IDs."""
+    scene = await get_scene_state(db, chat_id)
+    present_ids = await get_present_character_ids(db, chat_id)
+    chat = await get_chat(db, chat_id)
+    player_location = getattr(chat, "player_location", "") if chat else ""
+
+    if scene is None:
+        return schemas.SceneStateRead(
+            chat_id=chat_id,
+            updated_at=datetime.utcnow(),
+            present_character_ids=present_ids,
+            custom_state=schemas.SceneCustomState(),
+            player_location=player_location,
+        )
+
+    import json
+
+    custom_state_dict = json.loads(scene.custom_state) if scene.custom_state else {}
+    custom_state = schemas.SceneCustomState(**custom_state_dict)
+
+    character_locations_raw = json.loads(scene.character_locations) if scene.character_locations else {}
+    # Ensure keys are strings (JSON serialization uses string keys)
+    character_locations = {str(k): str(v) for k, v in character_locations_raw.items() if v}
+
+    return schemas.SceneStateRead(
+        chat_id=scene.chat_id,
+        time_of_day=scene.time_of_day,
+        character_locations=character_locations,
+        custom_state=custom_state,
+        updated_at=scene.updated_at,
+        present_character_ids=present_ids,
+        player_location=player_location,
+    )
