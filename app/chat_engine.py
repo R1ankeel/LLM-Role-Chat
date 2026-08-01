@@ -280,6 +280,10 @@ async def process_user_message_streaming(
         ),
     )
 
+    # Stable round anchor (docs/relations.md §6, Sprint 1 item 9): one round_id
+    # per turn, fixed once to the user-message id. utcnow() is never used for it.
+    round_id = f"r{chat_id}-m{user_message.id}"
+
     round_messages: list = [user_message]
     yield {"type": "message", "message": _message_to_dict(user_message)}
 
@@ -717,6 +721,7 @@ async def process_user_message_streaming(
             _analyze_and_update_relationships(
                 client, chat_id, chat.model_name,
                 round_snapshots, character_snapshots,
+                round_id=round_id,
             )
         )
 
@@ -802,17 +807,21 @@ async def _analyze_and_update_relationships(
     model_name: str,
     round_snapshots: list[dict],
     character_snapshots: list[dict],
+    round_id: str | None = None,
 ) -> None:
     """Background task: analyze relationships for all character pairs and apply deltas.
 
     Only NPCs are analyzed as relationship *sources*. The player is a valid
     *target* (bots -> player) but never a source (player -> bots is not tracked).
 
-    For each pair only the relevant excerpt of the round is sent to the LLM
-    (filtered by perception), so an event aimed at someone else cannot be
-    misattributed to unrelated pairs. Pairs without any interaction evidence
-    are skipped entirely. Witness/reflection-only evidence is capped and never
-    changes the relationship type.
+    The default path uses the batch analyzer: a single LLM call covers every
+    pair with evidence (§8). Every proposed delta/issue is then passed through
+    the deterministic evidence gate (§8.3) — a pair without evidence rejects
+    everything. When the batch fails or is disabled, the per-pair analyzer is
+    used (§8.4); the fallback never disables evidence-gating.
+
+    ``round_id`` is the stable per-turn anchor from §6, computed once per user
+    message in ``process_user_message_streaming``.
 
     Opens its own DB session instead of borrowing the caller's, so the
     connection is always returned to the pool when the task finishes.
@@ -843,15 +852,18 @@ async def _analyze_and_update_relationships(
             # Only NPCs are sources; targets include the player
             sources = [c for c in all_chars if not getattr(c, "is_player", False)]
 
-            # One round_id per round (docs/relations.md §6; the user-message
-            # anchor is a separate Sprint 1 item, kept here for forward-compat).
-            round_id = f"round_{chat_id}_{datetime.utcnow().isoformat()}"
+            # Stable round anchor (docs/relations.md §6). Kept for direct calls.
+            if round_id is None:
+                round_id = f"round_{chat_id}_{datetime.utcnow().isoformat()}"
 
             # Issues mentioned this round: those passed to the analyzer for an
             # analyzed pair, plus those selected into each source's
             # generation-context `<open_issue data>` block (§7.4 salience).
             mentioned_issue_ids: set[int] = set()
 
+            # Per-pair analysis inputs, shared by the batch prompt and the
+            # per-pair fallback.
+            pairs: list[dict] = []
             for source_char in sources:
                 for target_char in all_chars:
                     if source_char.id == target_char.id:
@@ -875,7 +887,6 @@ async def _analyze_and_update_relationships(
                     rel = await relationship_service.get_relationship(
                         db, source_char.id, target_char.id,
                     )
-
                     if rel is None:
                         rel = await relationship_service.get_or_create_relationship(
                             db, chat_id, source_char.id, target_char.id,
@@ -899,32 +910,27 @@ async def _analyze_and_update_relationships(
                     ]
                     mentioned_issue_ids.update(issue.id for issue in open_issues)
 
-                    deltas = await relationship_analyzer.analyze_relationships(
-                        client=client,
-                        model_name=model_name,
-                        source_name=source_char.name,
-                        target_name=target_char.name,
-                        current_type=rel.relationship_type,
-                        affection=rel.affection,
-                        trust=rel.trust,
-                        attraction=rel.attraction,
-                        resentment=rel.resentment,
-                        jealousy=rel.jealousy,
-                        recent_events_text=events_text,
-                        round_text=pair_ctx["excerpt"],
-                        source_character_id=source_char.id,
-                        target_character_id=target_char.id,
-                        interaction_summary=pair_ctx["interaction_summary"],
-                        direct_interaction=pair_ctx["direct_interaction"],
-                        observed_target=pair_ctx["observed_target"],
-                        open_issues=open_issues_payload,
+                    pairs.append(
+                        {
+                            "source_char": source_char,
+                            "target_char": target_char,
+                            "source_id": source_char.id,
+                            "target_id": target_char.id,
+                            "source_name": source_char.name,
+                            "target_name": target_char.name,
+                            "pair_ctx": pair_ctx,
+                            "mode": _evidence_mode(pair_ctx),
+                            "rel": rel,
+                            "affection": rel.affection,
+                            "trust": rel.trust,
+                            "attraction": rel.attraction,
+                            "resentment": rel.resentment,
+                            "jealousy": rel.jealousy,
+                            "current_type": rel.relationship_type,
+                            "recent_events_text": events_text,
+                            "open_issues": open_issues_payload,
+                        }
                     )
-
-                    for delta in deltas:
-                        delta = _constrain_pair_delta(delta, rel, pair_ctx)
-                        await relationship_service.apply_delta(
-                            db, delta, chat_id, round_id=round_id,
-                        )
 
             # Issues selected into per-source generation contexts count as
             # mentioned even when the pair itself had no analysis evidence.
@@ -935,6 +941,100 @@ async def _analyze_and_update_relationships(
                         limit=settings.relationship_max_issues_in_prompt,
                     ):
                         mentioned_issue_ids.add(issue.id)
+
+            if settings.relationship_batch_enabled and pairs:
+                pair_by_key = {
+                    (p["source_id"], p["target_id"]): p for p in pairs
+                }
+                known_pairs = set(pair_by_key)
+                scene_text = _build_batch_scene_summary(
+                    round_snapshots,
+                    character_names,
+                    character_locations,
+                    player_id=player_id,
+                )
+                prompt_pairs = [
+                    {
+                        "source_name": p["source_name"],
+                        "target_name": p["target_name"],
+                        "source_id": p["source_id"],
+                        "target_id": p["target_id"],
+                        "mode": p["mode"],
+                        "current_type": p["current_type"],
+                        "affection": p["affection"],
+                        "trust": p["trust"],
+                        "attraction": p["attraction"],
+                        "resentment": p["resentment"],
+                        "jealousy": p["jealousy"],
+                        "interaction_summary": p["pair_ctx"]["interaction_summary"],
+                        "recent_events_text": p["recent_events_text"],
+                        "open_issues": p["open_issues"],
+                        "excerpt": p["pair_ctx"]["excerpt"],
+                    }
+                    for p in pairs
+                ]
+                try:
+                    deltas, orphan_issues = (
+                        await relationship_analyzer.analyze_batch_relationships(
+                            client=client,
+                            model_name=model_name,
+                            scene_text=scene_text,
+                            pairs=prompt_pairs,
+                            known_pairs=known_pairs,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[chat_id=%d] Batch relationship analysis failed: %s",
+                        chat_id, exc,
+                    )
+                    deltas = None
+
+                if deltas is None:
+                    if settings.relationship_batch_fallback:
+                        logger.info(
+                            "[chat_id=%d] Falling back to per-pair analysis",
+                            chat_id,
+                        )
+                        await _run_per_pair_analysis(
+                            db, chat_id, client, model_name, pairs,
+                            round_id=round_id,
+                        )
+                    else:
+                        logger.warning(
+                            "[chat_id=%d] Batch failed and fallback disabled; "
+                            "skipping relationship update", chat_id,
+                        )
+                else:
+                    # Issues for edges with no metric delta (§8.1): apply them
+                    # directly without touching the edge's metrics/type.
+                    for issue in orphan_issues:
+                        p = pair_by_key.get(
+                            (issue.source_character_id, issue.target_character_id)
+                        )
+                        if p is None:
+                            continue
+                        await relationship_service.apply_issue_deltas(
+                            db, [issue], rel=p["rel"], round_id=round_id,
+                        )
+                    # Evidence-gated metric deltas (§8.3).
+                    for delta in deltas:
+                        p = pair_by_key.get(
+                            (delta.source_character_id, delta.target_character_id)
+                        )
+                        if p is None:
+                            continue
+                        gated = _constrain_pair_delta(delta, p["rel"], p["pair_ctx"])
+                        if gated is None:
+                            continue
+                        await relationship_service.apply_delta(
+                            db, gated, chat_id, round_id=round_id,
+                        )
+            else:
+                await _run_per_pair_analysis(
+                    db, chat_id, client, model_name, pairs,
+                    round_id=round_id,
+                )
 
             # Deterministic salience tick: advance counters for unmentioned
             # open issues, reset mentioned ones (§7.4, Sprint 1 п.7).
@@ -947,9 +1047,55 @@ async def _analyze_and_update_relationships(
                     "[chat_id=%d] Issue salience tick failed: %s", chat_id, exc
                 )
 
+            # Persist orphan-issue flushes that have no metric delta to commit.
+            await db.commit()
             logger.info("[chat_id=%d] Relationship analysis complete", chat_id)
     except Exception:
         logger.exception("[chat_id=%d] Relationship analysis failed", chat_id)
+
+
+async def _run_per_pair_analysis(
+    db: AsyncSession,
+    chat_id: int,
+    client: httpx.AsyncClient,
+    model_name: str,
+    pairs: list[dict],
+    *,
+    round_id: str,
+) -> None:
+    """Per-pair relationship analysis (docs/relations.md §8.4 fallback path).
+
+    Applies the same deterministic evidence gating (§8.3) as the batch path —
+    the fallback never disables gating.
+    """
+    for p in pairs:
+        deltas = await relationship_analyzer.analyze_relationships(
+            client=client,
+            model_name=model_name,
+            source_name=p["source_name"],
+            target_name=p["target_name"],
+            current_type=p["current_type"],
+            affection=p["affection"],
+            trust=p["trust"],
+            attraction=p["attraction"],
+            resentment=p["resentment"],
+            jealousy=p["jealousy"],
+            recent_events_text=p["recent_events_text"],
+            round_text=p["pair_ctx"]["excerpt"],
+            source_character_id=p["source_id"],
+            target_character_id=p["target_id"],
+            interaction_summary=p["pair_ctx"]["interaction_summary"],
+            direct_interaction=p["pair_ctx"]["direct_interaction"],
+            observed_target=p["pair_ctx"]["observed_target"],
+            open_issues=p["open_issues"],
+        )
+        for delta in deltas:
+            gated = _constrain_pair_delta(delta, p["rel"], p["pair_ctx"])
+            if gated is None:
+                continue
+            await relationship_service.apply_delta(
+                db, gated, chat_id, round_id=round_id,
+            )
 
 
 def _text_mentions_name(content: str, name: str) -> bool:
@@ -1071,17 +1217,73 @@ def _build_pair_relationship_context(
     }
 
 
+def _evidence_mode(pair_ctx: dict) -> str:
+    """Deterministic evidence mode for a pair: direct | observed | none.
+
+    ``none`` means the source had no perceivable evidence about the target
+    this round; every LLM-proposed delta for such a pair is rejected (§8.3).
+    """
+    if pair_ctx.get("direct_interaction"):
+        return "direct"
+    if pair_ctx.get("observed_target"):
+        return "observed"
+    return "none"
+
+
+def _build_batch_scene_summary(
+    round_snapshots: list[dict],
+    character_names: dict[int, str],
+    character_locations: dict[int, str],
+    player_id: int | None = None,
+    max_lines: int = 30,
+) -> str:
+    """Compressed social scene for the batch prompt (docs/relations.md §8.2.2).
+
+    Who is where, then who said what to whom (global view), capped to
+    ``max_lines`` lines.
+    """
+    lines: list[str] = []
+    for cid, loc in character_locations.items():
+        lines.append(f"{character_names.get(cid, f'ID:{cid}')}: {loc or '?'}")
+    for snap in round_snapshots:
+        role = (snap.get("role") or "").strip().lower()
+        if role == "system":
+            continue
+        author_id = snap.get("character_id")
+        if role == "user":
+            author_id = player_id
+        if author_id is None:
+            continue
+        speaker = character_names.get(author_id, f"ID:{author_id}")
+        targets = perception.parse_target_ids(snap.get("target_character_ids"))
+        addressee_names = [character_names.get(t, f"ID:{t}") for t in targets]
+        addressee_text = ", ".join(addressee_names) if addressee_names else "(всем)"
+        lines.append(f"{speaker} -> {addressee_text}: {snap.get('content') or ''}")
+    return "\n".join(lines[-max_lines:])
+
+
 def _constrain_pair_delta(
     delta: schemas.RelationshipDelta,
     rel: models.CharacterRelationship,
     pair_ctx: dict,
-) -> schemas.RelationshipDelta:
-    """Limit deltas for pairs without direct interaction.
+) -> schemas.RelationshipDelta | None:
+    """Deterministic evidence gating + caps (docs/relations.md §8.3, §9).
 
-    Witness/reflection-only evidence gets a smaller cap and cannot change the
-    relationship type (unless configured otherwise).
+    - mode ``none``: REJECT (returns ``None``) — no evidence means no right to
+      change anything; the LLM never decides admissibility.
+    - mode ``direct``: deltas are already clamped to ±MAX_DELTA by the schema;
+      the type may change (the transition graph is validated in apply_delta).
+    - mode ``observed``: deltas capped to relationship_reflection_delta_cap and
+      the relationship type is frozen (unless configured otherwise).
     """
-    if pair_ctx["direct_interaction"]:
+    mode = _evidence_mode(pair_ctx)
+    if mode == "none":
+        logger.warning(
+            "Evidence gating: rejecting delta for %d->%d (mode=none)",
+            delta.source_character_id, delta.target_character_id,
+        )
+        return None
+    if mode == "direct":
         return delta
     cap = settings.relationship_reflection_delta_cap
     updates: dict = {

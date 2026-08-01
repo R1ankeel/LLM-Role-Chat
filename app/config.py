@@ -205,6 +205,15 @@ class Settings(BaseSettings):
     relationship_max_pair_context_lines: int = Field(
         default=20, alias="RELATIONSHIP_MAX_PAIR_CONTEXT_LINES"
     )
+    # Batch relationship analyzer (Sprint 1 item 8, docs/relations.md §8):
+    # one LLM call for all pairs instead of the per-pair O(N^2) loop; on a
+    # broken batch the per-pair analyzer is used as a fallback (§8.4).
+    relationship_batch_enabled: bool = Field(
+        default=True, alias="RELATIONSHIP_BATCH_ENABLED"
+    )
+    relationship_batch_fallback: bool = Field(
+        default=True, alias="RELATIONSHIP_BATCH_FALLBACK"
+    )
     # Open Issues (Sprint 1 items 5-6, docs/relations.md §7, §14)
     relationship_issues_enabled: bool = Field(
         default=True, alias="RELATIONSHIP_ISSUES_ENABLED"

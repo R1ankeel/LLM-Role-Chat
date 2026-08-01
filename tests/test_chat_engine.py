@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -13,6 +13,7 @@ from app import chat_engine
 from app import crud
 from app import memory_service
 from app import schemas
+from app.schemas import RelationshipDelta
 from tests.conftest import create_characters
 
 
@@ -280,3 +281,121 @@ async def test_memory_extraction_with_snapshots_after_session_closed(
             assert memories[0].content == f"Fact for {snapshot['name']}"
     finally:
         await verify_session.close()
+
+
+@pytest.mark.asyncio
+async def test_round_id_anchored_on_user_message(db_session, chat, mock_client):
+    """Sprint 1 item 9: round_id is r{chat_id}-m{user_message_id}, never utcnow()."""
+    await create_characters(db_session, chat.id, 2)
+    captured: dict = {}
+
+    def fake_analyze(
+        client, chat_id, model_name, round_snapshots, character_snapshots,
+        round_id=None,
+    ):
+        captured["round_id"] = round_id
+        captured["user_message_id"] = next(
+            m["id"] for m in round_snapshots if m.get("role") == "user"
+        )
+        return None
+
+    async def fake_generate(**kwargs):
+        yield {"type": "response", "text": "Valid reply here."}
+
+    with patch(
+        "app.chat_engine._analyze_and_update_relationships",
+        new=MagicMock(side_effect=fake_analyze),
+    ), patch("app.chat_engine.asyncio.create_task"), patch(
+        "app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread
+    ), patch(
+        "app.chat_engine.ollama_client.generate", side_effect=fake_generate
+    ):
+        async for _ in chat_engine.process_user_message_streaming(
+            mock_client, db_session, chat.id, "Test message"
+        ):
+            pass
+
+    assert captured["round_id"] == f"r{chat.id}-m{captured['user_message_id']}"
+
+
+@pytest.mark.asyncio
+async def test_batch_failure_falls_back_to_per_pair(db_engine, mock_client):
+    """Sprint 1 item 8: batch failure -> per-pair fallback; gating still applies."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.relationship_analyzer import BatchAnalysisError
+    from app.relationship_service import get_relationship
+
+    factory = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with factory() as db:
+        chat = await crud.create_chat(db, schemas.ChatCreate(name="Rel Chat"))
+        chars = []
+        for i, name in enumerate(["A", "B"], start=1):
+            chars.append(
+                await crud.create_character(
+                    db, chat.id,
+                    schemas.CharacterCreate(name=name, personality="x", order_index=i),
+                )
+            )
+        a, b = chars
+        await db.commit()
+
+    round_snapshots = [
+        {
+            "id": 1, "role": "user", "character_id": None,
+            "content": "A, как ты относишься к B?",
+            "location": "hall", "visibility": "local", "channel": "direct",
+            "target_character_ids": [a.id],
+        },
+        {
+            "id": 2, "role": "character", "character_id": a.id,
+            "content": "B мне нравится",
+            "location": "hall", "visibility": "local", "channel": "direct",
+            "target_character_ids": [b.id],
+        },
+    ]
+    character_snapshots = [
+        {"id": c.id, "name": c.name, "location": "hall"} for c in (a, b)
+    ]
+
+    batch_calls: list = []
+    per_pair_calls: list = []
+
+    async def fake_batch(client, model_name, scene_text, pairs, known_pairs):
+        batch_calls.append(True)
+        raise BatchAnalysisError("boom")
+
+    async def fake_per_pair(client, model_name, **kwargs):
+        per_pair_calls.append(kwargs)
+        return [
+            RelationshipDelta(
+                source_character_id=kwargs["source_character_id"],
+                target_character_id=kwargs["target_character_id"],
+                delta_trust=-5,
+                importance=6,
+            )
+        ]
+
+    with patch("app.chat_engine.AsyncSessionLocal", factory), patch(
+        "app.chat_engine.relationship_analyzer.analyze_batch_relationships",
+        side_effect=fake_batch,
+    ), patch(
+        "app.chat_engine.relationship_analyzer.analyze_relationships",
+        side_effect=fake_per_pair,
+    ):
+        await chat_engine._analyze_and_update_relationships(
+            mock_client, chat.id, "model-x",
+            round_snapshots, character_snapshots,
+            round_id=f"r{chat.id}-m1",
+        )
+
+    assert batch_calls == [True]
+    assert len(per_pair_calls) == 2  # (A,B) and (B,A)
+
+    verify = factory()
+    try:
+        rel_ab = await get_relationship(verify, a.id, b.id)
+        assert rel_ab is not None
+        assert rel_ab.trust == 45
+    finally:
+        await verify.close()

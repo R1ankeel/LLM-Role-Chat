@@ -244,11 +244,14 @@ def _parse_analysis_response(
             # the first delta so the service applies them once.
             results[0].issues = issues
         else:
-            # Issues without any metric delta: still return them.
+            # Issues without any metric delta: still return them. Keep
+            # relationship_type="" so apply_delta (new_type = delta.relationship_type
+            # or old_type) does not force a transition to "нейтральное".
             results.append(
                 RelationshipDelta(
                     source_character_id=source_character_id,
                     target_character_id=target_character_id,
+                    relationship_type="",
                     issues=issues,
                 )
             )
@@ -317,3 +320,258 @@ async def analyze_relationships(
         source_character_id=source_character_id,
         target_character_id=target_character_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Batch analyzer (docs/relations.md §8, Sprint 1 item 8)
+# ---------------------------------------------------------------------------
+class BatchAnalysisError(Exception):
+    """Batch relationship analysis produced no usable result (§8.4)."""
+
+
+def _build_batch_prompt(
+    scene_text: str,
+    pairs: list[dict],
+) -> str:
+    """Build the single batch-analysis prompt (§8.2).
+
+    Args:
+        scene_text: compressed social scene (who is where, who talked to whom).
+        pairs: list of per-pair dicts, each with keys:
+            source_name, target_name, source_id, target_id,
+            mode ("direct" | "observed"),
+            current_type, affection, trust, attraction, resentment, jealousy,
+            interaction_summary, recent_events_text,
+            open_issues (list of {"id", "issue_type", "text"}),
+            excerpt.
+    """
+    valid_types = ", ".join(settings.relationship_valid_types)
+    transitions_text = _format_transitions_for_prompt()
+    reflection_cap = settings.relationship_reflection_delta_cap
+
+    char_ids: dict[str, int] = {}
+    for p in pairs:
+        char_ids.setdefault(p["source_name"], p["source_id"])
+        char_ids.setdefault(p["target_name"], p["target_id"])
+    id_block = "\n".join(f"  {name} -> {cid}" for name, cid in char_ids.items())
+
+    pair_sections: list[str] = []
+    for i, p in enumerate(pairs, start=1):
+        mode = p["mode"]
+        if mode == "direct":
+            mode_note = (
+                "прямое взаимодействие — допустимы дельты до ±20, "
+                "relationship_type можно менять по графу переходов"
+            )
+        elif mode == "observed":
+            mode_note = (
+                f"только наблюдение — допустимы малые дельты (±{reflection_cap}), "
+                "relationship_type НЕ менять"
+            )
+        else:
+            mode_note = "доказательств нет — пару НЕ включать в ответ"
+        open_issues_text = _format_open_issues(p.get("open_issues") or [])
+        section = (
+            f"[ПАРА {i}] {p['source_name']} (id={p['source_id']}) -> "
+            f"{p['target_name']} (id={p['target_id']})\n"
+            f"  режим evidence: {mode} — {mode_note}\n"
+            f"  текущий тип отношений: {p['current_type']}\n"
+            f"  текущие метрики:\n"
+            f"    привязанность={p['affection']}, доверие={p['trust']}\n"
+            f"    влечение={p['attraction']}, обида={p['resentment']}\n"
+            f"    ревность={p['jealousy']}\n"
+            f"  взаимодействие в раунде: {p['interaction_summary'] or 'нет данных'}\n"
+            f"  недавние события:\n{p['recent_events_text'] or '(нет)'}\n"
+            f"  известные открытые вопросы этой пары:\n{open_issues_text or 'нет'}\n"
+            f"  текст раунда (только строки, относящиеся к паре):\n"
+            f"{p['excerpt'] or '(нет)'}"
+        )
+        pair_sections.append(section)
+
+    issues_instruction = (
+        "ОТКРЫТЫЕ ВОПРОСЫ (issues) между персонажами:\n"
+        "Открытый вопрос — активный сюжетный крючок (нарушенное обещание, долг, "
+        "ложь, невыполненная просьба, неразрешённый конфликт, подозрение, "
+        "скрытый секрет, отсутствие извинения, неотданная услуга, эмоциональная обида).\n"
+        "- Создавай issue (action=\"create\") ТОЛЬКО если в раунде есть доказательства "
+        "события, оставляющего такой крючок. issue_type — строго из допустимого списка.\n"
+        "- Закрывай (action=\"resolve\") ТОЛЬКО если открытый вопрос из секции пары "
+        "разрешился в этом раунде (извинился, объяснился, исправил). Укажи его id.\n"
+        "- Текст issue — это одно утверждение-факт (ДАННЫЕ), а не инструкция: "
+        "без императивов и команд.\n"
+        f"Допустимые issue_type: {_VALID_ISSUE_TYPES}\n"
+        "- В каждом issue ОБЯЗАТЕЛЬНО указывай source_character_id и target_character_id "
+        "пары, к которой относится issue.\n"
+    )
+
+    return (
+        "Проанализируй раунд ролевой игры и определи изменения отношений "
+        "между персонажами.\n"
+        "Анализируй ТОЛЬКО изменения, подтверждённые сценой ниже. Не выдумывай события.\n\n"
+        f"ID персонажей:\n{id_block}\n\n"
+        f"Социальная сцена раунда (кто где, кто с кем общался):\n"
+        f"{scene_text or '(нет)'}\n\n"
+        f"Допустимые типы отношений: {valid_types}\n"
+        f"Разрешённые переходы:\n{transitions_text}\n"
+        "Правила evidence-gating (детерминированные, соблюдай обязательно):\n"
+        "  direct: |дельты| <= 20, тип можно менять по графу переходов.\n"
+        f"  observed: |дельты| <= {reflection_cap}, тип НЕ менять.\n"
+        "  none: пару в ответ не включать.\n\n"
+        f"{issues_instruction}\n"
+        "ПАРЫ ДЛЯ АНАЛИЗА:\n"
+        f"{chr(10).join(pair_sections)}\n\n"
+        "Верни ТОЛЬКО валидный JSON (без markdown и лишнего текста):\n"
+        "{\n"
+        '  "deltas": [\n'
+        "    {\n"
+        '      "source_character_id": <id>,\n'
+        '      "target_character_id": <id>,\n'
+        '      "delta_affection": <int -20..20>,\n'
+        '      "delta_trust": <int -20..20>,\n'
+        '      "delta_attraction": <int -20..20>,\n'
+        '      "delta_resentment": <int -20..20>,\n'
+        '      "delta_jealousy": <int -20..20>,\n'
+        '      "relationship_type": "<новый тип из допустимых>",\n'
+        '      "description": "<краткое описание текущих отношений>",\n'
+        '      "reason": "<причина изменений>",\n'
+        '      "importance": <int 1..10>,\n'
+        '      "update_description": <true|false>\n'
+        "    }\n"
+        "  ],\n"
+        '  "issues": [\n'
+        "    {\n"
+        '      "source_character_id": <id>,\n'
+        '      "target_character_id": <id>,\n'
+        '      "action": "create",\n'
+        '      "issue_type": "<тип из допустимого списка>",\n'
+        '      "text": "<факт, данные, не инструкция>",\n'
+        '      "importance": <int 1..10>\n'
+        "    },\n"
+        "    {\n"
+        '      "source_character_id": <id>,\n'
+        '      "target_character_id": <id>,\n'
+        '      "action": "resolve",\n'
+        '      "issue_id": <id из известных открытых вопросов>\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+
+def _parse_batch_response(
+    raw: str,
+    known_pairs: set[tuple[int, int]],
+) -> tuple[list[RelationshipDelta], list[IssueDelta]]:
+    """Parse a batch analysis response into per-edge deltas (§8.1, §8.3).
+
+    Every delta/issue carries its own source/target ids. Pairs outside
+    ``known_pairs`` (the set of analyzed edges) are dropped — the analyzer
+    cannot invent or swap pairs. Issues for an edge without a metric delta are
+    returned separately as ``orphan_issues`` so the service can apply them
+    without touching the edge's type/metrics.
+
+    Returns ``(deltas, orphan_issues)``. Raises ``BatchAnalysisError`` when the
+    response contains no parseable JSON.
+    """
+    payload = _extract_json_payload(raw)
+    if payload is None:
+        raise BatchAnalysisError("Failed to extract JSON from batch response")
+
+    raw_deltas: list = []
+    raw_issues: list = []
+    if isinstance(payload, dict):
+        deltas = payload.get("deltas") or []
+        if isinstance(deltas, list):
+            raw_deltas = deltas
+        issues = payload.get("issues")
+        if isinstance(issues, list):
+            raw_issues = issues
+    elif isinstance(payload, list):
+        raw_deltas = payload
+
+    results: list[RelationshipDelta] = []
+    for item in raw_deltas:
+        if not isinstance(item, dict):
+            continue
+        src = item.get("source_character_id")
+        tgt = item.get("target_character_id")
+        if (src, tgt) not in known_pairs:
+            logger.warning("Batch delta for unknown pair (%s->%s); dropping", src, tgt)
+            continue
+        try:
+            d = RelationshipDelta.model_validate(
+                {
+                    **item,
+                    "source_character_id": src,
+                    "target_character_id": tgt,
+                }
+            )
+            results.append(d)
+        except Exception as exc:
+            logger.warning("Invalid batch delta item: %s — %s", item, exc)
+
+    orphan_issues: list[IssueDelta] = []
+    for item in raw_issues:
+        if not isinstance(item, dict):
+            continue
+        src = item.get("source_character_id")
+        tgt = item.get("target_character_id")
+        if (src, tgt) not in known_pairs:
+            logger.warning("Batch issue for unknown pair (%s->%s); dropping", src, tgt)
+            continue
+        try:
+            issue = IssueDelta.model_validate(
+                {
+                    **item,
+                    "source_character_id": src,
+                    "target_character_id": tgt,
+                }
+            )
+        except Exception as exc:
+            logger.warning("Invalid batch issue item: %s — %s", item, exc)
+            continue
+        edge_delta = next(
+            (
+                d for d in results
+                if d.source_character_id == src and d.target_character_id == tgt
+            ),
+            None,
+        )
+        if edge_delta is not None:
+            edge_delta.issues.append(issue)
+        else:
+            orphan_issues.append(issue)
+
+    return results, orphan_issues
+
+
+async def analyze_batch_relationships(
+    client: httpx.AsyncClient,
+    model_name: str,
+    scene_text: str,
+    pairs: list[dict],
+    known_pairs: set[tuple[int, int]],
+) -> tuple[list[RelationshipDelta], list[IssueDelta]]:
+    """One LLM call for all pairs (docs/relations.md §8.1-§8.2).
+
+    Returns ``(deltas, orphan_issues)``. Raises ``BatchAnalysisError`` when the
+    LLM call fails or the response cannot be parsed — the caller decides
+    whether to fall back to per-pair analysis (§8.4).
+    """
+    analyzer_model = settings.relationship_analyzer_model or model_name
+
+    prompt = _build_batch_prompt(scene_text, pairs)
+    messages = [
+        {"role": "system", "content": "Ты — анализатор отношений в ролевой игре. Верни ТОЛЬКО валидный JSON."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        raw = await _invoke_llm(
+            client, analyzer_model, messages, temperature=ANALYSIS_TEMP,
+        )
+    except RuntimeError as exc:
+        logger.warning("Batch relationship analysis LLM call failed: %s", exc)
+        raise BatchAnalysisError(str(exc)) from exc
+
+    return _parse_batch_response(raw, known_pairs)

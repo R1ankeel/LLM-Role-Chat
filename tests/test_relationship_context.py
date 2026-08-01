@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.chat_engine import (
     _build_pair_relationship_context,
     _constrain_pair_delta,
+    _evidence_mode,
 )
 from app.relationship_analyzer import _build_analyzer_prompt
 from app.schemas import RelationshipDelta
@@ -128,6 +129,18 @@ class TestPairContextFaceToFace:
         assert ctx["any_evidence"] is False
 
 
+class TestEvidenceMode:
+    def test_direct(self):
+        assert _evidence_mode({"direct_interaction": True, "observed_target": True}) == "direct"
+
+    def test_observed(self):
+        assert _evidence_mode({"direct_interaction": False, "observed_target": True}) == "observed"
+
+    def test_none(self):
+        assert _evidence_mode({"direct_interaction": False, "observed_target": False}) == "none"
+        assert _evidence_mode({"direct_interaction": False}) == "none"
+
+
 class TestConstrainPairDelta:
     def _delta(self, **kwargs) -> RelationshipDelta:
         return RelationshipDelta(
@@ -143,17 +156,30 @@ class TestConstrainPairDelta:
     def test_observed_caps_and_keeps_type(self):
         rel = SimpleNamespace(relationship_type="нейтральное")
         out = _constrain_pair_delta(
-            self._delta(), rel, {"direct_interaction": False}
+            self._delta(),
+            rel,
+            {"direct_interaction": False, "observed_target": True},
         )
+        assert out is not None
         assert out.delta_affection == 5
         assert out.delta_attraction == 5
         assert out.relationship_type == "нейтральное"
+
+    def test_none_mode_rejects_delta(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(),
+            rel,
+            {"direct_interaction": False, "observed_target": False},
+        )
+        assert out is None
 
     def test_direct_is_not_capped(self):
         rel = SimpleNamespace(relationship_type="нейтральное")
         out = _constrain_pair_delta(
             self._delta(), rel, {"direct_interaction": True}
         )
+        assert out is not None
         assert out.delta_affection == 20
         assert out.delta_attraction == 15
         assert out.relationship_type == "возлюбленные"
