@@ -245,7 +245,7 @@ function updateThinkingBadge() {
   const btn = document.getElementById("btn-thinking-toggle");
   if (!btn) return;
   const thinking = isThinkingMode(AppState.currentChat);
-  btn.textContent = thinking ? "🧠 Thinking" : "⚡ Instant";
+  btn.textContent = thinking ? "🧠 Размышление" : "⚡ Мгновенно";
   btn.classList.toggle("mode-instant", !thinking);
   btn.classList.toggle("mode-thinking", thinking);
   btn.title = thinking
@@ -1408,7 +1408,7 @@ async function openCharacterEditor(charId) {
         row.innerHTML = `
           <span class="init-rel-target">${escapeHtml(target.name)}${isPlayer}</span>
           <select class="init-rel-type">${RELATIONSHIP_TYPES.map(t =>
-            `<option value="${t}"${t === rel.relationship_type ? " selected" : ""}>${t}</option>`
+            `<option value="${t}"${t === rel.relationship_type ? " selected" : ""}>${relTypeLabel(t)}</option>`
           ).join("")}</select>
           <div class="init-rel-metrics">
             ${["affection","trust","attraction","resentment","jealousy"].map(m =>
@@ -1437,7 +1437,7 @@ async function openCharacterEditor(charId) {
           <span class="init-rel-target">${escapeHtml(target.name)}${isPlayer}</span>
           <select class="init-rel-type">
             <option value="">— не задано —</option>
-            ${RELATIONSHIP_TYPES.map(t => `<option value="${t}">${t}</option>`).join("")}
+            ${RELATIONSHIP_TYPES.map(t => `<option value="${t}">${relTypeLabel(t)}</option>`).join("")}
           </select>
           <div class="init-rel-metrics">
             ${["affection","trust","attraction","resentment","jealousy"].map(m =>
@@ -1499,11 +1499,11 @@ async function renderMemoriesTab() {
       Фильтр категории:
       <select id="memories-category-filter" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text);font-size:13px;">
         <option value="all">Все</option>
-        <option value="event">event</option>
-        <option value="relationship">relationship</option>
-        <option value="location">location</option>
-        <option value="item">item</option>
-        <option value="other">other</option>
+        <option value="событие">Событие</option>
+        <option value="отношения">Отношения</option>
+        <option value="локация">Локация</option>
+        <option value="предмет">Предмет</option>
+        <option value="другое">Другое</option>
       </select>
     </label>
   `;
@@ -1592,7 +1592,7 @@ function renderMemoriesFromData() {
   // Filter memories by category
   const filtered = memoriesFilterCategory === "all"
     ? mems
-    : mems.filter(m => (m.category || "event") === memoriesFilterCategory);
+    : mems.filter(m => (m.category || "событие") === memoriesFilterCategory);
 
   if (!filtered.length) {
     const p = document.createElement("p");
@@ -1604,7 +1604,7 @@ function renderMemoriesFromData() {
 
   for (const mem of filtered) {
     const importance = mem.importance ?? 0.5;
-    const category = mem.category || "event";
+    const category = mem.category || "событие";
     const importanceClass = getImportanceClass(importance);
 
     const item = document.createElement("div");
@@ -1614,7 +1614,7 @@ function renderMemoriesFromData() {
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
           <span class="memory-badge ${importanceClass}" style="font-size:10px;padding:2px 6px;border-radius:999px;font-weight:600;">${(importance * 100).toFixed(0)}%</span>
-          <span class="memory-badge badge-category" style="font-size:10px;padding:2px 6px;border-radius:999px;background:var(--accent-blue);color:white;">${escapeHtml(category)}</span>
+          <span class="memory-badge badge-category" style="font-size:10px;padding:2px 6px;border-radius:999px;background:var(--accent-blue);color:white;">${escapeHtml(memoryCategoryLabel(category))}</span>
         </div>
         <div class="memory-item-text" style="font-size:13px;line-height:1.5;word-break:break-word;">${escapeHtml(mem.content)}</div>
       </div>
@@ -1656,7 +1656,7 @@ function openMemoryEditor(memoryId, characterId) {
   idInput.value = memoryId || "";
   charIdInput.value = characterId;
   contentInput.value = "";
-  categoryInput.value = "event";
+  categoryInput.value = "событие";
   importanceInput.value = "0.5";
 
   if (memoryId) {
@@ -1664,7 +1664,7 @@ function openMemoryEditor(memoryId, characterId) {
     const mem = memoriesData[characterId]?.find(m => m.id === memoryId);
     if (mem) {
       contentInput.value = mem.content;
-      categoryInput.value = mem.category || "event";
+      categoryInput.value = mem.category || "событие";
       importanceInput.value = String(mem.importance ?? 0.5);
     }
   } else {
@@ -1836,14 +1836,47 @@ document.getElementById("btn-refresh-scene").addEventListener("click", renderSce
 
 // ===== Relationships Tab =====
 const RELATIONSHIP_TYPES = [
-  "neutral", "friend", "close_friend", "best_friend",
-  "ally", "trusted_ally",
-  "rival", "enemy", "bitter_enemy",
-  "crush", "romantic", "lover",
-  "mentor", "student",
-  "family", "parent", "sibling",
-  "stranger", "acquaintance",
+  "нейтральное", "друг", "близкий_друг", "лучший_друг",
+  "союзник", "верный_союзник",
+  "соперник", "враг", "заклятый_враг",
+  "симпатия", "романтика", "возлюбленные",
+  "наставник", "ученик",
+  "семья", "родитель", "брат_сестра",
+  "незнакомец", "знакомый",
 ];
+
+const RELATIONSHIP_TYPE_LABELS = {
+  "нейтральное": "Нейтральные",
+  "друг": "Друг",
+  "близкий_друг": "Близкий друг",
+  "лучший_друг": "Лучший друг",
+  "союзник": "Союзник",
+  "верный_союзник": "Верный союзник",
+  "соперник": "Соперник",
+  "враг": "Враг",
+  "заклятый_враг": "Заклятый враг",
+  "симпатия": "Симпатия",
+  "романтика": "Романтика",
+  "возлюбленные": "Возлюбленные",
+  "наставник": "Наставник",
+  "ученик": "Ученик",
+  "семья": "Семья",
+  "родитель": "Родитель",
+  "брат_сестра": "Брат/сестра",
+  "незнакомец": "Незнакомец",
+  "знакомый": "Знакомый",
+};
+
+const MEMORY_CATEGORY_LABELS = {
+  "отношения": "Отношения",
+  "событие": "Событие",
+  "локация": "Локация",
+  "предмет": "Предмет",
+  "другое": "Другое",
+};
+
+function relTypeLabel(t) { return RELATIONSHIP_TYPE_LABELS[t] || t; }
+function memoryCategoryLabel(c) { return MEMORY_CATEGORY_LABELS[c] || c; }
 
 const METRIC_LABELS = {
   affection: "Привязанность",
@@ -1857,7 +1890,7 @@ function createRelTypeDropdown(currentType) {
   let html = `<select class="rel-type-select">`;
   for (const t of RELATIONSHIP_TYPES) {
     const sel = t === currentType ? " selected" : "";
-    html += `<option value="${t}"${sel}>${t}</option>`;
+    html += `<option value="${t}"${sel}>${relTypeLabel(t)}</option>`;
   }
   html += `</select>`;
   return html;
@@ -1880,6 +1913,7 @@ async function renderRelationshipsTab() {
     const chars = await apiRequest("GET", `/chats/${AppState.currentChatId}/characters?include_player=true`);
     container.innerHTML = "";
     for (const source of chars) {
+      if (source.is_player) continue;  // player->NPC relationships are not tracked
       const rels = await apiRequest("GET", `/chats/${AppState.currentChatId}/characters/${source.id}/relationships`);
       if (!rels.length) continue;
       const section = document.createElement("div");

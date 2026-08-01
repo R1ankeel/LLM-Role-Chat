@@ -176,7 +176,7 @@ async def test_consolidate_character_memories_insufficient_for_cluster(db_sessio
         character_id=char.id,
         content="Only one fact",
         importance=0.5,
-        category="event",
+        category="событие",
     ))
     
     client = MagicMock()
@@ -201,15 +201,15 @@ async def test_consolidate_character_memories_merges_similar(db_session: AsyncSe
     # Create similar memories
     await crud.create_memory(db_session, schemas.MemoryCreate(
         chat_id=chat.id, character_id=char.id,
-        content="Алиса любит котиков", importance=0.8, category="relationship",
+        content="Алиса любит котиков", importance=0.8, category="отношения",
     ))
     await crud.create_memory(db_session, schemas.MemoryCreate(
         chat_id=chat.id, character_id=char.id,
-        content="Алиса любит котиков очень сильно", importance=0.7, category="relationship",
+        content="Алиса любит котиков очень сильно", importance=0.7, category="отношения",
     ))
     await crud.create_memory(db_session, schemas.MemoryCreate(
         chat_id=chat.id, character_id=char.id,
-        content="Боб пьёт пиво", importance=0.6, category="event",
+        content="Боб пьёт пиво", importance=0.6, category="событие",
     ))
     await db_session.commit()
     
@@ -298,11 +298,11 @@ async def test_consolidation_updates_last_accessed(db_session: AsyncSession, moc
     # Create memories using crud to avoid hash collision
     m1 = await crud.create_memory(db_session, schemas.MemoryCreate(
         chat_id=chat.id, character_id=char.id,
-        content="Алиса любит котиков", importance=0.8, category="relationship",
+        content="Алиса любит котиков", importance=0.8, category="отношения",
     ))
     m2 = await crud.create_memory(db_session, schemas.MemoryCreate(
         chat_id=chat.id, character_id=char.id,
-        content="Алиса любит котиков очень сильно", importance=0.7, category="relationship",
+        content="Алиса любит котиков очень сильно", importance=0.7, category="отношения",
     ))
     
     # Update last_accessed_at to old date

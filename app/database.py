@@ -324,7 +324,7 @@ def ensure_schema(db_engine) -> None:
                     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
                     source_character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
                     target_character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-                    relationship_type TEXT NOT NULL DEFAULT 'neutral',
+                    relationship_type TEXT NOT NULL DEFAULT 'нейтральное',
                     affection INTEGER NOT NULL DEFAULT 50,
                     trust INTEGER NOT NULL DEFAULT 50,
                     attraction INTEGER NOT NULL DEFAULT 0,
@@ -365,7 +365,7 @@ def ensure_schema(db_engine) -> None:
                         """INSERT INTO character_relationships
                            (chat_id, source_character_id, target_character_id,
                             relationship_type, description, initial_description)
-                           VALUES (:cid, :src, :tgt, 'neutral', '', :desc)"""
+                           VALUES (:cid, :src, :tgt, 'нейтральное', '', :desc)"""
                     ),
                     {"cid": chat_id, "src": char_id, "tgt": target_id, "desc": rel_text},
                 )
@@ -418,7 +418,7 @@ def ensure_schema(db_engine) -> None:
                     {"cid": chat_id},
                 ).fetchall()
                 for (npc_id,) in npc_ids:
-                    # NPC -> Player
+                    # NPC -> Player (Player -> NPC is intentionally not tracked)
                     pair = (npc_id, player_id)
                     if pair not in existing_pairs:
                         conn.execute(
@@ -426,23 +426,74 @@ def ensure_schema(db_engine) -> None:
                                 "INSERT OR IGNORE INTO character_relationships "
                                 "(chat_id, source_character_id, target_character_id, "
                                 "relationship_type, description, initial_description) "
-                                "VALUES (:cid, :src, :tgt, 'neutral', '', '')"
+                                "VALUES (:cid, :src, :tgt, 'нейтральное', '', '')"
                             ),
                             {"cid": chat_id, "src": npc_id, "tgt": player_id},
                         )
-                    # Player -> NPC
-                    pair2 = (player_id, npc_id)
-                    if pair2 not in existing_pairs:
-                        conn.execute(
-                            text(
-                                "INSERT OR IGNORE INTO character_relationships "
-                                "(chat_id, source_character_id, target_character_id, "
-                                "relationship_type, description, initial_description) "
-                                "VALUES (:cid, :src, :tgt, 'neutral', '', '')"
-                            ),
-                            {"cid": chat_id, "src": player_id, "tgt": npc_id},
-                        )
                 logger.info("Created player character + relationships for chat_id=%d", chat_id)
+
+        # Data migration: drop legacy Player -> NPC relationship rows.
+        # Only NPC -> NPC and NPC -> Player relationships are tracked.
+        if inspector.has_table("character_relationships"):
+            deleted_plr = conn.execute(
+                text(
+                    "DELETE FROM character_relationships "
+                    "WHERE source_character_id IN "
+                    "(SELECT id FROM characters WHERE is_player = 1)"
+                )
+            ).rowcount
+            if deleted_plr:
+                logger.info("Removed %d Player -> NPC relationship rows", deleted_plr)
+
+        # Data migration: translate legacy English relationship types to Russian
+        _RELATIONSHIP_TYPE_TRANSLATION = {
+            "neutral": "нейтральное",
+            "friend": "друг",
+            "close_friend": "близкий_друг",
+            "best_friend": "лучший_друг",
+            "ally": "союзник",
+            "trusted_ally": "верный_союзник",
+            "rival": "соперник",
+            "enemy": "враг",
+            "bitter_enemy": "заклятый_враг",
+            "crush": "симпатия",
+            "romantic": "романтика",
+            "lover": "возлюбленные",
+            "mentor": "наставник",
+            "student": "ученик",
+            "family": "семья",
+            "parent": "родитель",
+            "sibling": "брат_сестра",
+            "stranger": "незнакомец",
+            "acquaintance": "знакомый",
+        }
+        if inspector.has_table("character_relationships"):
+            for _old_type, _new_type in _RELATIONSHIP_TYPE_TRANSLATION.items():
+                conn.execute(
+                    text(
+                        "UPDATE character_relationships SET relationship_type = :new "
+                        "WHERE relationship_type = :old"
+                    ),
+                    {"new": _new_type, "old": _old_type},
+                )
+
+        # Data migration: translate legacy English memory categories to Russian
+        _MEMORY_CATEGORY_TRANSLATION = {
+            "relationship": "отношения",
+            "event": "событие",
+            "location": "локация",
+            "item": "предмет",
+            "other": "другое",
+        }
+        if inspector.has_table("memories"):
+            for _old_cat, _new_cat in _MEMORY_CATEGORY_TRANSLATION.items():
+                conn.execute(
+                    text(
+                        "UPDATE memories SET category = :new "
+                        "WHERE category = :old"
+                    ),
+                    {"new": _new_cat, "old": _old_cat},
+                )
 
         # Indexes AFTER all column migrations
         for ddl in INDEXES:

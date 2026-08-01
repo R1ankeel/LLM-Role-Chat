@@ -165,6 +165,14 @@ async def apply_delta(
         db, chat_id, delta.source_character_id, delta.target_character_id,
     )
 
+    if delta.importance < settings.relationship_min_importance:
+        logger.debug(
+            "Skipping relationship delta for %d->%d: importance %d < %d",
+            delta.source_character_id, delta.target_character_id,
+            delta.importance, settings.relationship_min_importance,
+        )
+        return rel
+
     old_type = rel.relationship_type
     new_type = delta.relationship_type or old_type
 
@@ -176,6 +184,11 @@ async def apply_delta(
         )
         new_type = old_type
 
+    old_values = (
+        rel.affection, rel.trust, rel.attraction, rel.resentment, rel.jealousy,
+        rel.relationship_type, rel.description,
+    )
+
     # Apply clamped deltas
     rel.affection = clamp_metric(rel.affection + _clamp_delta(delta.delta_affection))
     rel.trust = clamp_metric(rel.trust + _clamp_delta(delta.delta_trust))
@@ -186,6 +199,20 @@ async def apply_delta(
 
     if delta.update_description and delta.description:
         rel.description = delta.description
+
+    new_values = (
+        rel.affection, rel.trust, rel.attraction, rel.resentment, rel.jealousy,
+        rel.relationship_type, rel.description,
+    )
+
+    if old_values == new_values:
+        logger.debug(
+            "No actual change for rel %d->%d; skipping event",
+            delta.source_character_id, delta.target_character_id,
+        )
+        # Values are identical to what is already persisted, so there is
+        # nothing to write. Do not rollback (it would expire the ORM object).
+        return rel
 
     rel.updated_at = datetime.utcnow()
     await db.flush()
@@ -237,11 +264,11 @@ def format_relationship_for_prompt(
     events: list[RelationshipEvent],
 ) -> str:
     lines = [f"{target_name}: {rel.relationship_type}"]
-    lines.append(f"  affection={rel.affection} trust={rel.trust} "
-                 f"attraction={rel.attraction} resentment={rel.resentment} "
-                 f"jealousy={rel.jealousy}")
+    lines.append(f"  привязанность={rel.affection}, доверие={rel.trust}, "
+                 f"влечение={rel.attraction}, обида={rel.resentment}, "
+                 f"ревность={rel.jealousy}")
     if rel.description:
-        lines.append(f"  description: {rel.description}")
+        lines.append(f"  описание: {rel.description}")
     if events:
         for ev in reversed(events):
             if ev.description:

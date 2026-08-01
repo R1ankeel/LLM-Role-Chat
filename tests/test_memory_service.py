@@ -210,16 +210,16 @@ async def test_clear_full_resets_summaries(db_session, chat):
 def test_parse_structured_facts():
     raw = """
     [
-      {"fact": "Игрок представился как Алекс", "category": "relationship", "importance": 0.9, "witnessed": true},
-      {"fact": "В таверне темно", "category": "location", "importance": 0.4, "witnessed": true}
+      {"fact": "Игрок представился как Алекс", "category": "отношения", "importance": 0.9, "witnessed": true},
+      {"fact": "В таверне темно", "category": "локация", "importance": 0.4, "witnessed": true}
     ]
     """
     facts = ollama_client.parse_extracted_facts(raw)
     assert len(facts) == 2
     assert facts[0].fact == "Игрок представился как Алекс"
-    assert facts[0].category == "relationship"
+    assert facts[0].category == "отношения"
     assert facts[0].importance == pytest.approx(0.9)
-    assert facts[1].category == "location"
+    assert facts[1].category == "локация"
 
 
 def test_parse_legacy_string_array():
@@ -227,12 +227,12 @@ def test_parse_legacy_string_array():
     facts = ollama_client.parse_extracted_facts(raw)
     assert len(facts) == 2
     assert facts[0].fact == "Игрок отдал меч стражнику"
-    assert facts[0].category == "event"
+    assert facts[0].category == "событие"
     assert facts[0].importance == pytest.approx(0.5)
 
 
 def test_parse_importance_scale_1_to_5():
-    raw = '[{"fact": "Ключ лежит под камнем у ручья", "importance": 4, "category": "item"}]'
+    raw = '[{"fact": "Ключ лежит под камнем у ручья", "importance": 4, "category": "предмет"}]'
     facts = ollama_client.parse_extracted_facts(raw)
     assert len(facts) == 1
     assert facts[0].importance == pytest.approx(0.8)
@@ -240,7 +240,7 @@ def test_parse_importance_scale_1_to_5():
 
 def test_parse_markdown_fenced_json():
     raw = """```json
-[{"fact": "Купец назвал цену в 50 золотых", "category": "event", "importance": 0.6, "witnessed": true}]
+[{"fact": "Купец назвал цену в 50 золотых", "category": "событие", "importance": 0.6, "witnessed": true}]
 ```"""
     facts = ollama_client.parse_extracted_facts(raw)
     assert len(facts) == 1
@@ -279,21 +279,21 @@ def test_validate_rejects_not_witnessed():
 def test_validate_accepts_good_fact():
     fact = schemas.ExtractedFact(
         fact="Игрок отдал Alice серебряный ключ от склада",
-        category="item",
+        category="предмет",
         importance=0.85,
         witnessed=True,
     )
     cleaned = memory_service.validate_extracted_fact(fact, "Alice")
     assert cleaned is not None
     assert "серебряный ключ" in cleaned.fact
-    assert cleaned.category == "item"
+    assert cleaned.category == "предмет"
     assert cleaned.importance == pytest.approx(0.85)
 
 
 def test_validate_allows_self_internal_state():
     fact = schemas.ExtractedFact(
         fact="Alice решила помочь игроку найти пропавший артефакт",
-        category="event",
+        category="событие",
         importance=0.7,
         witnessed=True,
     )
@@ -321,22 +321,22 @@ def test_validate_extracted_facts_keeps_top_by_importance():
         schemas.ExtractedFact(
             fact="Игрок купил зелье лечения у торговца",
             importance=0.4,
-            category="item",
+            category="предмет",
         ),
         schemas.ExtractedFact(
             fact="Дракон разрушил восточную башню крепости",
             importance=0.95,
-            category="event",
+            category="событие",
         ),
         schemas.ExtractedFact(
             fact="Стражник открыл ворота для отряда путников",
             importance=0.6,
-            category="event",
+            category="событие",
         ),
         schemas.ExtractedFact(
             fact="В подвале найден старый магический свиток",
             importance=0.7,
-            category="item",
+            category="предмет",
         ),
     ]
     result = memory_service.validate_extracted_facts(
@@ -374,13 +374,13 @@ async def test_extract_and_save_stores_importance_category(
         return [
             schemas.ExtractedFact(
                 fact="Игрок поприветствовал Character A у входа в таверну",
-                category="event",
+                category="событие",
                 importance=0.75,
                 witnessed=True,
             ),
             schemas.ExtractedFact(
                 fact="они поговорили",  # should be filtered
-                category="event",
+                category="событие",
                 importance=0.2,
                 witnessed=True,
             ),
@@ -413,7 +413,7 @@ async def test_extract_and_save_stores_importance_category(
         assert len(memories) == 1
         assert "таверну" in memories[0].content
         assert memories[0].importance == pytest.approx(0.75)
-        assert memories[0].category == "event"
+        assert memories[0].category == "событие"
     finally:
         verify.close()
 
@@ -428,7 +428,7 @@ def test_eviction_prefers_low_importance(db_session, chat):
             character_id=character.id,
             content="Критический факт: король объявил войну соседнему королевству",
             importance=0.99,
-            category="event",
+            category="событие",
         ),
     )
     assert high is not None
@@ -440,7 +440,7 @@ def test_eviction_prefers_low_importance(db_session, chat):
                 character_id=character.id,
                 content=f"Малозначимый факт номер {i} о погоде на улице",
                 importance=0.1,
-                category="other",
+                category="другое",
             ),
         )
 

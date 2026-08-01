@@ -316,7 +316,7 @@ async def test_generate_repetition_retry_with_feedback():
     assert len(calls) >= 2
     # Second request must include scene loop control feedback
     second_user = calls[1]["messages"][1]["content"]
-    assert "SCENE LOOP DETECTED" in second_user or "scene_loop_control" in second_user
+    assert "ОБНАРУЖЕН ЦИКЛ СЦЕНЫ" in second_user or "scene_loop_control" in second_user
     assert events[-1]["type"] == "response"
     assert "порту" in events[-1]["text"] or "Отступаю" in events[-1]["text"]
 
@@ -433,8 +433,8 @@ def test_feedback_lists_dynamic_actions():
         ],
     )
     fb = build_repetition_feedback(analysis)
-    assert "SCENE LOOP DETECTED" in fb
-    assert "Do NOT repeat" in fb
+    assert "ОБНАРУЖЕН ЦИКЛ СЦЕНЫ" in fb
+    assert "НЕ повторяй" in fb
     # Should mention concrete actions when detected
     if analysis.repeated_actions:
         assert any(a in fb for a in analysis.repeated_actions)

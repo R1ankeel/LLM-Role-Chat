@@ -29,39 +29,70 @@ def _build_analyzer_prompt(
     jealousy: int,
     recent_events_text: str,
     round_text: str,
+    interaction_summary: str = "",
+    direct_interaction: bool = False,
+    observed_target: bool = False,
 ) -> str:
     valid_types = ", ".join(settings.relationship_valid_types)
     transitions_text = _format_transitions_for_prompt()
+    reflection_cap = settings.relationship_reflection_delta_cap
+
+    if not direct_interaction and not observed_target:
+        delta_hint = (
+            f"{source_name} и {target_name} в этом раунде НЕ взаимодействовали, "
+            f"и {source_name} не получал(а) никаких сведений о {target_name}. "
+            "Поэтому ВСЕ дельты должны быть 0, relationship_type прежним, importance = 1."
+        )
+        delta_range = "0"
+    elif not direct_interaction:
+        delta_hint = (
+            f"{source_name} лишь наблюдал(а) события, связанные с {target_name}, "
+            f"без прямого взаимодействия. Разрешены только малые дельты "
+            f"(|дельты| <= {reflection_cap}), relationship_type НЕ менять."
+        )
+        delta_range = f"{-reflection_cap}..{reflection_cap}"
+    else:
+        delta_hint = (
+            f"{source_name} и {target_name} взаимодействовали напрямую в этом раунде. "
+            "Оцени изменения, вызванные именно этим взаимодействием."
+        )
+        delta_range = "-20..20"
 
     return (
-        f"Analyze how {source_name}'s relationship with {target_name} changes "
-        f"after this round.\n\n"
-        f"Character IDs:\n"
+        f"Проанализируй, как меняются отношения {source_name} к {target_name} "
+        f"после этого раунда.\n\n"
+        f"ID персонажей:\n"
         f"  {source_name} -> {source_character_id}\n"
         f"  {target_name} -> {target_character_id}\n\n"
-        f"Current relationship type: {current_type}\n"
-        f"Current metrics:\n"
-        f"  affection={affection}, trust={trust}\n"
-        f"  attraction={attraction}, resentment={resentment}\n"
-        f"  jealousy={jealousy}\n\n"
-        f"Valid relationship types: {valid_types}\n"
-        f"Allowed transitions:\n{transitions_text}\n"
-        f"Recent events:\n{recent_events_text}\n\n"
-        f"Round text:\n{round_text}\n\n"
-        "Return ONLY valid JSON (no markdown, no extra text):\n"
+        f"Текущий тип отношений: {current_type}\n"
+        f"Текущие метрики:\n"
+        f"  привязанность={affection}, доверие={trust}\n"
+        f"  влечение={attraction}, обида={resentment}\n"
+        f"  ревность={jealousy}\n\n"
+        f"Взаимодействие в этом раунде:\n{interaction_summary or 'нет данных'}\n\n"
+        "ВАЖНО: Анализируй ТОЛЬКО отношения "
+        f"{source_name} к {target_name}. События, адресованные другим "
+        f"персонажам или происходящие без участия {source_name}, не меняют "
+        f"отношения этой пары.\n"
+        f"{delta_hint}\n\n"
+        f"Допустимые типы отношений: {valid_types}\n"
+        f"Разрешённые переходы:\n{transitions_text}\n"
+        f"Недавние события:\n{recent_events_text}\n\n"
+        f"Текст раунда (только строки, относящиеся к этой паре):\n{round_text}\n\n"
+        "Верни ТОЛЬКО валидный JSON (без markdown и лишнего текста):\n"
         "{\n"
         '  "deltas": [\n'
         "    {\n"
         f'      "source_character_id": {source_character_id},\n'
         f'      "target_character_id": {target_character_id},\n'
-        '      "delta_affection": <int -20..20>,\n'
-        '      "delta_trust": <int -20..20>,\n'
-        '      "delta_attraction": <int -20..20>,\n'
-        '      "delta_resentment": <int -20..20>,\n'
-        '      "delta_jealousy": <int -20..20>,\n'
-        '      "relationship_type": "<new type>",\n'
-        '      "description": "<short summary of current relationship>",\n'
-        '      "reason": "<why this change>",\n'
+        f'      "delta_affection": <int {delta_range}>,\n'
+        f'      "delta_trust": <int {delta_range}>,\n'
+        f'      "delta_attraction": <int {delta_range}>,\n'
+        f'      "delta_resentment": <int {delta_range}>,\n'
+        f'      "delta_jealousy": <int {delta_range}>,\n'
+        '      "relationship_type": "<новый тип из допустимых>",\n'
+        '      "description": "<краткое описание текущих отношений>",\n'
+        '      "reason": "<причина изменений>",\n'
         '      "importance": <int 1..10>,\n'
         '      "update_description": <true|false>\n'
         "    }\n"
@@ -133,6 +164,9 @@ async def analyze_relationships(
     round_text: str,
     source_character_id: int,
     target_character_id: int,
+    interaction_summary: str = "",
+    direct_interaction: bool = False,
+    observed_target: bool = False,
 ) -> list[RelationshipDelta]:
     analyzer_model = settings.relationship_analyzer_model or model_name
 
@@ -149,10 +183,13 @@ async def analyze_relationships(
         jealousy=jealousy,
         recent_events_text=recent_events_text,
         round_text=round_text,
+        interaction_summary=interaction_summary,
+        direct_interaction=direct_interaction,
+        observed_target=observed_target,
     )
 
     messages = [
-        {"role": "system", "content": "You are a relationship analyst for a roleplay game. Return ONLY valid JSON."},
+        {"role": "system", "content": "Ты — анализатор отношений в ролевой игре. Верни ТОЛЬКО валидный JSON."},
         {"role": "user", "content": prompt},
     ]
 

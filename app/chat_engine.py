@@ -15,6 +15,7 @@ from . import crud
 from . import memory_service
 from . import models
 from . import ollama_client
+from . import perception
 from . import relationship_analyzer
 from . import relationship_service
 from . import schemas
@@ -650,10 +651,22 @@ async def process_user_message_streaming(
 
     # Relationship analysis hook (non-blocking, background)
     if settings.relationship_analyzer_enabled:
-        round_text = "\n".join(
-            f"{m.character.name if getattr(m, 'character', None) else 'Игрок'}: {m.content}"
+        round_snapshots = [
+            {
+                "id": getattr(m, "id", None),
+                "role": getattr(m, "role", ""),
+                "character_id": getattr(m, "character_id", None),
+                "content": getattr(m, "content", "") or "",
+                "location": getattr(m, "location", "") or "",
+                "visibility": (
+                    getattr(m, "visibility", None)
+                    or settings.default_event_visibility
+                ),
+                "channel": getattr(m, "channel", None) or "direct",
+                "target_character_ids": getattr(m, "target_character_ids", "[]"),
+            }
             for m in round_messages
-        )
+        ]
         character_snapshots = [
             {
                 "id": c.id,
@@ -665,7 +678,7 @@ async def process_user_message_streaming(
         asyncio.create_task(
             _analyze_and_update_relationships(
                 client, chat_id, chat.model_name,
-                round_text, character_snapshots,
+                round_snapshots, character_snapshots,
             )
         )
 
@@ -749,34 +762,67 @@ async def _analyze_and_update_relationships(
     client: httpx.AsyncClient,
     chat_id: int,
     model_name: str,
-    round_text: str,
+    round_snapshots: list[dict],
     character_snapshots: list[dict],
 ) -> None:
-    """Background task: analyze relationships for all character pairs (including player) and apply deltas.
+    """Background task: analyze relationships for all character pairs and apply deltas.
+
+    Only NPCs are analyzed as relationship *sources*. The player is a valid
+    *target* (bots -> player) but never a source (player -> bots is not tracked).
+
+    For each pair only the relevant excerpt of the round is sent to the LLM
+    (filtered by perception), so an event aimed at someone else cannot be
+    misattributed to unrelated pairs. Pairs without any interaction evidence
+    are skipped entirely. Witness/reflection-only evidence is capped and never
+    changes the relationship type.
 
     Opens its own DB session instead of borrowing the caller's, so the
     connection is always returned to the pool when the task finishes.
     """
     try:
         async with AsyncSessionLocal() as db:
+            player = await crud.get_player_character(db, chat_id)
+            player_id = player.id if player else None
+
             # Rebuild lightweight character objects from precomputed snapshots
             all_chars = [
                 SimpleNamespace(
                     id=snap["id"],
                     name=snap["name"],
                     location=snap.get("location") or "",
+                    is_player=False,
                 )
                 for snap in character_snapshots
             ]
-
-            # Include player character in relationship analysis
-            player = await crud.get_player_character(db, chat_id)
             if player:
                 all_chars.append(player)
 
-            for source_char in all_chars:
+            character_names = {c.id: c.name for c in all_chars}
+            character_locations = {
+                c.id: getattr(c, "location", "") or "" for c in all_chars
+            }
+
+            # Only NPCs are sources; targets include the player
+            sources = [c for c in all_chars if not getattr(c, "is_player", False)]
+
+            for source_char in sources:
                 for target_char in all_chars:
                     if source_char.id == target_char.id:
+                        continue
+
+                    pair_ctx = _build_pair_relationship_context(
+                        round_snapshots,
+                        source_char,
+                        target_char,
+                        character_names,
+                        character_locations,
+                        player_id=player_id,
+                    )
+
+                    if (
+                        not pair_ctx["any_evidence"]
+                        and settings.relationship_analyze_only_interacting_pairs
+                    ):
                         continue
 
                     rel = await relationship_service.get_relationship(
@@ -807,20 +853,171 @@ async def _analyze_and_update_relationships(
                         resentment=rel.resentment,
                         jealousy=rel.jealousy,
                         recent_events_text=events_text,
-                        round_text=round_text,
+                        round_text=pair_ctx["excerpt"],
                         source_character_id=source_char.id,
                         target_character_id=target_char.id,
+                        interaction_summary=pair_ctx["interaction_summary"],
+                        direct_interaction=pair_ctx["direct_interaction"],
+                        observed_target=pair_ctx["observed_target"],
                     )
 
                     for delta in deltas:
+                        delta = _constrain_pair_delta(delta, rel, pair_ctx)
                         await relationship_service.apply_delta(
                             db, delta, chat_id,
                             round_id=f"round_{chat_id}_{datetime.utcnow().isoformat()}",
                         )
 
-            logger.info("[chat_id=%d] Relationship analysis complete (incl. player)", chat_id)
+            logger.info("[chat_id=%d] Relationship analysis complete", chat_id)
     except Exception:
         logger.exception("[chat_id=%d] Relationship analysis failed", chat_id)
+
+
+def _text_mentions_name(content: str, name: str) -> bool:
+    if not name or not content:
+        return False
+    import re
+    pattern = rf"(?<!\w){re.escape(name)}(?!\w)"
+    return bool(re.search(pattern, content, flags=re.IGNORECASE))
+
+
+def _build_pair_relationship_context(
+    round_snapshots: list[dict],
+    source,
+    target,
+    character_names: dict[int, str],
+    character_locations: dict[int, str],
+    player_id: int | None = None,
+    max_lines: int | None = None,
+) -> dict:
+    """Build a pair-specific excerpt of the round for relation source -> target.
+
+    Only lines the *source* could perceive and that concern the *target* are
+    kept, so events aimed at other characters are not misattributed. Each line
+    is annotated with the speaker and addressees.
+
+    Returns: excerpt, interaction_summary, direct_interaction, observed_target,
+    any_evidence.
+    """
+    if max_lines is None:
+        max_lines = settings.relationship_max_pair_context_lines
+
+    source_name = character_names.get(source.id, f"ID:{source.id}")
+    target_name = character_names.get(target.id, f"ID:{target.id}")
+    source_location = character_locations.get(source.id, "") or ""
+
+    co_located_ids = [
+        cid for cid, loc in character_locations.items()
+        if (loc or "") == source_location and cid != source.id
+    ]
+    co_present = target.id in co_located_ids
+    only_two_present = co_present and len(co_located_ids) == 1
+
+    lines: list[str] = []
+    summary: list[str] = []
+    direct_interaction = False
+    observed_target = False
+
+    for snap in round_snapshots:
+        role = (snap.get("role") or "").strip().lower()
+        if role == "system":
+            continue
+
+        author_id = snap.get("character_id")
+        if role == "user":
+            author_id = player_id
+        if author_id is None:
+            continue
+
+        content = snap.get("content") or ""
+        targets = perception.parse_target_ids(snap.get("target_character_ids"))
+
+        if author_id == source.id:
+            # Source's own speech. Direct when explicitly addressed or when the
+            # target is present (they are actually talking to/with them).
+            # A name mention without co-presence is only reflection (weak).
+            explicit_address = target.id in targets
+            mentions_target = _text_mentions_name(content, target_name)
+            if explicit_address or (co_present and mentions_target) or only_two_present:
+                direct_interaction = True
+            elif mentions_target:
+                observed_target = True
+            else:
+                continue
+        elif author_id == target.id:
+            # Target's speech: direct when addressed to the source or said
+            # face-to-face; otherwise observed through the source's perception.
+            explicit_address = source.id in targets
+            mentions_source = _text_mentions_name(content, source_name)
+            presence = perception.can_character_perceive_event(
+                viewer_character_id=source.id,
+                viewer_location=source_location,
+                event=snap,
+                viewer_name=source_name,
+            )[0]
+            if explicit_address or (co_present and mentions_source) or only_two_present:
+                direct_interaction = True
+            elif presence != "absent":
+                observed_target = True
+            else:
+                continue
+        else:
+            # Third party speaks; relevant only if perceived and about the target
+            presence = perception.can_character_perceive_event(
+                viewer_character_id=source.id,
+                viewer_location=source_location,
+                event=snap,
+                viewer_name=source_name,
+            )[0]
+            if presence == "absent":
+                continue
+            involves_target = (target.id in targets) or _text_mentions_name(content, target_name)
+            if not involves_target:
+                continue
+            observed_target = True
+
+        speaker = character_names.get(author_id, f"ID:{author_id}")
+        addressee_names = [character_names.get(t, f"ID:{t}") for t in targets]
+        addressee_text = ", ".join(addressee_names) if addressee_names else "(всем)"
+        lines.append(f"{speaker} (id={author_id}) -> {addressee_text}: {content}")
+        summary.append(f"{speaker} -> {addressee_text}")
+
+    excerpt = "\n".join(lines[-max_lines:])
+    return {
+        "excerpt": excerpt,
+        "interaction_summary": "\n".join(summary[:max_lines]) or "взаимодействия не было",
+        "direct_interaction": direct_interaction,
+        "observed_target": observed_target,
+        "any_evidence": bool(excerpt.strip()),
+    }
+
+
+def _constrain_pair_delta(
+    delta: schemas.RelationshipDelta,
+    rel: models.CharacterRelationship,
+    pair_ctx: dict,
+) -> schemas.RelationshipDelta:
+    """Limit deltas for pairs without direct interaction.
+
+    Witness/reflection-only evidence gets a smaller cap and cannot change the
+    relationship type (unless configured otherwise).
+    """
+    if pair_ctx["direct_interaction"]:
+        return delta
+    cap = settings.relationship_reflection_delta_cap
+    updates: dict = {
+        "delta_affection": max(-cap, min(cap, delta.delta_affection)),
+        "delta_trust": max(-cap, min(cap, delta.delta_trust)),
+        "delta_attraction": max(-cap, min(cap, delta.delta_attraction)),
+        "delta_resentment": max(-cap, min(cap, delta.delta_resentment)),
+        "delta_jealousy": max(-cap, min(cap, delta.delta_jealousy)),
+    }
+    if (
+        settings.relationship_type_change_requires_interaction
+        and delta.relationship_type != rel.relationship_type
+    ):
+        updates["relationship_type"] = rel.relationship_type
+    return delta.model_copy(update=updates)
 
 
 async def process_user_message(

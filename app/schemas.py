@@ -11,9 +11,38 @@ from .perception import parse_target_ids, serialize_target_ids
 # Допустимые роли сообщений
 Role = Literal["user", "character", "system"]
 PresenceType = Literal["present", "mentioned", "absent", "told"]
-MemoryCategory = Literal["relationship", "event", "location", "item", "other"]
+MemoryCategory = Literal["отношения", "событие", "локация", "предмет", "другое"]
 EventVisibility = Literal["private", "local", "targeted", "public", "global"]
 CommunicationChannel = Literal["direct", "magic", "phone", "radio", "messenger"]
+
+
+_CATEGORY_ALIASES = {
+    "rel": "отношения",
+    "relations": "отношения",
+    "person": "отношения",
+    "people": "отношения",
+    "place": "локация",
+    "loc": "локация",
+    "object": "предмет",
+    "thing": "предмет",
+    "action": "событие",
+    "plot": "событие",
+    "relationship": "отношения",
+    "event": "событие",
+    "location": "локация",
+    "item": "предмет",
+    "other": "другое",
+}
+
+
+def normalize_category(value: object) -> Optional[str]:
+    """Normalize a memory category token (English or Russian) to the Russian form."""
+    if value is None or str(value).strip() == "":
+        return None
+    text = str(value).strip().lower()
+    if text in settings.memory_categories:
+        return text
+    return _CATEGORY_ALIASES.get(text, "другое")
 
 
 def _normalize_visibility(value: object) -> str:
@@ -75,7 +104,7 @@ class CharacterBase(BaseModel):
 
 class InitialRelationship(BaseModel):
     target_id: int
-    relationship_type: str = "neutral"
+    relationship_type: str = "нейтральное"
     affection: int = 50
     trust: int = 50
     attraction: int = 0
@@ -200,6 +229,11 @@ class MemoryBase(BaseModel):
     importance: Optional[float] = 0.5
     category: Optional[str] = None
 
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_memory_category(cls, value: object) -> Optional[str]:
+        return normalize_category(value)
+
 
 class MemoryCreate(MemoryBase):
     chat_id: int
@@ -240,7 +274,7 @@ class ExtractedFact(BaseModel):
     """Structured fact from LLM memory extraction (P1)."""
 
     fact: str
-    category: MemoryCategory = "event"
+    category: MemoryCategory = "событие"
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     witnessed: bool = True
 
@@ -254,25 +288,8 @@ class ExtractedFact(BaseModel):
     @field_validator("category", mode="before")
     @classmethod
     def _normalize_category(cls, value: object) -> str:
-        if value is None or value == "":
-            return "event"
-        text = str(value).strip().lower()
-        if text in settings.memory_categories:
-            return text
-        # common aliases
-        aliases = {
-            "rel": "relationship",
-            "relations": "relationship",
-            "person": "relationship",
-            "people": "relationship",
-            "place": "location",
-            "loc": "location",
-            "object": "item",
-            "thing": "item",
-            "action": "event",
-            "plot": "event",
-        }
-        return aliases.get(text, "other")
+        normalized = normalize_category(value)
+        return normalized or "событие"
 
     @field_validator("importance", mode="before")
     @classmethod
@@ -429,7 +446,7 @@ class RelationshipDelta(BaseModel):
     delta_attraction: int = 0
     delta_resentment: int = 0
     delta_jealousy: int = 0
-    relationship_type: str = "neutral"
+    relationship_type: str = "нейтральное"
     description: str = ""
     reason: str = ""
     importance: int = Field(default=5, ge=1, le=10)
@@ -450,7 +467,7 @@ class CharacterRelationshipRead(BaseModel):
     chat_id: int
     source_character_id: int
     target_character_id: int
-    relationship_type: str = "neutral"
+    relationship_type: str = "нейтральное"
     affection: int = 50
     trust: int = 50
     attraction: int = 0

@@ -6,8 +6,6 @@ import logging
 import random
 import re
 from collections.abc import AsyncIterator
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -59,40 +57,6 @@ from . import schemas
 from .witness_model import Presence, filter_history_for_character, filter_history_for_character_with_presence
 
 logger = logging.getLogger(__name__)
-
-# Prompt logging directory
-_PROMPT_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
-_PROMPT_LOG_DIR.mkdir(exist_ok=True)
-
-
-def _log_prompt_to_file(
-    chat_id: int,
-    character_name: str,
-    api_mode: str,
-    prompt: str,
-    prompt_tokens: int,
-    num_ctx: int,
-) -> None:
-    """Log the full prompt sent to the model to a text file."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    filename = f"prompt_chat{chat_id}_{character_name}_{api_mode}_{timestamp}.txt"
-    filepath = _PROMPT_LOG_DIR / filename
-    try:
-        with filepath.open("w", encoding="utf-8") as f:
-            f.write(f"=== PROMPT LOG ===\n")
-            f.write(f"Chat ID: {chat_id}\n")
-            f.write(f"Character: {character_name}\n")
-            f.write(f"API Mode: {api_mode}\n")
-            f.write(f"Prompt Tokens: {prompt_tokens}\n")
-            f.write(f"Num CTX: {num_ctx}\n")
-            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            f.write(f"Prompt Length (chars): {len(prompt)}\n")
-            f.write(f"\n=== FULL PROMPT ===\n")
-            f.write(prompt)
-            f.write(f"\n=== END PROMPT ===\n")
-    except Exception as exc:
-        logger.warning("[chat_id=%d] Failed to write prompt log: %s", chat_id, exc)
-
 
 OLLAMA_BASE_URL = settings.ollama_base_url
 DEFAULT_TEMPERATURE = settings.default_temperature
@@ -984,9 +948,6 @@ async def _generate_once(
     prompt_tokens = _count_prompt_tokens(chat_messages, full_prompt)
     num_ctx = ctx_state.apply_prompt(chat_id, prompt_tokens)
 
-    # Log full prompt to file
-    _log_prompt_to_file(chat_id, character.name, api_mode, full_prompt, prompt_tokens, num_ctx)
-
     logger.info(
         "[chat_id=%d] Ollama request (api=%s, model=%s, character=%s, %s, "
         "prompt_len=%d, prompt_tokens=%d, history=%d msgs, memories=%d, has_summary=%s, stop=%d, "
@@ -1337,7 +1298,7 @@ async def generate(
             if repetition_attempt < settings.max_repetition_retries:
                 repetition_attempt += 1
                 repetition_feedback = (
-                    "STYLE CONTAMINATION DETECTED.\n\n"
+                    "ОБНАРУЖЕНО ЗАИМСТВОВАНИЕ СТИЛЯ.\n\n"
                     f"Твой ответ содержит слова и выражения, не характерные для {character.name}. "
                     f"{character.name} говорит так: {borrowing_issue}\n\n"
                     "Перепиши ответ строго в стиле своего персонажа. "
@@ -1528,7 +1489,7 @@ def parse_extracted_facts(raw: str) -> list[schemas.ExtractedFact]:
     """Parse extraction LLM output into structured facts.
 
     Supports:
-    - [{"fact": "...", "category": "event", "importance": 0.7, "witnessed": true}]
+    - [{"fact": "...", "category": "событие", "importance": 0.7, "witnessed": true}]
     - legacy ["fact string", ...]
     """
     payload = _extract_json_payload(raw)

@@ -406,7 +406,7 @@ def validate_extracted_fact(
         update={
             "fact": text,
             "importance": float(fact.importance),
-            "category": fact.category or "event",
+            "category": fact.category or "событие",
             "witnessed": True,
         }
     )

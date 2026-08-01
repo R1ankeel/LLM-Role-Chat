@@ -131,7 +131,7 @@ class TestHybridRetrieval:
                     character_id=char.id,
                     content=content,
                     importance=0.5 + i * 0.1,
-                    category="event",
+                    category="событие",
                 ),
             )
             # Manually set embedding
@@ -230,7 +230,7 @@ class TestEmbeddingJobs:
                 character_id=char.id,
                 content="Test memory for embedding",
                 importance=0.7,
-                category="event",
+                category="событие",
             ),
         )
         return char, mem

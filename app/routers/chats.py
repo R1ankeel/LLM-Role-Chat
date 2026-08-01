@@ -95,7 +95,7 @@ async def clear_messages(
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid scope: use messages, messages_memories, or full",
+            detail="Недопустимый scope: используйте messages, messages_memories или full",
         )
 
     if not ok:

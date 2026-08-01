@@ -91,14 +91,14 @@ def test_create_memory(client, test_chat, test_character):
             "character_id": test_character["id"],
             "content": "Test memory content",
             "importance": 0.8,
-            "category": "event",
+            "category": "событие",
         },
     )
     assert response.status_code == 201
     data = response.json()
     assert data["content"] == "Test memory content"
     assert data["importance"] == 0.8
-    assert data["category"] == "event"
+    assert data["category"] == "событие"
     assert data["character_id"] == test_character["id"]
     assert data["chat_id"] == test_chat["id"]
     assert "id" in data
@@ -115,7 +115,7 @@ def test_create_memory_duplicate_fails(client, test_chat, test_character):
             "character_id": test_character["id"],
             "content": "Duplicate memory content",
             "importance": 0.5,
-            "category": "event",
+            "category": "событие",
         },
     )
     # Try to create duplicate
@@ -126,7 +126,7 @@ def test_create_memory_duplicate_fails(client, test_chat, test_character):
             "character_id": test_character["id"],
             "content": "Duplicate memory content",
             "importance": 0.5,
-            "category": "event",
+            "category": "событие",
         },
     )
     assert response.status_code == 409
@@ -143,7 +143,7 @@ def test_update_memory(client, test_chat, test_character):
             "character_id": test_character["id"],
             "content": "Original content",
             "importance": 0.5,
-            "category": "event",
+            "category": "событие",
         },
     )
     memory_id = create_resp.json()["id"]
@@ -151,13 +151,13 @@ def test_update_memory(client, test_chat, test_character):
     # Update memory
     response = client.put(
         f"/api/memories/{memory_id}",
-        json={"content": "Updated content", "importance": 0.9, "category": "relationship"},
+        json={"content": "Updated content", "importance": 0.9, "category": "отношения"},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["content"] == "Updated content"
     assert data["importance"] == 0.9
-    assert data["category"] == "relationship"
+    assert data["category"] == "отношения"
     assert data["id"] == memory_id
 
 
@@ -171,7 +171,7 @@ def test_delete_memory(client, test_chat, test_character):
             "character_id": test_character["id"],
             "content": "To be deleted",
             "importance": 0.5,
-            "category": "event",
+            "category": "событие",
         },
     )
     memory_id = create_resp.json()["id"]
@@ -190,11 +190,11 @@ def test_get_memories_by_character(client, test_chat, test_character):
     # Create a few memories
     client.post(
         f"/api/characters/{test_character['id']}/memories",
-        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Memory 1", "importance": 0.5, "category": "event"},
+        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Memory 1", "importance": 0.5, "category": "событие"},
     )
     client.post(
         f"/api/characters/{test_character['id']}/memories",
-        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Memory 2", "importance": 0.7, "category": "relationship"},
+        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Memory 2", "importance": 0.7, "category": "отношения"},
     )
 
     response = client.get(f"/api/characters/{test_character['id']}/memories")
@@ -209,7 +209,7 @@ def test_clear_chat_memories_scope(client, test_chat, test_character):
     # Create a memory first
     client.post(
         f"/api/characters/{test_character['id']}/memories",
-        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Test memory", "importance": 0.5, "category": "event"},
+        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Test memory", "importance": 0.5, "category": "событие"},
     )
     # Verify memory exists
     mem_resp = client.get(f"/api/characters/{test_character['id']}/memories")
@@ -235,7 +235,7 @@ def test_clear_chat_full_scope(client, test_chat, test_character):
     # Create a memory
     client.post(
         f"/api/characters/{test_character['id']}/memories",
-        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Test memory", "importance": 0.5, "category": "event"},
+        json={"chat_id": test_chat["id"], "character_id": test_character["id"], "content": "Test memory", "importance": 0.5, "category": "событие"},
     )
 
     # Create messages to trigger summary

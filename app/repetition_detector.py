@@ -738,20 +738,20 @@ def analyze_response(
 
     reason_parts: list[str] = []
     if text_score >= settings.repetition_text_jaccard:
-        reason_parts.append("near-duplicate wording vs own recent replies")
+        reason_parts.append("почти дословный повтор собственных недавних реплик")
     if action_score >= 0.5:
-        reason_parts.append("repeated semantic action bundle")
+        reason_parts.append("повторяющийся набор смысловых действий")
     if cool_hits:
-        reason_parts.append(f"action cooldown hit: {', '.join(cool_hits)}")
+        reason_parts.append(f"попадание в кулдаун действий: {', '.join(cool_hits)}")
     if interaction_level:
-        reason_parts.append("multi-character interaction pattern loop")
+        reason_parts.append("цикл многостороннего паттерна взаимодействия")
     if stagnation:
-        reason_parts.append("scene state not progressing")
+        reason_parts.append("состояние сцены не развивается")
     if not reason_parts and is_repetitive:
-        reason_parts.append("behavioral pattern repetition without state change")
+        reason_parts.append("повтор поведенческого паттерна без изменения состояния")
 
     reason = (
-        "The scene keeps repeating the same interaction pattern without state progression"
+        "Сцена продолжает повторять один и тот же паттерн взаимодействия без развития состояния"
         if stagnation and interaction_level
         else "; ".join(reason_parts)
         if reason_parts
@@ -775,28 +775,28 @@ def analyze_response(
 def build_repetition_feedback(analysis: RepetitionAnalysis) -> str:
     """Build targeted retry instruction from detector result (not for chat history)."""
     actions = analysis.repeated_actions or [
-        "the same physical or conversational move"
+        "одно и то же физическое или разговорное действие"
     ]
     action_lines = "\n".join(f"- {a}" for a in actions[:8])
     pattern = (
         analysis.interaction_pattern
         or analysis.reason
-        or "repeated behavioral pattern"
+        or "повторяющийся поведенческий паттерн"
     )
 
     return (
-        "SCENE LOOP DETECTED.\n\n"
-        "Your recent responses repeat the same behavioral pattern.\n\n"
-        f"Pattern: {pattern}\n\n"
-        "Already repeated:\n"
+        "ОБНАРУЖЕН ЦИКЛ СЦЕНЫ.\n\n"
+        "Твои недавние ответы повторяют один и тот же поведенческий паттерн.\n\n"
+        f"Паттерн: {pattern}\n\n"
+        "Уже повторялось:\n"
         f"{action_lines}\n\n"
-        "Do NOT repeat these actions in the next response.\n"
-        "The scene must progress.\n\n"
-        "Choose a genuinely different action, reaction, decision, topic, or consequence.\n"
-        "Do not describe another variation of the same moves using synonyms.\n"
-        "Do not merely rephrase the same behavior.\n"
-        "Do not prolong the same interaction pattern.\n\n"
-        "Continue naturally as the character."
+        "НЕ повторяй эти действия в следующем ответе.\n"
+        "Сцена должна развиваться.\n\n"
+        "Выбери действительно другое действие, реакцию, решение, тему или последствие.\n"
+        "Не описывай очередную вариацию тех же действий через синонимы.\n"
+        "Не просто перефразируй то же поведение.\n"
+        "Не затягивай один и тот же паттерн взаимодействия.\n\n"
+        "Продолжай естественно в роли персонажа."
     )
 
 

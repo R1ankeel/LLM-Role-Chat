@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AI Roleplay Chat</title>
+  <title>Ролевая игра — чат с ИИ</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -25,7 +25,7 @@
     <button class="mobile-back-btn" id="mobileBackBtn" title="Назад к чатам">←</button>
     <h3 id="chat-title">Выберите чат</h3>
     <span id="chat-model" class="header-model"></span>
-    <button type="button" id="btn-thinking-toggle" class="mode-badge" title="Переключить режим генерации">🧠 Thinking</button>
+    <button type="button" id="btn-thinking-toggle" class="mode-badge" title="Переключить режим генерации">🧠 Размышление</button>
   </div>
   <div class="header-right">
     <button id="btn-clear-history" class="btn btn-sm" title="Очистить историю">🗑️</button>
@@ -242,11 +242,11 @@
       <label>Содержимое <textarea id="mem-editor-content" rows="3" required></textarea></label>
       <label>Категория
         <select id="mem-editor-category">
-          <option value="event">event</option>
-          <option value="relationship">relationship</option>
-          <option value="location">location</option>
-          <option value="item">item</option>
-          <option value="other">other</option>
+          <option value="событие">Событие</option>
+          <option value="отношения">Отношения</option>
+          <option value="локация">Локация</option>
+          <option value="предмет">Предмет</option>
+          <option value="другое">Другое</option>
         </select>
       </label>
       <label>Важность (0–1)

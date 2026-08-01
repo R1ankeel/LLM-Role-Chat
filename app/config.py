@@ -69,11 +69,11 @@ class Settings(BaseSettings):
     memory_max_facts_per_round: int = Field(default=3, alias="MEMORY_MAX_FACTS_PER_ROUND")
     memory_near_dup_jaccard: float = Field(default=0.75, alias="MEMORY_NEAR_DUP_JACCARD")
     memory_categories: tuple[str, ...] = (
-        "relationship",
-        "event",
-        "location",
-        "item",
-        "other",
+        "отношения",
+        "событие",
+        "локация",
+        "предмет",
+        "другое",
     )
 
     # Memory Consolidation (P3)
@@ -162,48 +162,61 @@ class Settings(BaseSettings):
     relationship_analyzer_enabled: bool = Field(default=True, alias="RELATIONSHIP_ANALYZER_ENABLED")
     relationship_analyzer_model: str = Field(default="", alias="RELATIONSHIP_ANALYZER_MODEL")
     relationship_valid_types: tuple[str, ...] = (
-        "neutral", "friend", "close_friend", "best_friend",
-        "ally", "trusted_ally",
-        "rival", "enemy", "bitter_enemy",
-        "crush", "romantic", "lover",
-        "mentor", "student",
-        "family", "parent", "sibling",
-        "stranger", "acquaintance",
+        "нейтральное", "друг", "близкий_друг", "лучший_друг",
+        "союзник", "верный_союзник",
+        "соперник", "враг", "заклятый_враг",
+        "симпатия", "романтика", "возлюбленные",
+        "наставник", "ученик",
+        "семья", "родитель", "брат_сестра",
+        "незнакомец", "знакомый",
     )
     relationship_transition_rules: dict[str, list[str]] = {
-        "neutral": ["friend", "ally", "crush", "rival", "acquaintance", "stranger"],
-        "friend": ["close_friend", "best_friend", "ally", "trusted_ally", "crush", "neutral", "rival"],
-        "close_friend": ["best_friend", "trusted_ally", "friend", "romantic", "neutral"],
-        "best_friend": ["close_friend", "trusted_ally", "neutral"],
-        "ally": ["trusted_ally", "friend", "neutral", "rival"],
-        "trusted_ally": ["ally", "friend", "close_friend", "neutral"],
-        "rival": ["enemy", "bitter_enemy", "neutral", "acquaintance"],
-        "enemy": ["bitter_enemy", "rival", "neutral"],
-        "bitter_enemy": ["enemy", "neutral"],
-        "crush": ["romantic", "lover", "friend", "neutral"],
-        "romantic": ["lover", "crush", "close_friend", "neutral"],
-        "lover": ["romantic", "close_friend", "neutral"],
-        "mentor": ["student", "trusted_ally", "friend", "neutral"],
-        "student": ["mentor", "trusted_ally", "friend", "neutral"],
-        "family": ["parent", "sibling", "close_friend", "neutral"],
-        "parent": ["family", "close_friend", "neutral"],
-        "sibling": ["family", "close_friend", "neutral"],
-        "stranger": ["acquaintance", "neutral", "rival"],
-        "acquaintance": ["friend", "neutral", "stranger"],
+        "нейтральное": ["друг", "союзник", "симпатия", "соперник", "знакомый", "незнакомец"],
+        "друг": ["близкий_друг", "лучший_друг", "союзник", "верный_союзник", "симпатия", "нейтральное", "соперник"],
+        "близкий_друг": ["лучший_друг", "верный_союзник", "друг", "романтика", "нейтральное"],
+        "лучший_друг": ["близкий_друг", "верный_союзник", "нейтральное"],
+        "союзник": ["верный_союзник", "друг", "нейтральное", "соперник"],
+        "верный_союзник": ["союзник", "друг", "близкий_друг", "нейтральное"],
+        "соперник": ["враг", "заклятый_враг", "нейтральное", "знакомый"],
+        "враг": ["заклятый_враг", "соперник", "нейтральное"],
+        "заклятый_враг": ["враг", "нейтральное"],
+        "симпатия": ["романтика", "возлюбленные", "друг", "нейтральное"],
+        "романтика": ["возлюбленные", "симпатия", "близкий_друг", "нейтральное"],
+        "возлюбленные": ["романтика", "близкий_друг", "нейтральное"],
+        "наставник": ["ученик", "верный_союзник", "друг", "нейтральное"],
+        "ученик": ["наставник", "верный_союзник", "друг", "нейтральное"],
+        "семья": ["родитель", "брат_сестра", "близкий_друг", "нейтральное"],
+        "родитель": ["семья", "близкий_друг", "нейтральное"],
+        "брат_сестра": ["семья", "близкий_друг", "нейтральное"],
+        "незнакомец": ["знакомый", "нейтральное", "соперник"],
+        "знакомый": ["друг", "нейтральное", "незнакомец"],
     }
+    relationship_min_importance: int = Field(default=3, alias="RELATIONSHIP_MIN_IMPORTANCE")
+    relationship_analyze_only_interacting_pairs: bool = Field(
+        default=True, alias="RELATIONSHIP_ANALYZE_ONLY_INTERACTING_PAIRS"
+    )
+    relationship_reflection_delta_cap: int = Field(
+        default=5, alias="RELATIONSHIP_REFLECTION_DELTA_CAP"
+    )
+    relationship_type_change_requires_interaction: bool = Field(
+        default=True, alias="RELATIONSHIP_TYPE_CHANGE_REQUIRES_INTERACTION"
+    )
+    relationship_max_pair_context_lines: int = Field(
+        default=20, alias="RELATIONSHIP_MAX_PAIR_CONTEXT_LINES"
+    )
     relationship_analyzer_prompt: str = Field(
         default=(
-            "Analyze the roleplay round below and determine how {source_name}'s "
-            "relationship with {target_name} changes. "
-            "Current relationship type: {current_type}. "
-            "Current metrics — affection: {affection}, trust: {trust}, "
-            "attraction: {attraction}, resentment: {resentment}, jealousy: {jealousy}. "
-            "Recent events: {recent_events}. "
-            "Round text: {round_text}. "
-            "Return deltas in range [-20, +20] per metric, "
-            "suggested new relationship_type from allowed transitions, "
-            "a short description, reason, importance (1-10), "
-            "and update_description: true/false."
+            "Проанализируй раунд ролевой игры ниже и определи, как меняются "
+            "отношения {source_name} к {target_name}. "
+            "Текущий тип отношений: {current_type}. "
+            "Текущие метрики — привязанность: {affection}, доверие: {trust}, "
+            "влечение: {attraction}, обида: {resentment}, ревность: {jealousy}. "
+            "Недавние события: {recent_events}. "
+            "Текст раунда: {round_text}. "
+            "Верни дельты в диапазоне [-20, +20] по каждой метрике, "
+            "предложи новый relationship_type из разрешённых переходов, "
+            "краткое описание, причину, важность (1-10) "
+            "и update_description: true/false."
         ),
         alias="RELATIONSHIP_ANALYZER_PROMPT",
     )

@@ -23,19 +23,19 @@ from app.schemas import RelationshipDelta
 # ---------------------------------------------------------------------------
 class TestValidateTransition:
     def test_same_type_is_allowed(self):
-        assert validate_transition("neutral", "neutral") is True
+        assert validate_transition("нейтральное", "нейтральное") is True
 
     def test_valid_transition(self):
-        assert validate_transition("neutral", "friend") is True
-        assert validate_transition("friend", "close_friend") is True
-        assert validate_transition("enemy", "neutral") is True
+        assert validate_transition("нейтральное", "друг") is True
+        assert validate_transition("друг", "близкий_друг") is True
+        assert validate_transition("враг", "нейтральное") is True
 
     def test_invalid_transition(self):
-        assert validate_transition("neutral", "bitter_enemy") is False
-        assert validate_transition("stranger", "lover") is False
+        assert validate_transition("нейтральное", "заклятый_враг") is False
+        assert validate_transition("незнакомец", "возлюбленные") is False
 
     def test_unknown_type_reverts_to_false(self):
-        assert validate_transition("neutral", "nonexistent_type") is False
+        assert validate_transition("нейтральное", "nonexistent_type") is False
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ class TestGetOrCreateRelationship:
         rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
         assert rel.source_character_id == a.id
         assert rel.target_character_id == b.id
-        assert rel.relationship_type == "neutral"
+        assert rel.relationship_type == "нейтральное"
         assert rel.affection == 50
 
     async def test_returns_existing(self, db_session: AsyncSession, chat, three_characters):
@@ -112,9 +112,9 @@ class TestUpdateFields:
         a, b, _ = three_characters
         rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
         updated = await update_relationship_fields(
-            db_session, rel, relationship_type="friend",
+            db_session, rel, relationship_type="друг",
         )
-        assert updated.relationship_type == "friend"
+        assert updated.relationship_type == "друг"
         assert updated.affection == 50  # unchanged
 
 
@@ -150,15 +150,15 @@ class TestApplyDelta:
     async def test_invalid_transition_rejected(self, db_session: AsyncSession, chat, three_characters):
         a, b, _ = three_characters
         rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
-        assert rel.relationship_type == "neutral"
+        assert rel.relationship_type == "нейтральное"
         delta = RelationshipDelta(
             source_character_id=a.id,
             target_character_id=b.id,
             delta_affection=0,
-            relationship_type="bitter_enemy",
+            relationship_type="заклятый_враг",
         )
         rel = await apply_delta(db_session, delta, chat.id)
-        assert rel.relationship_type == "neutral"  # rejected, stays neutral
+        assert rel.relationship_type == "нейтральное"  # rejected, stays neutral
 
     async def test_description_updates_only_when_flag_set(self, db_session: AsyncSession, chat, three_characters):
         a, b, _ = three_characters
@@ -198,6 +198,34 @@ class TestApplyDelta:
         assert events[0].reason == "test reason"
         assert events[0].delta_affection == 10
 
+    async def test_skips_low_importance(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=10,
+            importance=1,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        assert rel.affection == 50
+        events = await get_recent_events(db_session, rel)
+        assert len(events) == 0
+
+    async def test_no_event_when_nothing_changed(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=0,
+            relationship_type="нейтральное",
+            importance=5,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        assert rel.affection == 50
+        assert rel.relationship_type == "нейтральное"
+        events = await get_recent_events(db_session, rel)
+        assert len(events) == 0
+
 
 # ---------------------------------------------------------------------------
 # Build relationships block
@@ -221,4 +249,4 @@ class TestBuildRelationshipsBlock:
         )
         assert "Character B" in block
         assert "Character C" in block
-        assert "neutral" in block
+        assert "нейтральное" in block

@@ -97,7 +97,7 @@ def test_false_me_patient_rejected_without_name_in_context():
         fact="Максим поцеловал меня на улице вечером",
         witnessed=True,
         importance=0.9,
-        category="event",
+        category="событие",
     )
     # Context has the kiss but not Alina's name — she must not become "me"
     context = "Максим: Я поцеловал Катю.\nКатя: *краснеет*"
@@ -114,7 +114,7 @@ def test_false_me_patient_allowed_when_name_in_context():
         fact="Максим поцеловал меня на улице вечером",
         witnessed=True,
         importance=0.9,
-        category="event",
+        category="событие",
     )
     context = "Максим: Я поцеловал Катю.\nКатя: *краснеет от поцелуя*"
     cleaned = memory_service.validate_extracted_fact(
@@ -129,7 +129,7 @@ def test_ungrounded_fact_rejected():
         fact="Дракон разрушил восточную башню крепости ночью",
         witnessed=True,
         importance=0.95,
-        category="event",
+        category="событие",
     )
     context = "Максим: Я поцеловал Катю на улице."
     assert (
@@ -145,7 +145,7 @@ def test_grounded_actor_fact_accepted():
         fact="Я поцеловал Катю на улице возле фонаря",
         witnessed=True,
         importance=0.9,
-        category="event",
+        category="событие",
     )
     context = "Максим: Я поцеловал Катю на улице возле фонаря."
     cleaned = memory_service.validate_extracted_fact(
@@ -257,7 +257,7 @@ async def test_cross_location_memory_extraction_skip(
                     fact="Я поцеловал Катю на улице",
                     witnessed=True,
                     importance=0.9,
-                    category="event",
+                    category="событие",
                 )
             ]
         if character.name == "Катя":
@@ -266,7 +266,7 @@ async def test_cross_location_memory_extraction_skip(
                     fact="Максим поцеловал меня на улице",
                     witnessed=True,
                     importance=0.9,
-                    category="event",
+                    category="событие",
                 )
             ]
         # If home chars are wrongly called, try to inject leak
@@ -275,7 +275,7 @@ async def test_cross_location_memory_extraction_skip(
                 fact="Максим поцеловал меня на улице",
                 witnessed=True,
                 importance=0.9,
-                category="event",
+                category="событие",
             )
         ]
 
@@ -376,7 +376,7 @@ async def test_first_person_pronoun_no_leak_to_remote(
                 fact="Максим поцеловал меня после прогулки",
                 witnessed=True,
                 importance=0.85,
-                category="event",
+                category="событие",
             )
         ]
 
@@ -505,7 +505,7 @@ async def test_information_transfer_after_telling(
                     fact="Катя рассказала мне, что Максим её поцеловал",
                     witnessed=True,
                     importance=0.8,
-                    category="event",
+                    category="событие",
                 )
             ]
         return []
@@ -572,7 +572,7 @@ def test_memory_retrieval_in_prompt_block(db_session, chat):
             character_id=a.id,
             content="Игрок отдал Alice серебряный ключ от склада",
             importance=0.9,
-            category="item",
+            category="предмет",
         ),
     )
     mem_a = crud.get_memories_by_character(db_session, a.id)
@@ -627,7 +627,7 @@ async def test_bad_llm_fact_for_non_witness_grounding(
                 fact="Максим поцеловал меня на улице при всех",
                 witnessed=True,
                 importance=0.99,
-                category="event",
+                category="событие",
             )
         ]
 

@@ -193,23 +193,16 @@ async def create_player_character(
     await db.commit()
     await db.refresh(player)
 
-    # Create player<->NPC relationships for all NPCs
+    # Create NPC->Player relationships for all NPCs.
+    # Player->NPC relationships are intentionally not tracked.
     npcs = await get_characters_by_chat(db, chat_id)
     for npc in npcs:
-        # NPC -> Player
         rel_npc_player = models.CharacterRelationship(
             chat_id=chat_id,
             source_character_id=npc.id,
             target_character_id=player.id,
         )
         db.add(rel_npc_player)
-        # Player -> NPC
-        rel_player_npc = models.CharacterRelationship(
-            chat_id=chat_id,
-            source_character_id=player.id,
-            target_character_id=npc.id,
-        )
-        db.add(rel_player_npc)
     await db.commit()
     await db.refresh(player)
     return player
