@@ -13,6 +13,7 @@ from app import ollama_client
 from app.config import settings
 from app.context_state import ctx_state
 from app.prompt_builder import (
+    build_behavior_drivers_block,
     build_negative_prompting_block,
     build_reinforcement_block,
     build_user_context_message,
@@ -71,6 +72,43 @@ def test_reinforcement_block_is_short():
     assert len(block) < 400  # reasonably short
     assert "ТОЛЬКО Alice" in block
     assert "не сворачивая ответ" in block
+
+
+def test_behavior_drivers_block_wrapper():
+    assert build_behavior_drivers_block([]) == ""
+    block = build_behavior_drivers_block(["Ты не доверяешь Борису."])
+    assert "<behavior_drivers>" in block
+    assert "- Ты не доверяешь Борису." in block
+    assert block.endswith("</behavior_drivers>")
+
+
+def _build_messages_with_drivers(behavior_drivers_block: str = ""):
+    return ollama_client._build_generation_messages(
+        "system",
+        "",
+        "",
+        "<recent_dialogue>Hi</recent_dialogue>",
+        "",
+        "",
+        build_generation_cue_for_chat("Alice"),
+        behavior_drivers_block=behavior_drivers_block,
+    )
+
+
+def test_generation_messages_drivers_default_empty():
+    messages = _build_messages_with_drivers()
+    assert messages[0]["role"] == "system"
+    assert "<behavior_drivers>" not in messages[1]["content"]
+
+
+def test_generation_messages_drivers_placed_before_cue():
+    drivers = build_behavior_drivers_block(
+        ["Ты не доверяешь Борису.", "Ты эмоционально привязан к Борису."]
+    )
+    messages = _build_messages_with_drivers(drivers)
+    user_content = messages[1]["content"]
+    assert "<behavior_drivers>" in user_content
+    assert user_content.index("<behavior_drivers>") < user_content.index("Отвечай за Alice")
 
 
 def test_resolve_thinking_override():

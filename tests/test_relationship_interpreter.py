@@ -3,10 +3,12 @@
 from types import SimpleNamespace
 
 from app.relationship_interpreter import (
+    build_behavior_drivers,
     decline_name,
     format_interpretation,
     interpret,
     RelationshipInterpretation,
+    weighted_behavior_drivers,
 )
 
 
@@ -181,3 +183,72 @@ class TestFormatInterpretation:
         assert "affection" not in text
         assert "доверие=" not in text
         assert "привязанность=" not in text
+
+
+class TestBehaviorDrivers:
+    def test_high_attachment_driver(self):
+        drivers = build_behavior_drivers(interpret(_rel(affection=80, trust=80)), "Борис")
+        assert any("эмоционально привязан" in d for d in drivers)
+
+    def test_low_trust_driver(self):
+        drivers = build_behavior_drivers(interpret(_rel(trust=20)), "Борис")
+        assert any("не доверяешь Борису" in d for d in drivers)
+
+    def test_high_resentment_grievance_driver(self):
+        drivers = build_behavior_drivers(interpret(_rel(resentment=60)), "Борис")
+        assert any("помнишь обиду на Бориса" in d for d in drivers)
+
+    def test_hidden_attraction_driver(self):
+        drivers = build_behavior_drivers(interpret(_rel(attraction=80, resentment=60)), "Борис")
+        assert any("тянет к Борису" in d and "скрываешь" in d for d in drivers)
+
+    def test_derived_driver_ranks_first(self):
+        drivers = build_behavior_drivers(interpret(_rel(affection=80, trust=20)), "Борис")
+        assert drivers[0] == "Ты держишься за Бориса, но твоя привязанность к Борису болезненна."
+
+    def test_neutral_relationship_has_no_drivers(self):
+        assert build_behavior_drivers(interpret(_rel()), "Борис") == []
+
+    def test_drivers_are_tendencies_not_commands(self):
+        drivers = build_behavior_drivers(
+            interpret(_rel(affection=80, trust=20, attraction=80, resentment=60, jealousy=70)),
+            "Борис",
+        )
+        joined = " ".join(drivers)
+        assert "должен" not in joined
+        assert "обязан" not in joined
+
+    def test_deterministic(self):
+        rel = _rel(affection=80, trust=20, attraction=80, resentment=60, jealousy=70)
+        a = build_behavior_drivers(interpret(rel), "Борис")
+        b = build_behavior_drivers(interpret(rel), "Борис")
+        assert a == b
+
+    def test_max_drivers_caps(self):
+        drivers = build_behavior_drivers(
+            interpret(_rel(affection=80, trust=20, attraction=80, resentment=60, jealousy=70)),
+            "Борис",
+            max_drivers=2,
+        )
+        assert len(drivers) == 2
+
+    def test_no_numbers_in_drivers(self):
+        drivers = build_behavior_drivers(
+            interpret(_rel(affection=85, trust=20, resentment=60)), "Борис",
+        )
+        assert all("=" not in d and "85" not in d for d in drivers)
+
+
+class TestWeightedBehaviorDrivers:
+    def test_sorted_by_weight_desc(self):
+        pairs = weighted_behavior_drivers(
+            interpret(_rel(affection=80, trust=20, attraction=80, resentment=60, jealousy=70)),
+            "Борис",
+        )
+        weights = [w for w, _ in pairs]
+        assert weights == sorted(weights, reverse=True)
+
+    def test_derived_outranks_base(self):
+        pairs = weighted_behavior_drivers(interpret(_rel(affection=80, trust=20)), "Борис")
+        assert pairs[0][1].startswith("Ты держишься за Бориса")
+        assert pairs[0][0] > pairs[1][0]

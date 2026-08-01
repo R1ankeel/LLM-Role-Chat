@@ -552,3 +552,15 @@ def build_relationships_block(relationships_text: str) -> str:
     if not relationships_text:
         return ""
     return f"<relationships>\n{relationships_text}\n</relationships>"
+
+
+def build_behavior_drivers_block(drivers: list[str]) -> str:
+    """Build the top-K behavior drivers block placed before the generation cue.
+
+    Drivers are tendencies (never commands). Empty list produces an empty block
+    so the default stays backward compatible.
+    """
+    if not drivers:
+        return ""
+    lines = "\n".join(f"- {driver}" for driver in drivers)
+    return f"<behavior_drivers>\n{lines}\n</behavior_drivers>"

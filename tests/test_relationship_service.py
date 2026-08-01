@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import CharacterRelationship, RelationshipEvent
 from app.relationship_service import (
     apply_delta,
+    build_behavior_drivers_block,
     build_relationships_block,
     get_or_create_relationship,
     get_relationship,
@@ -269,3 +270,84 @@ class TestBuildRelationshipsBlock:
         assert "affection=" not in block
         assert "привязанность=" not in block
         assert "=80" not in block
+
+
+# ---------------------------------------------------------------------------
+# Build behavior drivers block
+# ---------------------------------------------------------------------------
+class TestBuildBehaviorDriversBlock:
+    def _names(self, chars) -> dict:
+        return {c.id: c.name for c in chars}
+
+    async def test_empty_if_no_relationships(self, db_session: AsyncSession, chat, three_characters):
+        a, _, _ = three_characters
+        block = await build_behavior_drivers_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        assert block == ""
+
+    async def test_neutral_relationship_produces_empty_block(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        block = await build_behavior_drivers_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        assert block == ""
+
+    async def test_strong_state_yields_drivers_block(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        await update_relationship_fields(
+            db_session,
+            await get_or_create_relationship(db_session, chat.id, a.id, b.id),
+            affection=80,
+            trust=20,
+        )
+        block = await build_behavior_drivers_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        assert block.startswith("<behavior_drivers>")
+        assert block.endswith("</behavior_drivers>")
+        assert "эмоционально привязан" in block
+        assert "не доверяешь" in block
+        assert "должен" not in block
+        assert "обязан" not in block
+
+    async def test_capped_by_relationship_drivers_max(self, db_session: AsyncSession, chat, three_characters):
+        a, b, c = three_characters
+        await update_relationship_fields(
+            db_session,
+            await get_or_create_relationship(db_session, chat.id, a.id, b.id),
+            affection=80,
+            trust=20,
+            resentment=60,
+            jealousy=70,
+        )
+        await update_relationship_fields(
+            db_session,
+            await get_or_create_relationship(db_session, chat.id, a.id, c.id),
+            affection=80,
+            trust=20,
+        )
+        from app.config import settings
+        block = await build_behavior_drivers_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        driver_lines = [ln for ln in block.splitlines() if ln.startswith("- ")]
+        assert len(driver_lines) <= settings.relationship_drivers_max
+
+    async def test_explicit_max_drivers(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        await update_relationship_fields(
+            db_session,
+            await get_or_create_relationship(db_session, chat.id, a.id, b.id),
+            affection=80,
+            trust=20,
+            resentment=60,
+            jealousy=70,
+        )
+        block = await build_behavior_drivers_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+            max_drivers=2,
+        )
+        driver_lines = [ln for ln in block.splitlines() if ln.startswith("- ")]
+        assert len(driver_lines) == 2

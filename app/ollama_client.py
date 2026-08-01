@@ -723,6 +723,7 @@ def _build_generation_messages(
     vocabulary_block: str = "",
     scene_advancement_block: str = "",
     isolated_block: str = "",
+    behavior_drivers_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -739,6 +740,7 @@ def _build_generation_messages(
         reinforcement,
         feedback_block,
         scene_block,
+        behavior_drivers_block,
         generation_cue,
         build_negative_prompting_block(),
     )
@@ -800,6 +802,7 @@ async def _generate_once(
     is_isolated: bool = False,
     locations: str = "[]",
     relationships_block: str = "",
+    behavior_drivers_block: str = "",
     built_context: schemas.BuiltContext | None = None,
 ) -> tuple[str, str, bool, int, list[str]]:
     """One LLM call + isolation sanitize. Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list)."""
@@ -905,6 +908,7 @@ async def _generate_once(
             consistency_block=consistency_block,
             scene_advancement_block=scene_advancement_block,
             isolated_block=isolated_block,
+            behavior_drivers_block=behavior_drivers_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -940,6 +944,8 @@ async def _generate_once(
         feedback_block = build_repetition_feedback_block(repetition_feedback)
         if feedback_block:
             context_parts.append(feedback_block)
+        if behavior_drivers_block:
+            context_parts.append(behavior_drivers_block)
         context_parts.append(generation_cue)
         full_prompt = "\n\n".join(context_parts)
         prompt_len = len(full_prompt)
@@ -1189,6 +1195,7 @@ async def generate(
     is_isolated: bool = False,
     locations: str = "[]",
     relationships_block: str = "",
+    behavior_drivers_block: str = "",
     built_context: schemas.BuiltContext | None = None,
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
@@ -1270,6 +1277,7 @@ async def generate(
             is_isolated=is_isolated,
             locations=locations,
             relationships_block=relationships_block,
+            behavior_drivers_block=behavior_drivers_block,
             built_context=built_context,
         )
 

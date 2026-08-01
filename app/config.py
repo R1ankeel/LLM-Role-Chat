@@ -158,6 +158,7 @@ class Settings(BaseSettings):
 
     # Relationship System
     relationship_max_delta: int = Field(default=20, alias="RELATIONSHIP_MAX_DELTA")
+    relationship_drivers_max: int = Field(default=4, alias="RELATIONSHIP_DRIVERS_MAX")
     relationship_max_events_in_prompt: int = Field(default=5, alias="RELATIONSHIP_MAX_EVENTS_IN_PROMPT")
     relationship_analyzer_enabled: bool = Field(default=True, alias="RELATIONSHIP_ANALYZER_ENABLED")
     relationship_analyzer_model: str = Field(default="", alias="RELATIONSHIP_ANALYZER_MODEL")

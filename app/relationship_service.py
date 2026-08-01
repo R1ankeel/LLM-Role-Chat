@@ -19,8 +19,13 @@ from .models import (
     CharacterRelationship,
     RelationshipEvent,
 )
-from .relationship_interpreter import format_interpretation, interpret
+from .relationship_interpreter import (
+    format_interpretation,
+    interpret,
+    weighted_behavior_drivers,
+)
 from .schemas import RelationshipDelta
+from .prompt_builder import build_behavior_drivers_block as _wrap_drivers_block
 
 logger = logging.getLogger(__name__)
 
@@ -301,3 +306,44 @@ async def build_relationships_block(
         events = await get_recent_events(db, rel, limit=max_events)
         blocks.append(format_relationship_for_prompt(rel, target_name, events))
     return "\n".join(blocks)
+
+
+async def build_behavior_drivers_block(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    character_name: str,
+    all_characters: dict[int, str],
+    max_drivers: int | None = None,
+) -> str:
+    """Build the top-K behavior drivers block for one character (Sprint 1 п.3-4).
+
+    Aggregates deterministic tendency drivers across all outgoing relationships
+    of the character, keeps the most significant ``relationship_drivers_max``,
+    and wraps them in ``<behavior_drivers>…</behavior_drivers>``.
+
+    Args:
+        db: database session.
+        chat_id: chat scope.
+        character_id: source character id.
+        character_name: source character name (kept for signature symmetry
+            with :func:`build_relationships_block`).
+        all_characters: {character_id: name} for name resolution.
+        max_drivers: cap on returned tendencies; defaults to
+            ``settings.relationship_drivers_max``.
+    """
+    if max_drivers is None:
+        max_drivers = settings.relationship_drivers_max
+    rels = await list_relationships_for_character(db, character_id, chat_id=chat_id)
+    if not rels:
+        return ""
+
+    candidates: list[tuple[int, str]] = []
+    for rel in rels:
+        target_name = all_characters.get(rel.target_character_id, f"ID:{rel.target_character_id}")
+        interp = interpret(rel)
+        candidates.extend(weighted_behavior_drivers(interp, target_name))
+
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    top = [text for _, text in candidates[:max(0, int(max_drivers))]]
+    return _wrap_drivers_block(top)

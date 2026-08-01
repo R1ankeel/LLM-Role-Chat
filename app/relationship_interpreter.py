@@ -219,3 +219,82 @@ def format_interpretation(
         parts.append(f"Тебя тянет к {dat}; это может отражаться в манерах.")
 
     return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Behavior Drivers (docs/relations.md §4-§5, Sprint 1 item 3)
+# ---------------------------------------------------------------------------
+# Drivers are *tendencies*, not commands: they describe what the character
+# feels, never "should/must". Derived combinations outrank their base labels so
+# the top-K selection keeps the most informative tendencies.
+_DRIVER_WEIGHTS = {
+    "болезненная привязанность": 6,
+    "недоверие + обида": 6,
+    "скрытое влечение": 5,
+}
+
+
+def weighted_behavior_drivers(
+    interp: RelationshipInterpretation,
+    target_name: str,
+) -> list[tuple[int, str]]:
+    """Ranked (weight, tendency) pairs for one relationship (deterministic).
+
+    Weights are stable across relationships so an aggregator can compare
+    drivers from different pairs on a common scale.
+    """
+    dat = _dative(target_name)
+    acc = _accusative(target_name)
+
+    candidates: list[tuple[int, str]] = []
+
+    derived_phrases = {
+        "болезненная привязанность": f"Ты держишься за {acc}, но твоя привязанность к {dat} болезненна.",
+        "недоверие + обида": f"Недоверие и обида к {dat} глубоки.",
+        "скрытое влечение": f"Тебя тянет к {dat}, но ты скрываешь это.",
+    }
+    for key, phrase in derived_phrases.items():
+        if key in interp.derived:
+            candidates.append((_DRIVER_WEIGHTS[key], phrase))
+
+    if interp.trust == "low":
+        candidates.append((4, f"Ты не доверяешь {dat}: проверяешь его слова, не всё говоришь."))
+    if interp.hostility == "high":
+        candidates.append((4, f"Ты помнишь обиду на {acc} и склонен возвращаться к причине конфликта."))
+    if interp.jealousy == "high":
+        candidates.append((4, f"Тебя задевает, когда {target_name} проводит время с другими."))
+    if interp.attachment == "high":
+        candidates.append((3, f"Ты эмоционально привязан к {dat} и ищешь близости."))
+    if interp.attachment == "low":
+        candidates.append((3, f"Ты держишь {acc} на дистанции."))
+    if interp.attraction == "visible":
+        candidates.append((2, f"Тебя тянет к {dat}; это может отражаться в манерах."))
+    if interp.jealousy == "moderate":
+        candidates.append((2, f"Ты иногда испытываешь ревность к {dat}."))
+    if interp.trust == "high":
+        candidates.append((1, f"Ты доверяешь {dat}."))
+
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates
+
+
+def build_behavior_drivers(
+    interp: RelationshipInterpretation,
+    target_name: str,
+    *,
+    max_drivers: int | None = None,
+) -> list[str]:
+    """Ranked behavior tendencies for one relationship (deterministic, no DB).
+
+    Wraps :func:`weighted_behavior_drivers` and returns the tendency texts.
+    A fresh neutral relationship emits nothing.
+
+    Args:
+        interp: semantic labels from :func:`interpret`.
+        target_name: name of the target character (nominative).
+        max_drivers: cap on the returned tendencies; None keeps all sorted.
+    """
+    texts = [text for _, text in weighted_behavior_drivers(interp, target_name)]
+    if max_drivers is not None:
+        texts = texts[:max(0, int(max_drivers))]
+    return texts

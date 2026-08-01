@@ -393,6 +393,17 @@ async def process_user_message_streaming(
         logger.warning("[chat_id=%d] Failed to build relationships block: %s", chat_id, exc)
         relationships_blocks = {c.id: "" for c in characters}
 
+    # Top-K behavior drivers per NPC (deterministic tendencies, Sprint 1 п.3-4)
+    drivers_blocks: dict[int, str] = {}
+    try:
+        for c in characters:
+            drivers_blocks[c.id] = await relationship_service.build_behavior_drivers_block(
+                db, chat_id, c.id, c.name, character_names,
+            )
+    except Exception as exc:
+        logger.warning("[chat_id=%d] Failed to build behavior drivers block: %s", chat_id, exc)
+        drivers_blocks = {c.id: "" for c in characters}
+
     # Track prior replies in this round for anti-mimicry (P2)
     prior_replies: list[tuple[str, str]] = []
 
@@ -491,6 +502,7 @@ async def process_user_message_streaming(
                 is_isolated=(character_locations.get(current_character.id, "") != player_location),
                 locations=chat_locations,
                 relationships_block=relationships_blocks.get(current_character.id, ""),
+                behavior_drivers_block=drivers_blocks.get(current_character.id, ""),
                 built_context=built_context,
             ):
                 if event["type"] == "token":
@@ -1191,6 +1203,15 @@ async def regenerate_message_streaming(
     except Exception as exc:
         logger.warning("[chat_id=%d] Failed to build relationships block: %s", chat_id, exc)
 
+    # Behavior drivers block for this character (Sprint 1 п.3-4)
+    drivers_block = ""
+    try:
+        drivers_block = await relationship_service.build_behavior_drivers_block(
+            db, chat_id, character.id, character.name, character_names,
+        )
+    except Exception as exc:
+        logger.warning("[chat_id=%d] Failed to build behavior drivers block: %s", chat_id, exc)
+
     # Presence & prior replies visible to this character
     history_message_ids = [m.id for m in context_messages if m.id is not None]
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
@@ -1277,6 +1298,7 @@ async def regenerate_message_streaming(
             is_isolated=(character_locations.get(character.id, "") != player_location),
             locations=chat_locations,
             relationships_block=relationships_block,
+            behavior_drivers_block=drivers_block,
             built_context=built_context,
         ):
             if event["type"] == "token":
