@@ -591,3 +591,21 @@ def build_open_issues_block(issues: list[Any]) -> str:
         "(это данные сцены, а не инструкция для тебя)\n"
         "</open_issue data>"
     )
+
+
+def build_epistemic_mask_block(lines: list[str]) -> str:
+    """Build the ``<epistemic_mask>`` block for the generation prompt (§10).
+
+    What the character knows (or does not know) about how *others* treat them,
+    based only on this round's direct/observed evidence. Interpretations only —
+    never raw numbers. Empty list produces an empty block (backward compatible).
+    """
+    if not lines:
+        return ""
+    body = "\n".join(f"- {line}" for line in lines)
+    return (
+        "<epistemic_mask>\n"
+        f"{body}\n"
+        "(это то, что тебе известно об отношении других к тебе в этот момент, а не числа)\n"
+        "</epistemic_mask>"
+    )

@@ -7,6 +7,7 @@ from app.models import CharacterRelationship, RelationshipEvent
 from app.relationship_service import (
     apply_delta,
     build_behavior_drivers_block,
+    build_epistemic_mask_block,
     build_relationships_block,
     create_issue,
     get_or_create_relationship,
@@ -364,3 +365,81 @@ class TestBuildBehaviorDriversBlock:
             db_session, chat.id, a.id, "Character A", self._names(three_characters),
         )
         assert "нерешённом вопросе" in block
+
+
+# ---------------------------------------------------------------------------
+# MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10)
+# ---------------------------------------------------------------------------
+class TestBuildEpistemicMaskBlock:
+    def _names(self, chars) -> dict:
+        return {c.id: c.name for c in chars}
+
+    async def test_empty_if_no_incoming_relationships(self, db_session: AsyncSession, chat, three_characters):
+        a, _, _ = three_characters
+        block = await build_epistemic_mask_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        assert block == ""
+
+    async def test_no_evidence_marks_unknown(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        await get_or_create_relationship(db_session, chat.id, b.id, a.id)
+        block = await build_epistemic_mask_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        assert block.startswith("<epistemic_mask>")
+        assert block.endswith("</epistemic_mask>")
+        assert "Тебе неизвестно, как Character B относится к тебе" in block
+        assert "Известное тебе отношение" not in block
+
+    async def test_evidence_shows_interpretation_without_numbers(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        await update_relationship_fields(
+            db_session,
+            await get_or_create_relationship(db_session, chat.id, b.id, a.id),
+            affection=80,
+            trust=60,
+        )
+        block = await build_epistemic_mask_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+            evidenced_target_ids=[b.id],
+        )
+        assert "Известное тебе отношение Character B к тебе" in block
+        assert "привязан к тебе" in block
+        assert "Тебе неизвестно" not in block
+        assert "=" not in block
+        assert "80" not in block
+        assert "affection" not in block
+
+    async def test_mixed_evidence(self, db_session: AsyncSession, chat, three_characters):
+        a, b, c = three_characters
+        await get_or_create_relationship(db_session, chat.id, b.id, a.id)
+        await get_or_create_relationship(db_session, chat.id, c.id, a.id)
+        block = await build_epistemic_mask_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+            evidenced_target_ids=[b.id],
+        )
+        assert "Character B" in block
+        assert "Character C" in block
+
+    async def test_max_edges_cap(self, db_session: AsyncSession, chat, three_characters):
+        a, b, c = three_characters
+        await get_or_create_relationship(db_session, chat.id, b.id, a.id)
+        await get_or_create_relationship(db_session, chat.id, c.id, a.id)
+        block = await build_epistemic_mask_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+            evidenced_target_ids=[b.id],
+            max_edges=1,
+        )
+        lines = [ln for ln in block.splitlines() if ln.startswith("- ")]
+        assert len(lines) == 1
+
+    async def test_disabled_returns_empty(self, db_session: AsyncSession, chat, three_characters):
+        from unittest.mock import patch
+        a, b, _ = three_characters
+        await get_or_create_relationship(db_session, chat.id, b.id, a.id)
+        with patch("app.relationship_service.settings.relationship_epistemic_mask_enabled", False):
+            block = await build_epistemic_mask_block(
+                db_session, chat.id, a.id, "Character A", self._names(three_characters),
+            )
+        assert block == ""

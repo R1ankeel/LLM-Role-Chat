@@ -1,0 +1,81 @@
+# Документация проекта AI Roleplay Chat
+
+Локальное веб-приложение для ролевых игр с AI-персонажами через Ollama.
+FastAPI + SQLAlchemy 2.0 (async/aiosqlite) + Vanilla JS SPA.
+
+## Оглавление
+
+| Документ | Содержание |
+|----------|-----------|
+| [architecture.md](architecture.md) | Общая архитектура, жизненный цикл запроса, потоки данных, фоновые задачи |
+| [api.md](api.md) | Полный справочник HTTP API |
+| [database.md](database.md) | Схема базы данных (SQLite), индексы, миграции |
+| [configuration.md](configuration.md) | Все настройки через `.env` (значения по умолчанию) |
+| [relations.md](relations.md) | Система отношений между персонажами (анализатор, интерпретатор, issues, epistemic mask) |
+
+## Краткий обзор
+
+- **Бэкенд**: FastAPI-приложение `app.main:app`, статика отдаётся из `app/static/`.
+- **База данных**: SQLite `ai_chat.db` (sync + async движки), таблицы создаются и мигрируются автоматически при старте (`database.ensure_schema`).
+- **LLM**: локальный Ollama (`/api/generate` или `/api/chat`), поддержка thinking, динамический `num_ctx` (KV-окно) на каждый чат.
+- **Ядро**: каждый раунд игры — одно сообщение пользователя, на которое по очереди отвечают все NPC-персонажи.
+- **Ключевые системы**:
+  - *Perception / Witness* — персонаж видит в контексте только те события мира, которые способен воспринять (локация + visibility + каналы связи).
+  - *Memory* — извлечение фактов после каждого раунда, BM25/векторный поиск, саммари, консолидация, фоновые задачи.
+  - *Relationships* — направленные отношения персонаж→персонаж, LLM-анализатор дельт, open issues, детерминированная интерпретация.
+  - *Role isolation* — защита от «разговоров за других персонажей», repetition detector, anti-mimicry.
+  - *Context builder* — токено-ориентированная сборка контекста под лимит бюджета.
+- **Фронтенд**: одностраничное приложение (Vanilla JS), SSE-стриминг ответов, вкладки настроек, управления персонажами/памятью/сценой/отношениями.
+
+## Структура репозитория
+
+```
+ai-roleplay-chat/
+├── main.py                  # устаревшая точка входа (см. app/main.py)
+├── app/
+│   ├── main.py              # FastAPI app, lifespan, фоновые воркеры, CORS
+│   ├── config.py            # pydantic-settings, все настройки
+│   ├── database.py          # SQLite sync+async, индексы, миграции
+│   ├── models.py            # ORM: Chat, Character, Message, Memory, ...
+│   ├── schemas.py           # Pydantic-схемы, нормализация категорий/visibility
+│   ├── crud.py              # слой доступа к данным (async)
+│   ├── perception.py        # правила восприятия событий (локация/visibility/каналы)
+│   ├── witness_model.py     # фильтрация истории и памяти по presence
+│   ├── prompt_builder.py    # сборка system-промптов из шаблонов ru.json
+│   ├── ollama_client.py     # клиент Ollama (генерация, извлечение, retry, streaming)
+│   ├── chat_engine.py       # движок раунда: генерация, presence, сцена, отношения
+│   ├── memory_service.py    # извлечение фактов, саммари, консолидация, embed-задачи
+│   ├── context_builder.py   # токено-ориентированная сборка контекста
+│   ├── context_budget.py    # распределение токенов по компонентам
+│   ├── context_state.py     # динамический num_ctx на чат
+│   ├── relationship_*.py     # сервис/анализатор/интерпретатор отношений
+│   ├── role_isolation.py    # изоляция роли, validation ответа
+│   ├── repetition_detector.py # детекция повторов и стагнации сцены
+│   ├── task_queue.py        # очередь задач памяти (persistence, retry)
+│   ├── token_counter.py     # оценка/точный подсчёт токенов
+│   ├── embedding_service.py # эмбеддинги через Ollama (vector search)
+│   ├── ratelimit.py         # throttle 1 сообщение / 5 сек на чат
+│   ├── generation_tracker.py# трекинг активной генерации на чат
+│   ├── prompts/ru.json      # все шаблоны промптов
+│   ├── routers/             # API-роутеры (chats, characters, chat_engine, jobs, relationships)
+│   └── static/              # SPA: index.html, app.js, style.css
+├── scripts/                 # CLI-скрипты (backfill_embeddings)
+├── tests/                   # pytest + tests/eval (харнесс и метрики) + tests/golden
+└── .env / .env.example      # конфигурация
+```
+
+## Запуск
+
+```bash
+pip install -r requirements.txt
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+На Windows также доступен `start_server.bat` (запускает `uvicorn app.main:app` с `--reload`).
+
+## Тесты
+
+```bash
+pytest                # pytest.ini: asyncio_mode=auto, testpaths=tests
+python -m tests.eval.run_eval --mode mock   # eval-харнесс (без Ollama)
+```

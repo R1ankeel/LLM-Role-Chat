@@ -237,6 +237,15 @@ class Settings(BaseSettings):
     issue_salience_decay_rounds: int = Field(
         default=5, alias="ISSUE_SALIENCE_DECAY_ROUNDS"
     )
+    # MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10): a character
+    # learns how another treats it only when it had direct/observed evidence this
+    # round, and only as an interpretation (never numbers).
+    relationship_epistemic_mask_enabled: bool = Field(
+        default=True, alias="RELATIONSHIP_EPISTEMIC_MASK_ENABLED"
+    )
+    relationship_epistemic_max: int = Field(
+        default=8, alias="RELATIONSHIP_EPISTEMIC_MAX"
+    )
 
     relationship_analyzer_prompt: str = Field(
         default=(

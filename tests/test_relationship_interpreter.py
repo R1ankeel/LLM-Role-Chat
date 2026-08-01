@@ -7,6 +7,7 @@ from app.relationship_interpreter import (
     build_behavior_drivers,
     decline_name,
     format_interpretation,
+    format_interpretation_from_other,
     interpret,
     RelationshipInterpretation,
     weighted_behavior_drivers,
@@ -285,3 +286,42 @@ class TestWeightedBehaviorDrivers:
         pairs = weighted_behavior_drivers(interpret(_rel(affection=80, trust=20)), "Борис")
         assert pairs[0][1].startswith("Ты держишься за Бориса")
         assert pairs[0][0] > pairs[1][0]
+
+
+class TestFormatInterpretationFromOther:
+    """Epistemic mask (Sprint 2 item 10): how the OTHER feels toward 'тебе'."""
+
+    def test_neutral_yields_empty(self):
+        assert format_interpretation_from_other(interpret(_rel()), "Борис") == ""
+
+    def test_low_trust(self):
+        text = format_interpretation_from_other(interpret(_rel(trust=20)), "Борис")
+        assert "не доверяет тебе" in text
+
+    def test_high_attachment(self):
+        text = format_interpretation_from_other(interpret(_rel(affection=80)), "Борис")
+        assert "привязан к тебе" in text
+
+    def test_hostility(self):
+        text = format_interpretation_from_other(interpret(_rel(resentment=60)), "Борис")
+        assert "обиду на тебя" in text
+
+    def test_open_issue_is_mentioned(self):
+        text = format_interpretation_from_other(
+            interpret(_rel(), open_issues=[_issue()]), "Борис"
+        )
+        assert "нерешённом вопросе между вами" in text
+
+    def test_no_numbers(self):
+        rel = _rel(affection=85, trust=20, attraction=70, resentment=60, jealousy=70)
+        text = format_interpretation_from_other(interpret(rel), "Борис")
+        assert "=" not in text
+        assert "85" not in text
+        assert "affection" not in text
+
+    def test_deterministic(self):
+        rel = _rel(affection=80, trust=20, attraction=70, resentment=60)
+        assert (
+            format_interpretation_from_other(interpret(rel), "Борис")
+            == format_interpretation_from_other(interpret(rel), "Борис")
+        )

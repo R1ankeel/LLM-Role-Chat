@@ -83,7 +83,9 @@ def test_behavior_drivers_block_wrapper():
 
 
 def _build_messages_with_drivers(
-    behavior_drivers_block: str = "", open_issues_block: str = ""
+    behavior_drivers_block: str = "",
+    open_issues_block: str = "",
+    epistemic_mask_block: str = "",
 ):
     return ollama_client._build_generation_messages(
         "system",
@@ -95,6 +97,7 @@ def _build_messages_with_drivers(
         build_generation_cue_for_chat("Alice"),
         behavior_drivers_block=behavior_drivers_block,
         open_issues_block=open_issues_block,
+        epistemic_mask_block=epistemic_mask_block,
     )
 
 
@@ -131,6 +134,24 @@ def test_generation_messages_open_issues_placed_before_cue():
     user_content = messages[1]["content"]
     assert "<open_issue data>" in user_content
     assert user_content.index("<open_issue data>") < user_content.index("Отвечай за Alice")
+
+
+def test_generation_messages_epistemic_mask_default_empty():
+    messages = _build_messages_with_drivers()
+    assert "<epistemic_mask>" not in messages[1]["content"]
+
+
+def test_generation_messages_epistemic_mask_placed_before_cue():
+    mask = (
+        "<epistemic_mask>\n"
+        "- Известное тебе отношение Бориса к тебе: он ведёт себя холодно.\n"
+        "- Тебе неизвестно, как Аня относится к тебе.\n"
+        "</epistemic_mask>"
+    )
+    messages = _build_messages_with_drivers(epistemic_mask_block=mask)
+    user_content = messages[1]["content"]
+    assert "<epistemic_mask>" in user_content
+    assert user_content.index("<epistemic_mask>") < user_content.index("Отвечай за Alice")
 
 
 def test_resolve_thinking_override():

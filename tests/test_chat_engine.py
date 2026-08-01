@@ -319,6 +319,92 @@ async def test_round_id_anchored_on_user_message(db_session, chat, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_epistemic_mask_built_and_passed_to_generate(db_session, chat, mock_client):
+    """Sprint 2 item 10: epistemic mask block is computed per character and passed
+    to generate() (docs/relations.md §10)."""
+    await create_characters(db_session, chat.id, 2)
+    captured: dict = {"epistemic_calls": [], "generate_blocks": []}
+
+    async def fake_build_epistemic(db, chat_id, character_id, character_name, all_characters, evidenced_target_ids=(), max_edges=None):
+        captured["epistemic_calls"].append(
+            {
+                "character_id": character_id,
+                "evidenced_target_ids": sorted(evidenced_target_ids or ()),
+            }
+        )
+        return f"<epistemic_mask>block-{character_id}</epistemic_mask>"
+
+    async def fake_generate(**kwargs):
+        captured["generate_blocks"].append(kwargs.get("epistemic_mask_block", ""))
+        yield {"type": "response", "text": "Valid reply here."}
+
+    with patch(
+        "app.chat_engine._analyze_and_update_relationships",
+        new=MagicMock(return_value=None),
+    ), patch(
+        "app.chat_engine.relationship_service.build_epistemic_mask_block",
+        side_effect=fake_build_epistemic,
+    ), patch(
+        "app.chat_engine.asyncio.create_task"
+    ), patch(
+        "app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread
+    ), patch(
+        "app.chat_engine.ollama_client.generate", side_effect=fake_generate
+    ):
+        async for _ in chat_engine.process_user_message_streaming(
+            mock_client, db_session, chat.id, "Привет всем"
+        ):
+            pass
+
+    assert len(captured["epistemic_calls"]) == 2
+    assert len(captured["generate_blocks"]) == 2
+    for block in captured["generate_blocks"]:
+        assert block.startswith("<epistemic_mask>block-")
+        assert block.endswith("</epistemic_mask>")
+
+
+@pytest.mark.asyncio
+async def test_epistemic_evidence_detects_direct_interaction(db_session, chat, mock_client):
+    """Sprint 2 item 10: with a direct address to B, A's epistemic evidence includes B."""
+    await create_characters(db_session, chat.id, 2)
+    await crud.create_player_character(db_session, chat.id, "Игрок")
+    characters = await crud.get_characters_by_chat(db_session, chat.id)
+    a, b = characters
+
+    captured: dict = {}
+
+    async def fake_build_epistemic(db, chat_id, character_id, character_name, all_characters, evidenced_target_ids=(), max_edges=None):
+        captured[character_id] = sorted(evidenced_target_ids or ())
+        return ""
+
+    async def fake_generate(**kwargs):
+        yield {"type": "response", "text": "Valid reply here."}
+
+    with patch(
+        "app.chat_engine._analyze_and_update_relationships",
+        new=MagicMock(return_value=None),
+    ), patch(
+        "app.chat_engine.relationship_service.build_epistemic_mask_block",
+        side_effect=fake_build_epistemic,
+    ), patch(
+        "app.chat_engine.asyncio.create_task"
+    ), patch(
+        "app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread
+    ), patch(
+        "app.chat_engine.ollama_client.generate", side_effect=fake_generate
+    ):
+        async for _ in chat_engine.process_user_message_streaming(
+            mock_client, db_session, chat.id,
+            f"Слушай, {b.name}, я хочу тебе кое-что сказать",
+            target_character_ids=[b.id],
+        ):
+            pass
+
+    # A directly addressed B -> A has evidence of B's behavior this round.
+    assert b.id in captured[a.id]
+
+
+@pytest.mark.asyncio
 async def test_batch_failure_falls_back_to_per_pair(db_engine, mock_client):
     """Sprint 1 item 8: batch failure -> per-pair fallback; gating still applies."""
     from sqlalchemy.ext.asyncio import async_sessionmaker

@@ -37,6 +37,54 @@ def _message_to_dict(msg) -> dict:
     return d
 
 
+def _message_snapshot(m) -> dict:
+    """Compact round-snapshot dict for one message (relationship analysis input)."""
+    return {
+        "id": getattr(m, "id", None),
+        "role": getattr(m, "role", ""),
+        "character_id": getattr(m, "character_id", None),
+        "content": getattr(m, "content", "") or "",
+        "location": getattr(m, "location", "") or "",
+        "visibility": (
+            getattr(m, "visibility", None)
+            or settings.default_event_visibility
+        ),
+        "channel": getattr(m, "channel", None) or "direct",
+        "target_character_ids": getattr(m, "target_character_ids", "[]"),
+    }
+
+
+def _compute_epistemic_evidence(
+    round_snapshots: list[dict],
+    viewer,
+    all_characters: list,
+    character_names: dict[int, str],
+    character_locations: dict[int, str],
+    player_id: int | None,
+) -> set[int]:
+    """Ids of characters whose behavior ``viewer`` perceived this round.
+
+    MVP epistemic mask (docs/relations.md §10, Sprint 2 item 10): a character
+    may only learn how another treats it when there was direct or observed
+    evidence of that other's behavior in the current round (mode != "none").
+    """
+    evidenced: set[int] = set()
+    for other in all_characters:
+        if other.id == viewer.id:
+            continue
+        ctx = _build_pair_relationship_context(
+            round_snapshots,
+            viewer,
+            other,
+            character_names,
+            character_locations,
+            player_id=player_id,
+        )
+        if _evidence_mode(ctx) != "none":
+            evidenced.add(other.id)
+    return evidenced
+
+
 def _parse_allowed_locations(locations_json: str) -> set[str]:
     """Parse JSON array of allowed locations into a set of normalized strings."""
     import json
@@ -300,6 +348,16 @@ async def process_user_message_streaming(
     character_locations = {
         c.id: getattr(c, "location", "") or "" for c in characters
     }
+    player_id = next(
+        (c.id for c in all_characters if getattr(c, "is_player", False)),
+        None,
+    )
+    if player_id is not None:
+        player_obj = next(
+            (c for c in all_characters if c.id == player_id), None
+        )
+        if player_obj is not None:
+            character_locations[player_id] = getattr(player_obj, "location", "") or ""
 
     # Persist presence for the user event immediately (before any character reply)
     await crud.compute_and_save_presence_for_message(
@@ -461,6 +519,33 @@ async def process_user_message_streaming(
         else:
             effective_prior_replies = []
 
+        # MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10): a
+        # character learns how another treats it only from this round's
+        # direct/observed evidence, and only as an interpretation (no numbers).
+        epistemic_mask_block = ""
+        try:
+            round_snapshots_now = [
+                _message_snapshot(m) for m in round_messages
+            ]
+            evidenced = _compute_epistemic_evidence(
+                round_snapshots_now,
+                current_character,
+                all_characters,
+                character_names,
+                character_locations,
+                player_id=player_id,
+            )
+            epistemic_mask_block = await relationship_service.build_epistemic_mask_block(
+                db, chat_id, current_character.id, current_character.name,
+                character_names, evidenced_target_ids=evidenced,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[chat_id=%d] Failed to build epistemic mask block: %s",
+                chat_id, exc,
+            )
+            epistemic_mask_block = ""
+
         # Assemble token-aware context within the budget (TZ §11–§21)
         built_context = None
         if context_enabled:
@@ -534,6 +619,7 @@ async def process_user_message_streaming(
                 open_issues_block=open_issues_blocks.get(current_character.id, ""),
                 proactive_boost=proactive_boosts.get(current_character.id, 0.0),
                 built_context=built_context,
+                epistemic_mask_block=epistemic_mask_block,
             ):
                 if event["type"] == "token":
                     # Forward token to SSE with character_id for frontend avatar
@@ -1396,6 +1482,16 @@ async def regenerate_message_streaming(
     character_locations = {
         c.id: getattr(c, "location", "") or "" for c in characters
     }
+    player_id = next(
+        (c.id for c in all_characters if getattr(c, "is_player", False)),
+        None,
+    )
+    if player_id is not None:
+        player_obj = next(
+            (c for c in all_characters if c.id == player_id), None
+        )
+        if player_obj is not None:
+            character_locations[player_id] = getattr(player_obj, "location", "") or ""
     player_location = getattr(chat, "player_location", "") or ""
     chat_locations = getattr(chat, "locations", "") or "[]"
 
@@ -1499,6 +1595,28 @@ async def regenerate_message_streaming(
     except Exception as exc:
         logger.warning("[chat_id=%d] Failed to compute proactive boost: %s", chat_id, exc)
 
+    # MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10)
+    epistemic_mask_block = ""
+    try:
+        round_snapshots_now = [_message_snapshot(m) for m in round_messages]
+        evidenced = _compute_epistemic_evidence(
+            round_snapshots_now,
+            character,
+            all_characters,
+            character_names,
+            character_locations,
+            player_id=player_id,
+        )
+        epistemic_mask_block = await relationship_service.build_epistemic_mask_block(
+            db, chat_id, character.id, character.name,
+            character_names, evidenced_target_ids=evidenced,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[chat_id=%d] Failed to build epistemic mask block: %s", chat_id, exc,
+        )
+        epistemic_mask_block = ""
+
     # Presence & prior replies visible to this character
     history_message_ids = [m.id for m in context_messages if m.id is not None]
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
@@ -1589,6 +1707,7 @@ async def regenerate_message_streaming(
             open_issues_block=open_issues_block,
             proactive_boost=proactive_boost,
             built_context=built_context,
+            epistemic_mask_block=epistemic_mask_block,
         ):
             if event["type"] == "token":
                 yield {

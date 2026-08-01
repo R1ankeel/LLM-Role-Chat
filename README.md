@@ -2,6 +2,17 @@
 
 Локальное веб-приложение для ролевых игр с AI-персонажами через Ollama.
 
+## Документация
+
+Техническая документация — в [`docs/`](docs/):
+
+- [`docs/README.md`](docs/README.md) — индекс, обзор и структура проекта
+- [`docs/architecture.md`](docs/architecture.md) — архитектура, жизненный цикл раунда, контекст, память
+- [`docs/api.md`](docs/api.md) — полный справочник HTTP API и SSE-событий
+- [`docs/database.md`](docs/database.md) — схема БД и миграции
+- [`docs/configuration.md`](docs/configuration.md) — все настройки через `.env`
+- [`docs/relations.md`](docs/relations.md) — система отношений (§1–§15)
+
 ## Требования
 
 - Python 3.10+

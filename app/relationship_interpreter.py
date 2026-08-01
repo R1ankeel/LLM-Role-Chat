@@ -235,6 +235,56 @@ def format_interpretation(
     return " ".join(parts)
 
 
+def format_interpretation_from_other(
+    interp: RelationshipInterpretation,
+    source_name: str,
+) -> str:
+    """Tendency phrases about how *another* character feels toward the listener.
+
+    Used by the epistemic mask (docs/relations.md §10, Sprint 2 item 10): the
+    listener (second person "тебе") learns the interpretation of the incoming
+    edge source_name -> listener, WITHOUT any numbers. Phrases are deliberately
+    gender-neutral and describe *what* the other feels, never commands.
+
+    ``source_name`` is only used for readability here (kept for call symmetry);
+    the phrases themselves address "ты/тебе/тебя".
+    """
+    parts: list[str] = []
+
+    if interp.trust == "low":
+        parts.append("не доверяет тебе и проверяет твои слова")
+    elif interp.trust == "high":
+        parts.append("доверяет тебе")
+
+    if "болезненная привязанность" in interp.derived:
+        parts.append("привязанность к тебе болезненна: держится за тебя, но не доверяет")
+    elif interp.attachment == "high":
+        parts.append("привязан к тебе и ищет близости")
+    elif interp.attachment == "low":
+        parts.append("держится от тебя на расстоянии")
+
+    if interp.hostility == "high":
+        parts.append("помнит обиду на тебя и часто возвращается к ней")
+
+    if "недоверие + обида" in interp.derived:
+        parts.append("недоверие и обида к тебе глубоки")
+
+    if OPEN_ISSUE_DERIVED in interp.derived:
+        parts.append("помнит о нерешённом вопросе между вами")
+
+    if interp.jealousy == "high":
+        parts.append("задевает, когда ты проводишь время с другими")
+    elif interp.jealousy == "moderate":
+        parts.append("иногда ревнует тебя")
+
+    if interp.attraction == "hidden":
+        parts.append("тянет к тебе, но это скрывается")
+    elif interp.attraction == "visible":
+        parts.append("тянет к тебе; это заметно по манерам")
+
+    return ", ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Behavior Drivers (docs/relations.md §4-§5, Sprint 1 item 3)
 # ---------------------------------------------------------------------------

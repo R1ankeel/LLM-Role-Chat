@@ -23,12 +23,14 @@ from .models import (
 )
 from .relationship_interpreter import (
     format_interpretation,
+    format_interpretation_from_other,
     interpret,
     weighted_behavior_drivers,
 )
 from .schemas import ISSUE_TYPES, IssueDelta, RelationshipDelta
 from .prompt_builder import (
     build_behavior_drivers_block as _wrap_drivers_block,
+    build_epistemic_mask_block as _wrap_epistemic_block,
     build_open_issues_block as _wrap_open_issues_block,
 )
 
@@ -381,6 +383,65 @@ async def build_behavior_drivers_block(
     candidates.sort(key=lambda item: (-item[0], item[1]))
     top = [text for _, text in candidates[:max(0, int(max_drivers))]]
     return _wrap_drivers_block(top)
+
+
+async def build_epistemic_mask_block(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    character_name: str,
+    all_characters: dict[int, str],
+    evidenced_target_ids: Iterable[int] = (),
+    max_edges: int | None = None,
+) -> str:
+    """Build the ``<epistemic_mask>`` block for one character (Sprint 2 item 10).
+
+    A character only *knows* how another treats them when it had direct or
+    observed evidence of that other's behavior this round (docs/relations.md
+    §10). Incoming edges (source -> this character) with evidence are shown as
+    an interpretation WITHOUT any numbers; edges without evidence are explicitly
+    marked unknown. Foreign internal metrics are never leaked into the prompt.
+
+    Args:
+        db: database session.
+        chat_id: chat scope.
+        character_id: the viewing character (target of the incoming edges).
+        character_name: the viewing character's name.
+        all_characters: {character_id: name} for name resolution.
+        evidenced_target_ids: ids of characters whose behavior this character
+            perceived this round (mode direct/observed, computed in chat_engine).
+        max_edges: cap on returned lines; defaults to
+            ``settings.relationship_epistemic_max``.
+    """
+    if not settings.relationship_epistemic_mask_enabled:
+        return ""
+    if max_edges is None:
+        max_edges = settings.relationship_epistemic_max
+    evidenced = set(int(i) for i in evidenced_target_ids)
+
+    received = await list_received_relationships(db, character_id)
+    if not received:
+        return ""
+
+    known_lines: list[str] = []
+    unknown_lines: list[str] = []
+    for rel in received:
+        source_name = all_characters.get(
+            rel.source_character_id, f"ID:{rel.source_character_id}"
+        )
+        if source_name == character_name:
+            continue
+        if rel.source_character_id in evidenced:
+            interp = interpret(rel)
+            text = format_interpretation_from_other(interp, source_name)
+            known_lines.append(f"Известное тебе отношение {source_name} к тебе: {text}")
+        else:
+            unknown_lines.append(f"Тебе неизвестно, как {source_name} относится к тебе.")
+
+    lines = known_lines + unknown_lines
+    if max_edges and len(lines) > max_edges:
+        lines = lines[: max(0, int(max_edges))]
+    return _wrap_epistemic_block(lines)
 
 
 # ---------------------------------------------------------------------------

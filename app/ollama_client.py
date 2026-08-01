@@ -725,6 +725,7 @@ def _build_generation_messages(
     isolated_block: str = "",
     behavior_drivers_block: str = "",
     open_issues_block: str = "",
+    epistemic_mask_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -743,6 +744,7 @@ def _build_generation_messages(
         scene_block,
         behavior_drivers_block,
         open_issues_block,
+        epistemic_mask_block,
         generation_cue,
         build_negative_prompting_block(),
     )
@@ -808,6 +810,7 @@ async def _generate_once(
     open_issues_block: str = "",
     built_context: schemas.BuiltContext | None = None,
     proactive_boost: float = 0.0,
+    epistemic_mask_block: str = "",
 ) -> tuple[str, str, bool, int, list[str]]:
     """One LLM call + isolation sanitize. Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list)."""
     api_mode = "chat" if settings.use_chat_api else "generate"
@@ -921,6 +924,7 @@ async def _generate_once(
             isolated_block=isolated_block,
             behavior_drivers_block=behavior_drivers_block,
             open_issues_block=open_issues_block,
+            epistemic_mask_block=epistemic_mask_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -960,6 +964,8 @@ async def _generate_once(
             context_parts.append(behavior_drivers_block)
         if open_issues_block:
             context_parts.append(open_issues_block)
+        if epistemic_mask_block:
+            context_parts.append(epistemic_mask_block)
         context_parts.append(generation_cue)
         full_prompt = "\n\n".join(context_parts)
         prompt_len = len(full_prompt)
@@ -1213,6 +1219,7 @@ async def generate(
     open_issues_block: str = "",
     built_context: schemas.BuiltContext | None = None,
     proactive_boost: float = 0.0,
+    epistemic_mask_block: str = "",
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1297,6 +1304,7 @@ async def generate(
             open_issues_block=open_issues_block,
             built_context=built_context,
             proactive_boost=proactive_boost,
+            epistemic_mask_block=epistemic_mask_block,
         )
 
         if not isolation_ok:
