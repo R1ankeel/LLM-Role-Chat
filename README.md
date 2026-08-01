@@ -119,30 +119,43 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 ```
 ai-roleplay-chat/
-├── main.py              # FastAPI app + lifespan (Ollama check) + статика
-├── database.py          # SQLite + SQLAlchemy engine + migrations
-├── models.py            # ORM: Chat, Character, Message, Memory, MessagePresence
-├── schemas.py           # Pydantic-схемы
-├── crud.py              # CRUD-функции
-├── perception.py        # Правила восприятия (локация / visibility)
-├── witness_model.py     # Фильтрация истории по presence
-├── ollama_client.py     # Клиент Ollama (generate + memory extraction + retry)
-├── chat_engine.py       # Движок чата (раунды + presence + память)
-├── ratelimit.py         # Rate limiter (5 сек между сообщениями)
-├── routers/
-│   ├── chats.py         # CRUD чатов
-│   ├── characters.py    # CRUD персонажей + память
-│   └── chat_engine.py   # Отправка сообщений + история
-├── static/
-│   ├── index.html       # SPA-фронтенд
-│   ├── style.css        # Тёмная тема
-│   └── app.js           # Логика фронтенда
-└── requirements.txt
+├── main.py                  # устаревшая точка входа (см. app/main.py)
+├── app/
+│   ├── main.py              # FastAPI app, lifespan, фоновые воркеры, CORS
+│   ├── config.py            # pydantic-settings, все настройки
+│   ├── database.py          # SQLite sync+async, индексы, миграции
+│   ├── models.py            # ORM: Chat, Character, Message, Memory, ...
+│   ├── schemas.py           # Pydantic-схемы, нормализация категорий/visibility
+│   ├── crud.py              # слой доступа к данным (async)
+│   ├── perception.py        # правила восприятия событий (локация/visibility/каналы)
+│   ├── witness_model.py     # фильтрация истории и памяти по presence
+│   ├── prompt_builder.py    # сборка system-промптов из шаблонов ru.json
+│   ├── ollama_client.py     # клиент Ollama (генерация, извлечение, retry, streaming)
+│   ├── chat_engine.py       # движок раунда: генерация, presence, сцена, отношения
+│   ├── memory_service.py    # извлечение фактов, саммари, консолидация, embed-задачи
+│   ├── context_builder.py   # токено-ориентированная сборка контекста
+│   ├── context_budget.py    # распределение токенов по компонентам
+│   ├── context_state.py     # динамический num_ctx на чат
+│   ├── relationship_*.py     # сервис/анализатор/интерпретатор отношений
+│   ├── role_isolation.py    # изоляция роли, validation ответа
+│   ├── repetition_detector.py # детекция повторов и стагнации сцены
+│   ├── task_queue.py        # очередь задач памяти (persistence, retry)
+│   ├── token_counter.py     # оценка/точный подсчёт токенов
+│   ├── embedding_service.py # эмбеддинги через Ollama (vector search)
+│   ├── ratelimit.py         # throttle 1 сообщение / 5 сек на чат
+│   ├── generation_tracker.py# трекинг активной генерации на чат
+│   ├── prompts/ru.json      # все шаблоны промптов
+│   ├── routers/             # API-роутеры (chats, characters, chat_engine, jobs, relationships)
+│   └── static/              # SPA: index.html, app.js, style.css
+├── scripts/                 # CLI-скрипты (backfill_embeddings)
+├── tests/                   # pytest + tests/eval (харнесс и метрики) + tests/golden
+└── .env / .env.example      # конфигурация
 ```
 
 ## Особенности
 
 - **Location perception**: персонажи не «слышат» события из других локаций (LOCAL по умолчанию)
+- **Направленные отношения**: ребро `A→B` не зеркалируется в `B→A` — односторонняя привязанность, неразделённая симпатия и т.п. валидны (см. `docs/relations.md`)
 - **Per-chat thinking mode**: у каждого чата свой Instant/Thinking; рассуждения модели не показываются и не сохраняются
 - **Автоматическая память**: после каждого раунда AI извлекает важные факты и сохраняет их
 - **Ограничение памяти**: максимум 20 фактов на персонажа, в контекст попадают 10 последних

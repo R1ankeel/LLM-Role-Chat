@@ -65,6 +65,17 @@ async def get_or_create_relationship(
     source_id: int,
     target_id: int,
 ) -> CharacterRelationship:
+    """Get or create the directed edge source -> target (docs/relations.md §10).
+
+    Reciprocity invariant: the edge is directional and NO automatic mirroring
+    happens. Only ``source -> target`` is created/returned here; the reverse
+    edge ``target -> source`` is a separate row that this function neither
+    creates nor touches. A self-loop (source == target) is rejected.
+    """
+    if source_id == target_id:
+        raise ValueError(
+            f"Cannot create relationship for self-loop ({source_id} -> {target_id})"
+        )
     stmt = select(CharacterRelationship).where(
         CharacterRelationship.source_character_id == source_id,
         CharacterRelationship.target_character_id == target_id,
@@ -187,6 +198,13 @@ async def apply_delta(
     chat_id: int,
     round_id: Optional[str] = None,
 ) -> CharacterRelationship:
+    """Apply a delta to the single directed edge source -> target.
+
+    Reciprocity invariant: only ``delta.source_character_id ->
+    delta.target_character_id`` is modified. The reverse edge is never touched,
+    mirroring is forbidden (docs/relations.md §10, §22) — unrequited feelings
+    (A->B affection 90, B->A affection 20) are valid and preserved.
+    """
     rel = await get_or_create_relationship(
         db, chat_id, delta.source_character_id, delta.target_character_id,
     )
