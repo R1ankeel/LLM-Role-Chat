@@ -613,6 +613,35 @@ async def list_open_issues(
     return list(result.scalars().all())
 
 
+async def list_top_open_issues_for_character(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    limit: int | None = None,
+) -> list[RelationshipIssue]:
+    """Top open issues across all outgoing edges of a character.
+
+    Deterministic selection shared by :func:`build_open_issues_block` (the
+    generation-context mentions) and the salience ticker (§7.4): most important
+    first, then newest.
+    """
+    rels = await list_relationships_for_character(db, character_id, chat_id=chat_id)
+    if not rels:
+        return []
+
+    all_open: list[RelationshipIssue] = []
+    for rel in rels:
+        all_open.extend(await list_open_issues(db, rel))
+
+    all_open.sort(
+        key=lambda issue: (issue.importance, issue.created_at, issue.id),
+        reverse=True,
+    )
+    if limit is not None:
+        all_open = all_open[: max(0, int(limit))]
+    return all_open
+
+
 async def build_open_issues_block(
     db: AsyncSession,
     chat_id: int,
@@ -631,17 +660,109 @@ async def build_open_issues_block(
         return ""
     if max_issues is None:
         max_issues = settings.relationship_max_issues_in_prompt
-    rels = await list_relationships_for_character(db, character_id, chat_id=chat_id)
-    if not rels:
-        return ""
-
-    all_open: list[RelationshipIssue] = []
-    for rel in rels:
-        all_open.extend(await list_open_issues(db, rel))
-
-    all_open.sort(
-        key=lambda issue: (issue.importance, issue.created_at, issue.id),
-        reverse=True,
+    selected = await list_top_open_issues_for_character(
+        db, chat_id, character_id, limit=max_issues
     )
-    selected = all_open[: max(0, int(max_issues))]
     return _wrap_open_issues_block(selected)
+
+
+# ---------------------------------------------------------------------------
+# Weighted deterministic proactive boost (docs/relations.md §7.4, Sprint 1 п.7)
+# ---------------------------------------------------------------------------
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def proactive_boost_from_issues(
+    issues: Iterable[Any],
+) -> float:
+    """Deterministic weighted proactive boost from open issues (§7.4).
+
+    Forbidden: ``const * len(open_issues)`` — three minor hooks must not weigh
+    like one major conflict. Each issue contributes ``importance * salience``:
+
+        salience_i = clamp01(1 - rounds_since_last_mention_i / DECAY_ROUNDS)
+        w_i        = (importance_i / 10) * salience_i
+        boost      = clamp(COEFF * sum(w_i), 0, BOOST_CAP)
+
+    Deterministic: identical input always yields identical output.
+    """
+    decay_rounds = max(1, int(settings.issue_salience_decay_rounds))
+    total = 0.0
+    for issue in issues:
+        importance = max(0, min(10, int(getattr(issue, "importance", 5) or 5)))
+        rounds_since = max(0, int(getattr(issue, "rounds_since_last_mention", 0) or 0))
+        salience = _clamp01(1.0 - rounds_since / decay_rounds)
+        total += (importance / 10.0) * salience
+    boost = settings.issue_proactive_coeff * total
+    return _clamp(boost, 0.0, settings.issue_proactive_boost_cap)
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+async def compute_proactive_boost(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+) -> float:
+    """Weighted proactive boost for one character (all its open issues, §7.4).
+
+    Reads the deterministic ``rounds_since_last_mention`` counters as of the
+    current round's start (before any tick), so the boost reflects how long
+    each hook stayed unmentioned.
+    """
+    if not settings.relationship_issues_enabled:
+        return 0.0
+    rels = await list_relationships_for_character(db, character_id, chat_id=chat_id)
+    issues: list[RelationshipIssue] = []
+    for rel in rels:
+        issues.extend(await list_open_issues(db, rel))
+    return proactive_boost_from_issues(issues)
+
+
+async def touch_issue(
+    db: AsyncSession,
+    issue: RelationshipIssue,
+    round_id: Optional[str] = None,
+) -> RelationshipIssue:
+    """Reset an issue's salience counter (it was mentioned this round, §7.4)."""
+    issue.rounds_since_last_mention = 0
+    issue.last_mention_round_id = round_id
+    await db.flush()
+    return issue
+
+
+async def tick_open_issues(
+    db: AsyncSession,
+    chat_id: int,
+    round_id: Optional[str] = None,
+    mentioned_ids: Iterable[int] = (),
+) -> None:
+    """Advance the deterministic salience counters once per round (§7.4).
+
+    Every open issue in the chat that was NOT mentioned this round (absent
+    from context/analysis) has its counter incremented; mentioned ones are
+    reset. Issues created in this very round carry ``last_mention_round_id ==
+    round_id`` and are left at 0 until the next round.
+    """
+    mentioned = set(int(i) for i in mentioned_ids)
+    stmt = (
+        select(RelationshipIssue)
+        .join(CharacterRelationship, CharacterRelationship.id == RelationshipIssue.relationship_id)
+        .where(
+            RelationshipIssue.state == "open",
+            CharacterRelationship.chat_id == chat_id,
+        )
+    )
+    result = await db.execute(stmt)
+    open_issues = list(result.scalars().all())
+    for issue in open_issues:
+        if issue.id in mentioned:
+            await touch_issue(db, issue, round_id=round_id)
+        elif issue.last_mention_round_id != round_id:
+            issue.rounds_since_last_mention = (
+                int(issue.rounds_since_last_mention or 0) + 1
+            )
+            await db.flush()

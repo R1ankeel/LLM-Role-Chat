@@ -510,11 +510,26 @@ def ensure_schema(db_engine) -> None:
                     resolved_round_id TEXT,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     resolved_at DATETIME,
-                    last_mention_round_id TEXT
+                    last_mention_round_id TEXT,
+                    rounds_since_last_mention INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
         )
+
+        # Migration: salience counter column (docs/relations.md §7.4, Sprint 1 item 7)
+        if inspector.has_table("relationship_issues"):
+            issue_columns = {col["name"] for col in inspector.get_columns("relationship_issues")}
+            if "rounds_since_last_mention" not in issue_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE relationship_issues ADD COLUMN "
+                        "rounds_since_last_mention INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+                logger.info(
+                    "Added rounds_since_last_mention column to relationship_issues"
+                )
 
         # Indexes AFTER all column migrations
         for ddl in INDEXES:

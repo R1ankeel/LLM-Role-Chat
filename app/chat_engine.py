@@ -415,6 +415,19 @@ async def process_user_message_streaming(
         logger.warning("[chat_id=%d] Failed to build open issues block: %s", chat_id, exc)
         open_issues_blocks = {c.id: "" for c in characters}
 
+    # Weighted proactive boost per NPC (Sprint 1 п.7, docs/relations.md §7.4):
+    # deterministic from open-issue importance & salience, raises the chance of
+    # a proactive action during generation.
+    proactive_boosts: dict[int, float] = {}
+    try:
+        for c in characters:
+            proactive_boosts[c.id] = await relationship_service.compute_proactive_boost(
+                db, chat_id, c.id,
+            )
+    except Exception as exc:
+        logger.warning("[chat_id=%d] Failed to compute proactive boost: %s", chat_id, exc)
+        proactive_boosts = {c.id: 0.0 for c in characters}
+
     # Track prior replies in this round for anti-mimicry (P2)
     prior_replies: list[tuple[str, str]] = []
 
@@ -515,6 +528,7 @@ async def process_user_message_streaming(
                 relationships_block=relationships_blocks.get(current_character.id, ""),
                 behavior_drivers_block=drivers_blocks.get(current_character.id, ""),
                 open_issues_block=open_issues_blocks.get(current_character.id, ""),
+                proactive_boost=proactive_boosts.get(current_character.id, 0.0),
                 built_context=built_context,
             ):
                 if event["type"] == "token":
@@ -833,6 +847,11 @@ async def _analyze_and_update_relationships(
             # anchor is a separate Sprint 1 item, kept here for forward-compat).
             round_id = f"round_{chat_id}_{datetime.utcnow().isoformat()}"
 
+            # Issues mentioned this round: those passed to the analyzer for an
+            # analyzed pair, plus those selected into each source's
+            # generation-context `<open_issue data>` block (§7.4 salience).
+            mentioned_issue_ids: set[int] = set()
+
             for source_char in sources:
                 for target_char in all_chars:
                     if source_char.id == target_char.id:
@@ -878,6 +897,7 @@ async def _analyze_and_update_relationships(
                         }
                         for issue in open_issues
                     ]
+                    mentioned_issue_ids.update(issue.id for issue in open_issues)
 
                     deltas = await relationship_analyzer.analyze_relationships(
                         client=client,
@@ -905,6 +925,27 @@ async def _analyze_and_update_relationships(
                         await relationship_service.apply_delta(
                             db, delta, chat_id, round_id=round_id,
                         )
+
+            # Issues selected into per-source generation contexts count as
+            # mentioned even when the pair itself had no analysis evidence.
+            if settings.relationship_issues_enabled:
+                for source_char in sources:
+                    for issue in await relationship_service.list_top_open_issues_for_character(
+                        db, chat_id, source_char.id,
+                        limit=settings.relationship_max_issues_in_prompt,
+                    ):
+                        mentioned_issue_ids.add(issue.id)
+
+            # Deterministic salience tick: advance counters for unmentioned
+            # open issues, reset mentioned ones (§7.4, Sprint 1 п.7).
+            try:
+                await relationship_service.tick_open_issues(
+                    db, chat_id, round_id=round_id, mentioned_ids=mentioned_issue_ids,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[chat_id=%d] Issue salience tick failed: %s", chat_id, exc
+                )
 
             logger.info("[chat_id=%d] Relationship analysis complete", chat_id)
     except Exception:
@@ -1247,6 +1288,15 @@ async def regenerate_message_streaming(
     except Exception as exc:
         logger.warning("[chat_id=%d] Failed to build open issues block: %s", chat_id, exc)
 
+    # Weighted proactive boost for this character (Sprint 1 п.7, §7.4)
+    proactive_boost = 0.0
+    try:
+        proactive_boost = await relationship_service.compute_proactive_boost(
+            db, chat_id, character.id,
+        )
+    except Exception as exc:
+        logger.warning("[chat_id=%d] Failed to compute proactive boost: %s", chat_id, exc)
+
     # Presence & prior replies visible to this character
     history_message_ids = [m.id for m in context_messages if m.id is not None]
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
@@ -1335,6 +1385,7 @@ async def regenerate_message_streaming(
             relationships_block=relationships_block,
             behavior_drivers_block=drivers_block,
             open_issues_block=open_issues_block,
+            proactive_boost=proactive_boost,
             built_context=built_context,
         ):
             if event["type"] == "token":

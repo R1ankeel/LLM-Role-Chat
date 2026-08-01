@@ -273,6 +273,11 @@ class RelationshipIssue(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_mention_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Deterministic salience counter (docs/relations.md §7.4): grows each round
+    # the issue is absent from context/analysis, reset to 0 on mention.
+    rounds_since_last_mention: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
 
     relationship: Mapped["CharacterRelationship"] = relationship(
         back_populates="issues"

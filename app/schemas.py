@@ -554,6 +554,7 @@ class RelationshipIssueRead(BaseModel):
     created_at: datetime
     resolved_at: Optional[datetime] = None
     last_mention_round_id: Optional[str] = None
+    rounds_since_last_mention: int = 0
 
 
 class RelationshipIssueResolve(BaseModel):

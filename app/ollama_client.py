@@ -807,6 +807,7 @@ async def _generate_once(
     behavior_drivers_block: str = "",
     open_issues_block: str = "",
     built_context: schemas.BuiltContext | None = None,
+    proactive_boost: float = 0.0,
 ) -> tuple[str, str, bool, int, list[str]]:
     """One LLM call + isolation sanitize. Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list)."""
     api_mode = "chat" if settings.use_chat_api else "generate"
@@ -874,11 +875,18 @@ async def _generate_once(
     vocabulary_block = build_vocabulary_block(character, prior_replies)
 
     # Scene advancement block — breaks stagnation loops (Phase 6)
+    # Weighted proactive boost (Sprint 1 п.7, docs/relations.md §7.4) raises the
+    # *probability* of a proactive action when the character has salient open
+    # issues; it never guarantees one. Default 0.0 keeps the old behavior.
     scene_advancement_block = ""
     if settings.scene_advancement_enabled:
+        proactive_chance = min(
+            settings.proactive_action_chance + max(0.0, float(proactive_boost)),
+            1.0,
+        )
         proactive_action = (
             stagnation_rounds == 0
-            and random.random() < settings.proactive_action_chance
+            and random.random() < proactive_chance
         )
         scene_advancement_block = build_scene_advancement_block(
             stagnation_rounds,
@@ -1204,6 +1212,7 @@ async def generate(
     behavior_drivers_block: str = "",
     open_issues_block: str = "",
     built_context: schemas.BuiltContext | None = None,
+    proactive_boost: float = 0.0,
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1287,6 +1296,7 @@ async def generate(
             behavior_drivers_block=behavior_drivers_block,
             open_issues_block=open_issues_block,
             built_context=built_context,
+            proactive_boost=proactive_boost,
         )
 
         if not isolation_ok:

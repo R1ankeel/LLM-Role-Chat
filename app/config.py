@@ -218,6 +218,16 @@ class Settings(BaseSettings):
     relationship_issue_near_dup_jaccard: float = Field(
         default=0.7, alias="RELATIONSHIP_ISSUE_NEAR_DUP_JACCARD"
     )
+    # Weighted deterministic proactive boost (Sprint 1 item 7, docs/relations.md §7.4)
+    issue_proactive_coeff: float = Field(
+        default=0.15, alias="ISSUE_PROACTIVE_COEFF"
+    )
+    issue_proactive_boost_cap: float = Field(
+        default=0.35, alias="ISSUE_PROACTIVE_BOOST_CAP"
+    )
+    issue_salience_decay_rounds: int = Field(
+        default=5, alias="ISSUE_SALIENCE_DECAY_ROUNDS"
+    )
 
     relationship_analyzer_prompt: str = Field(
         default=(
