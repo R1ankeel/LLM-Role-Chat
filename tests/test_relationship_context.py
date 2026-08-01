@@ -129,12 +129,57 @@ class TestPairContextFaceToFace:
         assert ctx["any_evidence"] is False
 
 
+class TestPairContextHearsay:
+    """Third party telling the source about the target is hearsay (§12)."""
+
+    def _ctx_for(self, snap, source_id=1, target_id=2):
+        locations = {1: "hall", 2: "hall", 3: "hall", PLAYER_ID: "hall"}
+        return _build_pair_relationship_context(
+            [snap], _char(source_id, NAMES[source_id], "hall"),
+            _char(target_id, NAMES[target_id], "hall"),
+            NAMES, locations, player_id=PLAYER_ID,
+        )
+
+    def test_direct_address_about_target_is_hearsay(self):
+        # C addresses A and talks about B -> second-hand report for A->B.
+        snap = _snap("character", 3, "Слушай, B вчера обманул всех", targets=[1])
+        ctx = self._ctx_for(snap)
+        assert ctx["hearsay"] is True
+        assert ctx["hearsay_source"] == 3
+        assert ctx["any_evidence"] is True
+        assert ctx["direct_interaction"] is False
+        assert ctx["observed_target"] is False
+        assert "[слух от C]" in ctx["excerpt"]
+
+    def test_non_addressed_report_is_observed_not_hearsay(self):
+        # C talks about B in A's presence but does not address A.
+        snap = _snap("character", 3, "B вчера обманул всех", location="hall")
+        ctx = self._ctx_for(snap)
+        assert ctx["hearsay"] is False
+        assert ctx["hearsay_source"] is None
+        assert ctx["observed_target"] is True
+        assert "[слух от C]" not in ctx["excerpt"]
+
+    def test_unrelated_third_party_is_not_hearsay(self):
+        # C addresses A but does not mention B -> no evidence for A->B.
+        snap = _snap("character", 3, "Слушай, погода сегодня отличная", targets=[1])
+        ctx = self._ctx_for(snap)
+        assert ctx["hearsay"] is False
+        assert ctx["any_evidence"] is False
+
+
 class TestEvidenceMode:
     def test_direct(self):
         assert _evidence_mode({"direct_interaction": True, "observed_target": True}) == "direct"
 
     def test_observed(self):
         assert _evidence_mode({"direct_interaction": False, "observed_target": True}) == "observed"
+
+    def test_hearsay(self):
+        assert _evidence_mode({"hearsay": True, "direct_interaction": False, "observed_target": False}) == "hearsay"
+
+    def test_direct_overrides_hearsay(self):
+        assert _evidence_mode({"hearsay": True, "direct_interaction": True}) == "direct"
 
     def test_none(self):
         assert _evidence_mode({"direct_interaction": False, "observed_target": False}) == "none"
@@ -173,6 +218,41 @@ class TestConstrainPairDelta:
             {"direct_interaction": False, "observed_target": False},
         )
         assert out is None
+
+    def test_hearsay_caps_and_keeps_type(self):
+        from app.config import settings
+
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(),
+            rel,
+            {"hearsay": True, "direct_interaction": False, "observed_target": False},
+        )
+        assert out is not None
+        assert out.delta_affection == settings.relationship_hearsay_cap
+        assert out.delta_attraction == settings.relationship_hearsay_cap
+        assert out.relationship_type == "нейтральное"
+
+    def test_hearsay_uses_effective_cap(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(),
+            rel,
+            {"hearsay": True, "hearsay_effective_cap": 2},
+        )
+        assert out is not None
+        assert out.delta_affection == 2
+        assert out.relationship_type == "нейтральное"
+
+    def test_hearsay_cap_floor_is_one(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(),
+            rel,
+            {"hearsay": True, "hearsay_effective_cap": 0},
+        )
+        assert out is not None
+        assert out.delta_affection == 1
 
     def test_direct_is_not_capped(self):
         rel = SimpleNamespace(relationship_type="нейтральное")
@@ -248,3 +328,30 @@ class TestAnalyzerPrompt:
         )
         assert "взаимодействовали напрямую" in prompt
         assert "-20..20" in prompt
+
+    def test_prompt_hearsay_small_deltas(self):
+        from app.config import settings
+
+        prompt = _build_analyzer_prompt(
+            source_name="A",
+            target_name="B",
+            source_character_id=1,
+            target_character_id=2,
+            current_type="нейтральное",
+            affection=50,
+            trust=50,
+            attraction=0,
+            resentment=0,
+            jealousy=0,
+            recent_events_text="",
+            round_text="[слух от C] C -> A: B обманул всех",
+            interaction_summary="C -> A",
+            direct_interaction=False,
+            observed_target=False,
+            hearsay=True,
+            hearsay_cap=3,
+        )
+        assert "со слов третьего лица" in prompt
+        assert "это слух" in prompt
+        assert f"|дельты| <= {settings.relationship_hearsay_cap}" in prompt
+        assert "relationship_type НЕ менять" in prompt

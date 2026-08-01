@@ -19,6 +19,7 @@ from . import perception
 from . import relationship_analyzer
 from . import relationship_service
 from . import schemas
+from .relationship_interpreter import interpret as _interpret_rel, TRUST_LOW
 from .config import settings
 from .context_builder import ContextBuilder
 from .database import AsyncSessionLocal
@@ -80,7 +81,7 @@ def _compute_epistemic_evidence(
             character_locations,
             player_id=player_id,
         )
-        if _evidence_mode(ctx) != "none":
+        if _evidence_mode(ctx) in ("direct", "observed"):
             evidenced.add(other.id)
     return evidenced
 
@@ -964,6 +965,30 @@ async def _analyze_and_update_relationships(
                         player_id=player_id,
                     )
 
+                    # Deterministic hearsay reliability (§12): resolve the
+                    # effective delta cap from stored edges (trust in the
+                    # teller, teller->target valence). Stored on pair_ctx so
+                    # both the batch path and the per-pair fallback apply it.
+                    if (
+                        pair_ctx.get("hearsay")
+                        and pair_ctx.get("hearsay_source") is not None
+                    ):
+                        try:
+                            pair_ctx["hearsay_effective_cap"] = (
+                                await _compute_hearsay_effective_cap(
+                                    db,
+                                    source_char.id,
+                                    pair_ctx["hearsay_source"],
+                                    target_char.id,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "[chat_id=%d] Failed to compute hearsay cap "
+                                "for %d->%d: %s",
+                                chat_id, source_char.id, target_char.id, exc,
+                            )
+
                     if (
                         not pair_ctx["any_evidence"]
                         and settings.relationship_analyze_only_interacting_pairs
@@ -1056,6 +1081,12 @@ async def _analyze_and_update_relationships(
                         "recent_events_text": p["recent_events_text"],
                         "open_issues": p["open_issues"],
                         "excerpt": p["pair_ctx"]["excerpt"],
+                        "hearsay_cap": p["pair_ctx"].get("hearsay_effective_cap"),
+                        "hearsay_source_name": (
+                            character_names.get(p["pair_ctx"]["hearsay_source"], "")
+                            if p["pair_ctx"].get("hearsay_source") is not None
+                            else ""
+                        ),
                     }
                     for p in pairs
                 ]
@@ -1173,6 +1204,8 @@ async def _run_per_pair_analysis(
             interaction_summary=p["pair_ctx"]["interaction_summary"],
             direct_interaction=p["pair_ctx"]["direct_interaction"],
             observed_target=p["pair_ctx"]["observed_target"],
+            hearsay=p["pair_ctx"].get("hearsay", False),
+            hearsay_cap=p["pair_ctx"].get("hearsay_effective_cap"),
             open_issues=p["open_issues"],
         )
         for delta in deltas:
@@ -1228,6 +1261,8 @@ def _build_pair_relationship_context(
     summary: list[str] = []
     direct_interaction = False
     observed_target = False
+    hearsay = False
+    hearsay_source = None
 
     for snap in round_snapshots:
         role = (snap.get("role") or "").strip().lower()
@@ -1285,12 +1320,25 @@ def _build_pair_relationship_context(
             involves_target = (target.id in targets) or _text_mentions_name(content, target_name)
             if not involves_target:
                 continue
-            observed_target = True
+            # Hearsay (§12): the author X directly addresses the source and
+            # talks about the target — a second-hand report, not a direct
+            # observation of the target's behavior.
+            if source.id in targets and _text_mentions_name(content, target_name):
+                hearsay = True
+                hearsay_source = author_id
+            else:
+                observed_target = True
 
         speaker = character_names.get(author_id, f"ID:{author_id}")
         addressee_names = [character_names.get(t, f"ID:{t}") for t in targets]
         addressee_text = ", ".join(addressee_names) if addressee_names else "(всем)"
-        lines.append(f"{speaker} (id={author_id}) -> {addressee_text}: {content}")
+        if hearsay:
+            lines.append(
+                f"[слух от {speaker}] {speaker} (id={author_id}) -> "
+                f"{addressee_text}: {content}"
+            )
+        else:
+            lines.append(f"{speaker} (id={author_id}) -> {addressee_text}: {content}")
         summary.append(f"{speaker} -> {addressee_text}")
 
     excerpt = "\n".join(lines[-max_lines:])
@@ -1299,20 +1347,26 @@ def _build_pair_relationship_context(
         "interaction_summary": "\n".join(summary[:max_lines]) or "взаимодействия не было",
         "direct_interaction": direct_interaction,
         "observed_target": observed_target,
+        "hearsay": hearsay,
+        "hearsay_source": hearsay_source,
         "any_evidence": bool(excerpt.strip()),
     }
 
 
 def _evidence_mode(pair_ctx: dict) -> str:
-    """Deterministic evidence mode for a pair: direct | observed | none.
+    """Deterministic evidence mode for a pair: direct | observed | hearsay | none.
 
-    ``none`` means the source had no perceivable evidence about the target
-    this round; every LLM-proposed delta for such a pair is rejected (§8.3).
+    Precedence: direct > observed > hearsay > none. ``hearsay`` means the
+    source only heard a second-hand report about the target (§12). ``none``
+    means the source had no perceivable evidence about the target this round;
+    every LLM-proposed delta for such a pair is rejected (§8.3).
     """
     if pair_ctx.get("direct_interaction"):
         return "direct"
     if pair_ctx.get("observed_target"):
         return "observed"
+    if pair_ctx.get("hearsay"):
+        return "hearsay"
     return "none"
 
 
@@ -1361,6 +1415,8 @@ def _constrain_pair_delta(
       the type may change (the transition graph is validated in apply_delta).
     - mode ``observed``: deltas capped to relationship_reflection_delta_cap and
       the relationship type is frozen (unless configured otherwise).
+    - mode ``hearsay``: deltas capped to the deterministic effective hearsay
+      cap (§12), always weaker than direct/observed, and the type is frozen.
     """
     mode = _evidence_mode(pair_ctx)
     if mode == "none":
@@ -1371,7 +1427,13 @@ def _constrain_pair_delta(
         return None
     if mode == "direct":
         return delta
-    cap = settings.relationship_reflection_delta_cap
+    if mode == "hearsay":
+        cap = pair_ctx.get("hearsay_effective_cap")
+        if cap is None:
+            cap = settings.relationship_hearsay_cap
+        cap = max(1, int(cap))
+    else:
+        cap = settings.relationship_reflection_delta_cap
     updates: dict = {
         "delta_affection": max(-cap, min(cap, delta.delta_affection)),
         "delta_trust": max(-cap, min(cap, delta.delta_trust)),
@@ -1385,6 +1447,61 @@ def _constrain_pair_delta(
     ):
         updates["relationship_type"] = rel.relationship_type
     return delta.model_copy(update=updates)
+
+
+# ---------------------------------------------------------------------------
+# Hearsay reliability (docs/relations.md §12, Sprint 2 item 12)
+# ---------------------------------------------------------------------------
+def _hearsay_effective_cap(
+    *,
+    trust: int | None,
+    hostility_high: bool,
+    base_cap: int,
+) -> int:
+    """Deterministic hearsay cap: LLM cannot grade a rumor's reliability.
+
+    ``trust`` is the source's trust in the teller (``None`` when no edge
+    exists → treat as neutral). A hostile teller->target valence makes the
+    report a gossip and lowers the cap further. Floor is 1 so the delta stays
+    non-zero (weak but allowed).
+    """
+    cap = max(1, int(base_cap))
+    if trust is not None and trust < TRUST_LOW:
+        cap = max(1, int(cap / 2))
+    if hostility_high:
+        cap = max(1, int(cap * 0.7))
+    return cap
+
+
+async def _compute_hearsay_effective_cap(
+    db: AsyncSession,
+    source_id: int,
+    teller_id: int,
+    target_id: int,
+) -> int:
+    """Resolve the deterministic hearsay cap for pair source -> target (§12).
+
+    - ``trust(source -> teller)``: the main reliability factor; low trust
+      halves the cap.
+    - ``valence(teller -> target)``: hostile (resentment/jealousy-derived)
+      halves it further via the 0.7 gossip multiplier.
+    Missing edges are treated as neutral (no penalty).
+    """
+    trust = None
+    rel_teller = await relationship_service.get_relationship(db, source_id, teller_id)
+    if rel_teller is not None:
+        trust = int(getattr(rel_teller, "trust", 50) or 50)
+
+    hostility_high = False
+    rel_valence = await relationship_service.get_relationship(db, teller_id, target_id)
+    if rel_valence is not None:
+        hostility_high = _interpret_rel(rel_valence).hostility == "high"
+
+    return _hearsay_effective_cap(
+        trust=trust,
+        hostility_high=hostility_high,
+        base_cap=settings.relationship_hearsay_cap,
+    )
 
 
 async def process_user_message(

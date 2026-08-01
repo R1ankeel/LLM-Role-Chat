@@ -53,13 +53,23 @@ def _build_analyzer_prompt(
     interaction_summary: str = "",
     direct_interaction: bool = False,
     observed_target: bool = False,
+    hearsay: bool = False,
+    hearsay_cap: int | None = None,
     open_issues_text: str = "",
 ) -> str:
     valid_types = ", ".join(settings.relationship_valid_types)
     transitions_text = _format_transitions_for_prompt()
     reflection_cap = settings.relationship_reflection_delta_cap
 
-    if not direct_interaction and not observed_target:
+    if hearsay and not direct_interaction and not observed_target:
+        cap = max(1, int(hearsay_cap or settings.relationship_hearsay_cap))
+        delta_hint = (
+            f"{source_name} узнал(а) о {target_name} ТОЛЬКО со слов третьего лица — "
+            f"это слух, а не прямое наблюдение. Допустимы только очень малые дельты "
+            f"(|дельты| <= {cap}), relationship_type НЕ менять."
+        )
+        delta_range = f"{-cap}..{cap}"
+    elif not direct_interaction and not observed_target:
         delta_hint = (
             f"{source_name} и {target_name} в этом раунде НЕ взаимодействовали, "
             f"и {source_name} не получал(а) никаких сведений о {target_name}. "
@@ -276,6 +286,8 @@ async def analyze_relationships(
     interaction_summary: str = "",
     direct_interaction: bool = False,
     observed_target: bool = False,
+    hearsay: bool = False,
+    hearsay_cap: int | None = None,
     open_issues: list[dict] | None = None,
 ) -> list[RelationshipDelta]:
     analyzer_model = settings.relationship_analyzer_model or model_name
@@ -296,6 +308,8 @@ async def analyze_relationships(
         interaction_summary=interaction_summary,
         direct_interaction=direct_interaction,
         observed_target=observed_target,
+        hearsay=hearsay,
+        hearsay_cap=hearsay_cap,
         open_issues_text=_format_open_issues(open_issues or []),
     )
 
@@ -339,11 +353,12 @@ def _build_batch_prompt(
         scene_text: compressed social scene (who is where, who talked to whom).
         pairs: list of per-pair dicts, each with keys:
             source_name, target_name, source_id, target_id,
-            mode ("direct" | "observed"),
+            mode ("direct" | "observed" | "hearsay"),
             current_type, affection, trust, attraction, resentment, jealousy,
             interaction_summary, recent_events_text,
             open_issues (list of {"id", "issue_type", "text"}),
-            excerpt.
+            excerpt,
+            hearsay_cap (optional, hearsay mode), hearsay_source_name (optional).
     """
     valid_types = ", ".join(settings.relationship_valid_types)
     transitions_text = _format_transitions_for_prompt()
@@ -366,6 +381,15 @@ def _build_batch_prompt(
         elif mode == "observed":
             mode_note = (
                 f"только наблюдение — допустимы малые дельты (±{reflection_cap}), "
+                "relationship_type НЕ менять"
+            )
+        elif mode == "hearsay":
+            hearsay_cap = max(1, int(p.get("hearsay_cap") or settings.relationship_hearsay_cap))
+            hearsay_source = p.get("hearsay_source_name") or "третье лицо"
+            mode_note = (
+                f"слухи от {hearsay_source} — {p['source_name']} слышал(а) о "
+                f"{p['target_name']} со слов третьего лица, это НЕ прямое наблюдение; "
+                f"допустимы очень малые дельты (|дельты| <= {hearsay_cap}), "
                 "relationship_type НЕ менять"
             )
         else:

@@ -246,6 +246,13 @@ class Settings(BaseSettings):
     relationship_epistemic_max: int = Field(
         default=8, alias="RELATIONSHIP_EPISTEMIC_MAX"
     )
+    # Hearsay (Sprint 2 item 12, docs/relations.md §12): second-hand reports.
+    # Hearsay is always weaker than direct/observed evidence — the per-round
+    # delta cap (deterministic reliability lowers it further: low trust in the
+    # teller halves it, a hostile teller->target valence cuts it by 0.7).
+    relationship_hearsay_cap: int = Field(
+        default=3, alias="RELATIONSHIP_HEARSAY_CAP"
+    )
 
     relationship_analyzer_prompt: str = Field(
         default=(

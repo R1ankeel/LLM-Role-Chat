@@ -11,8 +11,8 @@ from app.relationship_analyzer import (
 )
 
 
-def _pair(mode: str = "direct", source_id: int = 1, target_id: int = 2) -> dict:
-    return {
+def _pair(mode: str = "direct", source_id: int = 1, target_id: int = 2, **extra) -> dict:
+    pair = {
         "source_name": "A",
         "target_name": "B",
         "source_id": source_id,
@@ -29,6 +29,8 @@ def _pair(mode: str = "direct", source_id: int = 1, target_id: int = 2) -> dict:
         "open_issues": [],
         "excerpt": "A (id=1) -> B: привет",
     }
+    pair.update(extra)
+    return pair
 
 
 class TestBuildBatchPrompt:
@@ -56,6 +58,20 @@ class TestBuildBatchPrompt:
         assert "только наблюдение" in prompt
         assert f"±{settings.relationship_reflection_delta_cap}" in prompt
         assert "relationship_type НЕ менять" in prompt
+
+    def test_hearsay_mode_hint(self):
+        prompt = _build_batch_prompt(
+            "сцена",
+            [_pair(mode="hearsay", hearsay_cap=3, hearsay_source_name="C")],
+        )
+        assert "слухи от C" in prompt
+        assert "|дельты| <= 3" in prompt
+        assert "relationship_type НЕ менять" in prompt
+
+    def test_hearsay_mode_hint_defaults(self):
+        prompt = _build_batch_prompt("сцена", [_pair(mode="hearsay")])
+        assert "третье лицо" in prompt
+        assert f"<= {settings.relationship_hearsay_cap}" in prompt
 
     def test_issues_instruction_and_json_schema(self):
         prompt = _build_batch_prompt("сцена", [_pair()])
