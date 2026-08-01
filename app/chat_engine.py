@@ -6,6 +6,7 @@ import logging
 import random
 from collections.abc import AsyncIterator
 from datetime import datetime
+from types import SimpleNamespace
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from . import relationship_service
 from . import schemas
 from .config import settings
 from .context_builder import ContextBuilder
+from .database import AsyncSessionLocal
 from .context_state import ctx_state
 from .repetition_detector import analyze_response
 from .role_isolation import get_other_character_names
@@ -648,10 +650,22 @@ async def process_user_message_streaming(
 
     # Relationship analysis hook (non-blocking, background)
     if settings.relationship_analyzer_enabled:
+        round_text = "\n".join(
+            f"{m.character.name if getattr(m, 'character', None) else 'Игрок'}: {m.content}"
+            for m in round_messages
+        )
+        character_snapshots = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "location": getattr(c, "location", "") or "",
+            }
+            for c in characters
+        ]
         asyncio.create_task(
             _analyze_and_update_relationships(
-                client, db, chat_id, chat.model_name,
-                round_messages, characters, character_names, scene_state,
+                client, chat_id, chat.model_name,
+                round_text, character_snapshots,
             )
         )
 
@@ -733,77 +747,78 @@ async def process_user_message_streaming(
 
 async def _analyze_and_update_relationships(
     client: httpx.AsyncClient,
-    db: AsyncSession,
     chat_id: int,
     model_name: str,
-    round_messages: list,
-    characters: list,
-    character_names: dict[int, str],
-    scene_state,
+    round_text: str,
+    character_snapshots: list[dict],
 ) -> None:
-    """Background task: analyze relationships for all character pairs (including player) and apply deltas."""
+    """Background task: analyze relationships for all character pairs (including player) and apply deltas.
+
+    Opens its own DB session instead of borrowing the caller's, so the
+    connection is always returned to the pool when the task finishes.
+    """
     try:
-        # Include player character in relationship analysis
-        all_chars = list(characters)
-        player = await crud.get_player_character(db, chat_id)
-        if player:
-            all_chars.append(player)
-
-        character_locations_local = {
-            c.id: getattr(c, "location", "") or "" for c in all_chars
-        }
-        char_name_by_id = {c.id: c.name for c in all_chars}
-
-        round_text = "\n".join(
-            f"{m.character.name if hasattr(m, 'character') and m.character else 'Игрок'}: {m.content}"
-            for m in round_messages
-        )
-
-        for source_char in all_chars:
-            for target_char in all_chars:
-                if source_char.id == target_char.id:
-                    continue
-
-                rel = await relationship_service.get_relationship(
-                    db, source_char.id, target_char.id,
+        async with AsyncSessionLocal() as db:
+            # Rebuild lightweight character objects from precomputed snapshots
+            all_chars = [
+                SimpleNamespace(
+                    id=snap["id"],
+                    name=snap["name"],
+                    location=snap.get("location") or "",
                 )
+                for snap in character_snapshots
+            ]
 
-                if rel is None:
-                    rel = await relationship_service.get_or_create_relationship(
-                        db, chat_id, source_char.id, target_char.id,
+            # Include player character in relationship analysis
+            player = await crud.get_player_character(db, chat_id)
+            if player:
+                all_chars.append(player)
+
+            for source_char in all_chars:
+                for target_char in all_chars:
+                    if source_char.id == target_char.id:
+                        continue
+
+                    rel = await relationship_service.get_relationship(
+                        db, source_char.id, target_char.id,
                     )
 
-                recent_events = await relationship_service.get_recent_events(
-                    db, rel, limit=settings.relationship_max_events_in_prompt,
-                )
-                events_text = "\n".join(
-                    f"  - {e.description}" for e in recent_events if e.description
-                )
+                    if rel is None:
+                        rel = await relationship_service.get_or_create_relationship(
+                            db, chat_id, source_char.id, target_char.id,
+                        )
 
-                deltas = await relationship_analyzer.analyze_relationships(
-                    client=client,
-                    model_name=model_name,
-                    source_name=source_char.name,
-                    target_name=target_char.name,
-                    current_type=rel.relationship_type,
-                    affection=rel.affection,
-                    trust=rel.trust,
-                    attraction=rel.attraction,
-                    resentment=rel.resentment,
-                    jealousy=rel.jealousy,
-                    recent_events_text=events_text,
-                    round_text=round_text,
-                    source_character_id=source_char.id,
-                    target_character_id=target_char.id,
-                )
-
-                for delta in deltas:
-                    await relationship_service.apply_delta(
-                        db, delta, chat_id,
-                        round_id=f"round_{chat_id}_{datetime.utcnow().isoformat()}",
+                    recent_events = await relationship_service.get_recent_events(
+                        db, rel, limit=settings.relationship_max_events_in_prompt,
+                    )
+                    events_text = "\n".join(
+                        f"  - {e.description}" for e in recent_events if e.description
                     )
 
-        logger.info("[chat_id=%d] Relationship analysis complete (incl. player)", chat_id)
+                    deltas = await relationship_analyzer.analyze_relationships(
+                        client=client,
+                        model_name=model_name,
+                        source_name=source_char.name,
+                        target_name=target_char.name,
+                        current_type=rel.relationship_type,
+                        affection=rel.affection,
+                        trust=rel.trust,
+                        attraction=rel.attraction,
+                        resentment=rel.resentment,
+                        jealousy=rel.jealousy,
+                        recent_events_text=events_text,
+                        round_text=round_text,
+                        source_character_id=source_char.id,
+                        target_character_id=target_char.id,
+                    )
+
+                    for delta in deltas:
+                        await relationship_service.apply_delta(
+                            db, delta, chat_id,
+                            round_id=f"round_{chat_id}_{datetime.utcnow().isoformat()}",
+                        )
+
+            logger.info("[chat_id=%d] Relationship analysis complete (incl. player)", chat_id)
     except Exception:
         logger.exception("[chat_id=%d] Relationship analysis failed", chat_id)
 

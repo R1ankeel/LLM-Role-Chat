@@ -73,9 +73,7 @@ async def _consolidation_scheduler(app: FastAPI):
             if job:
                 # Fire and forget the actual processing
                 asyncio.create_task(
-                    task_queue.memory_job_queue.run_job(
-                        job, memory_service._process_consolidation_job
-                    )
+                    task_queue.memory_job_queue.run_job(job)
                 )
         except asyncio.CancelledError:
             break
