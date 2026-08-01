@@ -205,6 +205,20 @@ class Settings(BaseSettings):
     relationship_max_pair_context_lines: int = Field(
         default=20, alias="RELATIONSHIP_MAX_PAIR_CONTEXT_LINES"
     )
+    # Open Issues (Sprint 1 items 5-6, docs/relations.md §7, §14)
+    relationship_issues_enabled: bool = Field(
+        default=True, alias="RELATIONSHIP_ISSUES_ENABLED"
+    )
+    relationship_issue_text_max: int = Field(
+        default=200, alias="RELATIONSHIP_ISSUE_TEXT_MAX"
+    )
+    relationship_max_issues_in_prompt: int = Field(
+        default=3, alias="RELATIONSHIP_MAX_ISSUES_IN_PROMPT"
+    )
+    relationship_issue_near_dup_jaccard: float = Field(
+        default=0.7, alias="RELATIONSHIP_ISSUE_NEAR_DUP_JACCARD"
+    )
+
     relationship_analyzer_prompt: str = Field(
         default=(
             "Проанализируй раунд ролевой игры ниже и определи, как меняются "

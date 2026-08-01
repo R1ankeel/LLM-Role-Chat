@@ -437,6 +437,40 @@ class MemoryJobRead(BaseModel):
 
 
 # ----------------------- Character Relationships -----------------------
+# Whitelist of issue types (docs/relations.md §7.1) — never a free-form string.
+IssueType = Literal[
+    "broken_promise",
+    "debt",
+    "unfulfilled_request",
+    "lie",
+    "unresolved_conflict",
+    "suspicion",
+    "hidden_secret",
+    "missing_apology",
+    "unreturned_favor",
+    "emotional_grievance",
+]
+
+ISSUE_TYPES = frozenset(IssueType.__args__)
+
+
+class IssueDelta(BaseModel):
+    """Issue create/resolve proposal. Pair attribution is mandatory (§7.2).
+
+    ``source_character_id`` + ``target_character_id`` resolve to a single
+    relationship edge; the service never guesses the pair from the text.
+    """
+
+    source_character_id: int
+    target_character_id: int
+    action: Literal["create", "resolve"] = "create"
+    issue_type: Optional[IssueType] = None
+    text: str = ""
+    importance: int = Field(default=5, ge=1, le=10)
+    issue_id: Optional[int] = None
+    reason: str = ""
+
+
 class RelationshipDelta(BaseModel):
     """Структурированный дельта-выход от LLM для изменения отношений."""
     source_character_id: int
@@ -451,6 +485,7 @@ class RelationshipDelta(BaseModel):
     reason: str = ""
     importance: int = Field(default=5, ge=1, le=10)
     update_description: bool = False
+    issues: list[IssueDelta] = Field(default_factory=list)
 
     @field_validator("delta_affection", "delta_trust", "delta_attraction",
                      "delta_resentment", "delta_jealousy", mode="after")
@@ -503,6 +538,27 @@ class RelationshipEventRead(BaseModel):
     importance: int = 5
     source_round_id: Optional[str] = None
     timestamp: datetime
+
+
+class RelationshipIssueRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    relationship_id: int
+    issue_type: IssueType
+    text: str
+    importance: int
+    state: Literal["open", "resolved"] = "open"
+    created_round_id: Optional[str] = None
+    resolved_round_id: Optional[str] = None
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+    last_mention_round_id: Optional[str] = None
+
+
+class RelationshipIssueResolve(BaseModel):
+    """Manual resolve of an open issue (docs/relations.md §7.2)."""
+    reason: str = ""
 
 
 # ----------------------- Context Builder (token-aware) -----------------------

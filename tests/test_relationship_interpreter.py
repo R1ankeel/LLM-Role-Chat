@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from app.relationship_interpreter import (
+    OPEN_ISSUE_DERIVED,
     build_behavior_drivers,
     decline_name,
     format_interpretation,
@@ -24,6 +25,10 @@ def _rel(**overrides):
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def _issue(issue_type="lie", text="Борис солгал Ане"):
+    return SimpleNamespace(issue_type=issue_type, text=text)
 
 
 class TestTrustBands:
@@ -118,6 +123,34 @@ class TestDerivedCombinations:
         assert "недоверие + обида" not in interp.derived
         interp2 = interpret(_rel(trust=80, resentment=60))
         assert "недоверие + обида" not in interp2.derived
+
+
+class TestOpenIssues:
+    def test_open_issue_adds_derived_label(self):
+        interp = interpret(_rel(), open_issues=[_issue()])
+        assert OPEN_ISSUE_DERIVED in interp.derived
+
+    def test_empty_open_issues_no_label(self):
+        assert OPEN_ISSUE_DERIVED not in interpret(_rel(), open_issues=[]).derived
+        assert OPEN_ISSUE_DERIVED not in interpret(_rel()).derived
+
+    def test_open_issue_driver_is_tendency(self):
+        drivers = build_behavior_drivers(interpret(_rel(), open_issues=[_issue()]), "Борис")
+        assert any("нерешённом вопросе" in d for d in drivers)
+        assert all("должен" not in d and "обязан" not in d for d in drivers)
+
+    def test_open_issue_driver_ranks_above_neutral(self):
+        # Neutral state + open issue -> the open-issue driver is the only one.
+        drivers = build_behavior_drivers(interpret(_rel(), open_issues=[_issue()]), "Борис")
+        assert drivers and "нерешённом вопросе" in drivers[0]
+
+    def test_format_interpretation_mentions_open_issue(self):
+        text = format_interpretation(interpret(_rel(), open_issues=[_issue()]), "Борис")
+        assert "нерешённый вопрос" in text
+
+    def test_no_numbers_when_open_issue(self):
+        text = format_interpretation(interpret(_rel(), open_issues=[_issue()]), "Борис")
+        assert "=" not in text
 
 
 class TestDeterminism:

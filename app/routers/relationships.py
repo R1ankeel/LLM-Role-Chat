@@ -1,9 +1,13 @@
 """API endpoints for character relationships."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import crud
+from .. import models
 from .. import schemas
 from ..database import get_async_db
 from ..relationship_service import (
@@ -13,6 +17,7 @@ from ..relationship_service import (
     get_recent_events,
     list_received_relationships,
     list_relationships_for_character,
+    resolve_issue,
     update_relationship_fields,
 )
 from ..schemas import (
@@ -20,6 +25,8 @@ from ..schemas import (
     CharacterRelationshipUpdate,
     RelationshipDelta,
     RelationshipEventRead,
+    RelationshipIssueRead,
+    RelationshipIssueResolve,
 )
 
 router = APIRouter(tags=["relationships"])
@@ -108,12 +115,64 @@ async def list_relationship_events(
     db: AsyncSession = Depends(get_async_db),
 ):
     """List recent events for a relationship."""
-    from sqlalchemy import select
-    from ..models import CharacterRelationship, RelationshipEvent
-
-    stmt = select(CharacterRelationship).where(CharacterRelationship.id == relationship_id)
+    stmt = select(models.CharacterRelationship).where(models.CharacterRelationship.id == relationship_id)
     result = await db.execute(stmt)
     rel = result.scalar_one_or_none()
     if rel is None:
         raise HTTPException(status_code=404, detail="Отношение не найдено")
     return await get_recent_events(db, rel, limit=20)
+
+
+@router.get(
+    "/chats/{chat_id}/relationships/{source_id}/{target_id}/issues",
+    response_model=list[RelationshipIssueRead],
+)
+async def list_relationship_issues(
+    chat_id: int,
+    source_id: int,
+    target_id: int,
+    state: Literal["open", "resolved", "all"] = "open",
+    db: AsyncSession = Depends(get_async_db),
+):
+    """List issues for a relationship pair (docs/relations.md §7)."""
+    rel = await get_relationship(db, source_id, target_id)
+    if rel is None:
+        raise HTTPException(status_code=404, detail="Отношение не найдено")
+    stmt = select(models.RelationshipIssue).where(
+        models.RelationshipIssue.relationship_id == rel.id,
+    )
+    if state != "all":
+        stmt = stmt.where(models.RelationshipIssue.state == state)
+    stmt = stmt.order_by(
+        models.RelationshipIssue.importance.desc(),
+        models.RelationshipIssue.created_at.desc(),
+        models.RelationshipIssue.id.desc(),
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+@router.post(
+    "/chats/{chat_id}/relationships/{source_id}/{target_id}/issues/{issue_id}/resolve",
+    response_model=RelationshipIssueRead,
+)
+async def resolve_relationship_issue(
+    chat_id: int,
+    source_id: int,
+    target_id: int,
+    issue_id: int,
+    payload: RelationshipIssueResolve,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Resolve an open issue (only if it belongs to this pair, §7.2)."""
+    rel = await get_relationship(db, source_id, target_id)
+    if rel is None:
+        raise HTTPException(status_code=404, detail="Отношение не найдено")
+    issue = await resolve_issue(db, rel, issue_id, reason=payload.reason)
+    if issue is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Открытый issue не найден или не принадлежит этой паре",
+        )
+    await db.commit()
+    return issue

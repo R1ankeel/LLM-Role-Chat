@@ -8,12 +8,33 @@ import httpx
 
 from .config import settings
 from .ollama_client import _invoke_llm, _extract_json_payload
-from .schemas import RelationshipDelta
+from .schemas import IssueDelta, RelationshipDelta
 
 logger = logging.getLogger(__name__)
 
 ANALYSIS_TEMP = 0.3
 MAX_DELTA = settings.relationship_max_delta
+
+_VALID_ISSUE_TYPES = ", ".join(
+    [
+        "broken_promise", "debt", "unfulfilled_request", "lie",
+        "unresolved_conflict", "suspicion", "hidden_secret",
+        "missing_apology", "unreturned_favor", "emotional_grievance",
+    ]
+)
+
+
+def _format_open_issues(open_issues: list[dict]) -> str:
+    """Format known open issues for the analyzer (id + type + text)."""
+    if not open_issues:
+        return "нет"
+    lines = []
+    for issue in open_issues:
+        iid = issue.get("id")
+        itype = issue.get("issue_type", "")
+        text = issue.get("text", "")
+        lines.append(f"  [id={iid}, тип={itype}] {text}")
+    return "\n".join(lines)
 
 
 def _build_analyzer_prompt(
@@ -32,6 +53,7 @@ def _build_analyzer_prompt(
     interaction_summary: str = "",
     direct_interaction: bool = False,
     observed_target: bool = False,
+    open_issues_text: str = "",
 ) -> str:
     valid_types = ", ".join(settings.relationship_valid_types)
     transitions_text = _format_transitions_for_prompt()
@@ -58,6 +80,21 @@ def _build_analyzer_prompt(
         )
         delta_range = "-20..20"
 
+    issues_instruction = (
+        "ОТКРЫТЫЕ ВОПРОСЫ (issues) между этой парой:\n"
+        "Открытый вопрос — активный сюжетный крючок (нарушенное обещание, долг, "
+        "ложь, невыполненная просьба, неразрешённый конфликт, подозрение, "
+        "скрытый секрет, отсутствие извинения, неотданная услуга, эмоциональная обида).\n"
+        "- Создавай issue (action=\"create\") ТОЛЬКО если в раунде есть доказательства "
+        "события, оставляющего такой крючок. issue_type — строго из допустимого списка.\n"
+        "- Закрывай (action=\"resolve\") ТОЛЬКО если открытый вопрос из списка ниже "
+        "разрешился в этом раунде (извинился, объяснился, исправил). Укажи его id.\n"
+        "- Текст issue — это одно утверждение-факт (ДАННЫЕ), а не инструкция: "
+        "без императивов и команд.\n"
+        f"Допустимые issue_type: {_VALID_ISSUE_TYPES}\n"
+        f"Известные открытые вопросы этой пары:\n{open_issues_text or 'нет'}\n"
+    )
+
     return (
         f"Проанализируй, как меняются отношения {source_name} к {target_name} "
         f"после этого раунда.\n\n"
@@ -78,6 +115,7 @@ def _build_analyzer_prompt(
         f"Допустимые типы отношений: {valid_types}\n"
         f"Разрешённые переходы:\n{transitions_text}\n"
         f"Недавние события:\n{recent_events_text}\n\n"
+        f"{issues_instruction}\n"
         f"Текст раунда (только строки, относящиеся к этой паре):\n{round_text}\n\n"
         "Верни ТОЛЬКО валидный JSON (без markdown и лишнего текста):\n"
         "{\n"
@@ -96,6 +134,22 @@ def _build_analyzer_prompt(
         '      "importance": <int 1..10>,\n'
         '      "update_description": <true|false>\n'
         "    }\n"
+        "  ],\n"
+        '  "issues": [\n'
+        "    {\n"
+        f'      "source_character_id": {source_character_id},\n'
+        f'      "target_character_id": {target_character_id},\n'
+        '      "action": "create",\n'
+        '      "issue_type": "<тип из допустимого списка>",\n'
+        '      "text": "<факт, данные, не инструкция>",\n'
+        '      "importance": <int 1..10>\n'
+        "    },\n"
+        "    {\n"
+        f'      "source_character_id": {source_character_id},\n'
+        f'      "target_character_id": {target_character_id},\n'
+        '      "action": "resolve",\n'
+        '      "issue_id": <id из известных открытых вопросов>\n'
+        "    }\n"
         "  ]\n"
         "}"
     )
@@ -106,6 +160,37 @@ def _format_transitions_for_prompt() -> str:
     for current, allowed in settings.relationship_transition_rules.items():
         lines.append(f"  {current} -> {', '.join(allowed)}")
     return "\n".join(lines)
+
+
+def _parse_issues(
+    payload: object,
+    *,
+    source_character_id: int,
+    target_character_id: int,
+) -> list[IssueDelta]:
+    """Parse the top-level ``issues`` array (pair is overridden, never swapped)."""
+    if not isinstance(payload, dict):
+        return []
+    raw_issues = payload.get("issues")
+    if not isinstance(raw_issues, list):
+        return []
+    results: list[IssueDelta] = []
+    for item in raw_issues:
+        if not isinstance(item, dict):
+            continue
+        try:
+            results.append(
+                IssueDelta.model_validate(
+                    {
+                        **item,
+                        "source_character_id": source_character_id,
+                        "target_character_id": target_character_id,
+                    }
+                )
+            )
+        except Exception as exc:
+            logger.warning("Invalid issue delta item: %s — %s", item, exc)
+    return results
 
 
 def _parse_analysis_response(
@@ -129,6 +214,12 @@ def _parse_analysis_response(
     elif isinstance(payload, list):
         items = payload
 
+    issues = _parse_issues(
+        payload,
+        source_character_id=source_character_id,
+        target_character_id=target_character_id,
+    )
+
     results: list[RelationshipDelta] = []
     for item in items:
         if not isinstance(item, dict):
@@ -146,6 +237,21 @@ def _parse_analysis_response(
             results.append(d)
         except Exception as exc:
             logger.warning("Invalid relationship delta item: %s — %s", item, exc)
+
+    if issues:
+        if results:
+            # Per-pair analysis: all issues belong to this edge, attach them to
+            # the first delta so the service applies them once.
+            results[0].issues = issues
+        else:
+            # Issues without any metric delta: still return them.
+            results.append(
+                RelationshipDelta(
+                    source_character_id=source_character_id,
+                    target_character_id=target_character_id,
+                    issues=issues,
+                )
+            )
     return results
 
 
@@ -167,6 +273,7 @@ async def analyze_relationships(
     interaction_summary: str = "",
     direct_interaction: bool = False,
     observed_target: bool = False,
+    open_issues: list[dict] | None = None,
 ) -> list[RelationshipDelta]:
     analyzer_model = settings.relationship_analyzer_model or model_name
 
@@ -186,6 +293,7 @@ async def analyze_relationships(
         interaction_summary=interaction_summary,
         direct_interaction=direct_interaction,
         observed_target=observed_target,
+        open_issues_text=_format_open_issues(open_issues or []),
     )
 
     messages = [

@@ -1,8 +1,9 @@
 """Service layer for character relationship CRUD and delta application."""
 
 import logging
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,14 +19,18 @@ from .models import (
     DEFAULT_TRUST,
     CharacterRelationship,
     RelationshipEvent,
+    RelationshipIssue,
 )
 from .relationship_interpreter import (
     format_interpretation,
     interpret,
     weighted_behavior_drivers,
 )
-from .schemas import RelationshipDelta
-from .prompt_builder import build_behavior_drivers_block as _wrap_drivers_block
+from .schemas import ISSUE_TYPES, IssueDelta, RelationshipDelta
+from .prompt_builder import (
+    build_behavior_drivers_block as _wrap_drivers_block,
+    build_open_issues_block as _wrap_open_issues_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,19 @@ VALID_TYPES = set(settings.relationship_valid_types)
 TRANSITIONS: dict[str, set[str]] = {
     k: set(v) for k, v in settings.relationship_transition_rules.items()
 }
+
+# Prompt-injection markers that invalidate an issue text (§14). Issue text is
+# LLM-produced data that later lands in another LLM's context, so obvious
+# instruction markers are rejected, not silently kept.
+_ISSUE_INSTRUCTION_MARKERS = (
+    "игнорируй",
+    "игнорировать",
+    "ignore",
+    "system:",
+    "developer:",
+    "забудь предыдущие",
+)
+_CTRL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 # ---------------------------------------------------------------------------
@@ -171,12 +189,20 @@ async def apply_delta(
         db, chat_id, delta.source_character_id, delta.target_character_id,
     )
 
+    # Issues are applied regardless of the metric delta importance — each
+    # issue carries its own importance gate (see create_issue).
+    issue_results = await apply_issue_deltas(
+        db, delta.issues, rel=rel, round_id=round_id,
+    )
+
     if delta.importance < settings.relationship_min_importance:
         logger.debug(
             "Skipping relationship delta for %d->%d: importance %d < %d",
             delta.source_character_id, delta.target_character_id,
             delta.importance, settings.relationship_min_importance,
         )
+        if issue_results:
+            await db.commit()
         return rel
 
     old_type = rel.relationship_type
@@ -218,6 +244,8 @@ async def apply_delta(
         )
         # Values are identical to what is already persisted, so there is
         # nothing to write. Do not rollback (it would expire the ORM object).
+        if issue_results:
+            await db.commit()
         return rel
 
     rel.updated_at = datetime.utcnow()
@@ -268,13 +296,17 @@ def format_relationship_for_prompt(
     rel: CharacterRelationship,
     target_name: str,
     events: list[RelationshipEvent],
+    open_issues: Iterable[Any] = (),
 ) -> str:
     """Format one relationship for the generation prompt.
 
     Uses the deterministic interpreter instead of raw metrics: the character
     model gets semantic labels, never numbers (docs/relations.md §4-§5).
+    Open issues (Sprint 1 п.5) bias the interpretation toward an unresolved
+    hook without leaking raw issue text into this block (that is the separate
+    ``<open_issue data>`` block, §14).
     """
-    interp = interpret(rel)
+    interp = interpret(rel, open_issues=open_issues)
     lines = [f"{target_name}: {rel.relationship_type}"]
     text = format_interpretation(interp, target_name)
     if text:
@@ -304,7 +336,8 @@ async def build_relationships_block(
     for rel in rels:
         target_name = all_characters.get(rel.target_character_id, f"ID:{rel.target_character_id}")
         events = await get_recent_events(db, rel, limit=max_events)
-        blocks.append(format_relationship_for_prompt(rel, target_name, events))
+        open_issues = await list_open_issues(db, rel)
+        blocks.append(format_relationship_for_prompt(rel, target_name, events, open_issues=open_issues))
     return "\n".join(blocks)
 
 
@@ -341,9 +374,274 @@ async def build_behavior_drivers_block(
     candidates: list[tuple[int, str]] = []
     for rel in rels:
         target_name = all_characters.get(rel.target_character_id, f"ID:{rel.target_character_id}")
-        interp = interpret(rel)
+        open_issues = await list_open_issues(db, rel)
+        interp = interpret(rel, open_issues=open_issues)
         candidates.extend(weighted_behavior_drivers(interp, target_name))
 
     candidates.sort(key=lambda item: (-item[0], item[1]))
     top = [text for _, text in candidates[:max(0, int(max_drivers))]]
     return _wrap_drivers_block(top)
+
+
+# ---------------------------------------------------------------------------
+# Open Issues (docs/relations.md §7, Sprint 1 items 5-6)
+# ---------------------------------------------------------------------------
+def sanitize_issue_text(text: str, max_len: int | None = None) -> Optional[str]:
+    """Clean/validate LLM-produced issue text (data, not instructions, §14).
+
+    - normalizes whitespace;
+    - strips control / non-printable characters;
+    - rejects text carrying prompt-injection markers (denylist);
+    - truncates to ``RELATIONSHIP_ISSUE_TEXT_MAX``.
+
+    Returns the sanitized text or ``None`` when the text must be rejected.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    cleaned = " ".join(text.split())
+    cleaned = _CTRL_CHARS_RE.sub("", cleaned)
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    for marker in _ISSUE_INSTRUCTION_MARKERS:
+        if marker in lowered:
+            logger.warning("Rejecting issue text with injection marker %r", marker)
+            return None
+    if max_len is None:
+        max_len = settings.relationship_issue_text_max
+    if max_len and len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip()
+    return cleaned or None
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"\w+", text.lower()))
+
+
+def _jaccard(a: str, b: str) -> float:
+    ta = _tokenize(a)
+    tb = _tokenize(b)
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return inter / union if union else 0.0
+
+
+async def _is_near_dup(db: AsyncSession, rel: CharacterRelationship, issue_type: str, text: str) -> bool:
+    stmt = select(RelationshipIssue).where(
+        RelationshipIssue.relationship_id == rel.id,
+        RelationshipIssue.state == "open",
+        RelationshipIssue.issue_type == issue_type,
+    )
+    result = await db.execute(stmt)
+    existing = list(result.scalars().all())
+    threshold = settings.relationship_issue_near_dup_jaccard
+    return any(_jaccard(text, ex.text) >= threshold for ex in existing)
+
+
+async def create_issue(
+    db: AsyncSession,
+    rel: CharacterRelationship,
+    *,
+    issue_type: str,
+    text: str,
+    importance: int = 5,
+    round_id: Optional[str] = None,
+) -> Optional[RelationshipIssue]:
+    """Create an open issue for a specific relationship edge (§7.2).
+
+    Rejects: unknown issue_type (whitelist), unsanitizable text, importance
+    below ``RELATIONSHIP_MIN_IMPORTANCE``, near-duplicate of an existing open
+    issue on the same edge with the same type.
+    """
+    if issue_type not in ISSUE_TYPES:
+        logger.warning(
+            "Unknown issue_type %r for rel %d->%d; rejecting",
+            issue_type, rel.source_character_id, rel.target_character_id,
+        )
+        return None
+    cleaned = sanitize_issue_text(text)
+    if cleaned is None:
+        logger.warning(
+            "Rejected invalid issue text for rel %d->%d",
+            rel.source_character_id, rel.target_character_id,
+        )
+        return None
+    if importance < settings.relationship_min_importance:
+        logger.debug(
+            "Skipping issue for rel %d->%d: importance %d < %d",
+            rel.source_character_id, rel.target_character_id,
+            importance, settings.relationship_min_importance,
+        )
+        return None
+    if await _is_near_dup(db, rel, issue_type, cleaned):
+        logger.debug(
+            "Skipping near-duplicate issue (%s) for rel %d->%d",
+            issue_type, rel.source_character_id, rel.target_character_id,
+        )
+        return None
+
+    issue = RelationshipIssue(
+        relationship_id=rel.id,
+        issue_type=issue_type,
+        text=cleaned,
+        importance=importance,
+        state="open",
+        created_round_id=round_id,
+        last_mention_round_id=round_id,
+    )
+    db.add(issue)
+    await db.flush()
+    return issue
+
+
+async def resolve_issue(
+    db: AsyncSession,
+    rel: CharacterRelationship,
+    issue_id: int,
+    *,
+    reason: str = "",
+    round_id: Optional[str] = None,
+) -> Optional[RelationshipIssue]:
+    """Resolve an open issue, only if it belongs to this relationship edge (§7.2).
+
+    An issue belonging to a different pair is rejected — the service never
+    guesses or reassigns the relationship by text.
+    """
+    issue = await db.get(RelationshipIssue, issue_id)
+    if issue is None:
+        logger.warning(
+            "Resolve failed: issue %d not found for rel %d->%d",
+            issue_id, rel.source_character_id, rel.target_character_id,
+        )
+        return None
+    if issue.relationship_id != rel.id:
+        logger.warning(
+            "Resolve rejected: issue %d belongs to rel %d, not %d->%d (%d)",
+            issue_id, issue.relationship_id,
+            rel.source_character_id, rel.target_character_id, rel.id,
+        )
+        return None
+    if issue.state == "resolved":
+        logger.debug("Issue %d already resolved; skipping", issue_id)
+        return None
+    issue.state = "resolved"
+    issue.resolved_round_id = round_id
+    issue.resolved_at = datetime.utcnow()
+    await db.flush()
+    return issue
+
+
+async def apply_issue_deltas(
+    db: AsyncSession,
+    issues: Iterable[IssueDelta],
+    *,
+    rel: Optional[CharacterRelationship] = None,
+    source_id: Optional[int] = None,
+    target_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
+    round_id: Optional[str] = None,
+) -> list[RelationshipIssue]:
+    """Apply create/resolve issue proposals for one relationship edge.
+
+    Pair attribution is mandatory: each issue's source/target must match the
+    resolved edge, otherwise the action is rejected (analyzers cannot swap the
+    pair). Returns the list of successfully created/resolved issues.
+    """
+    applied: list[RelationshipIssue] = []
+    for issue_delta in issues:
+        if issue_delta.source_character_id != (source_id if source_id is not None else rel.source_character_id if rel else None) or \
+           issue_delta.target_character_id != (target_id if target_id is not None else rel.target_character_id if rel else None):
+            logger.warning(
+                "Issue pair mismatch (%d->%d); rejecting",
+                issue_delta.source_character_id, issue_delta.target_character_id,
+            )
+            continue
+        if rel is None:
+            if source_id is None or target_id is None or chat_id is None:
+                logger.warning("Cannot resolve issue pair: missing relationship context")
+                continue
+            rel = await get_or_create_relationship(db, chat_id, source_id, target_id)
+        if issue_delta.action == "create":
+            issue = await create_issue(
+                db, rel,
+                issue_type=issue_delta.issue_type or "",
+                text=issue_delta.text,
+                importance=issue_delta.importance,
+                round_id=round_id,
+            )
+            if issue is not None:
+                applied.append(issue)
+        elif issue_delta.action == "resolve":
+            if issue_delta.issue_id is None:
+                logger.warning("Resolve action without issue_id; rejecting")
+                continue
+            issue = await resolve_issue(
+                db, rel, issue_delta.issue_id,
+                reason=issue_delta.reason or "",
+                round_id=round_id,
+            )
+            if issue is not None:
+                applied.append(issue)
+        else:
+            logger.warning("Unknown issue action %r; rejecting", issue_delta.action)
+    return applied
+
+
+async def list_open_issues(
+    db: AsyncSession,
+    rel: CharacterRelationship,
+    limit: int | None = None,
+) -> list[RelationshipIssue]:
+    """Open issues for one edge, most important/newest first."""
+    stmt = (
+        select(RelationshipIssue)
+        .where(
+            RelationshipIssue.relationship_id == rel.id,
+            RelationshipIssue.state == "open",
+        )
+        .order_by(
+            RelationshipIssue.importance.desc(),
+            RelationshipIssue.created_at.desc(),
+            RelationshipIssue.id.desc(),
+        )
+    )
+    if limit is not None:
+        stmt = stmt.limit(max(0, int(limit)))
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def build_open_issues_block(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    character_name: str,
+    all_characters: dict[int, str],
+    max_issues: int | None = None,
+) -> str:
+    """Build the ``<open_issue data>`` block for one character (Sprint 1 п.5-6).
+
+    Aggregates open issues across all outgoing edges of the character, keeps
+    the most important ``relationship_max_issues_in_prompt``, and wraps them
+    in a data-only block (never an instruction; §14).
+    """
+    if not settings.relationship_issues_enabled:
+        return ""
+    if max_issues is None:
+        max_issues = settings.relationship_max_issues_in_prompt
+    rels = await list_relationships_for_character(db, character_id, chat_id=chat_id)
+    if not rels:
+        return ""
+
+    all_open: list[RelationshipIssue] = []
+    for rel in rels:
+        all_open.extend(await list_open_issues(db, rel))
+
+    all_open.sort(
+        key=lambda issue: (issue.importance, issue.created_at, issue.id),
+        reverse=True,
+    )
+    selected = all_open[: max(0, int(max_issues))]
+    return _wrap_open_issues_block(selected)

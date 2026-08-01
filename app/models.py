@@ -244,6 +244,41 @@ class MemoryJob(Base):
     correlation_id: Mapped[str] = mapped_column(String(64), index=True)
 
 
+class RelationshipIssue(Base):
+    """Открытый сюжетный крючок между парой (docs/relations.md §7).
+
+    Пара однозначна через ``relationship_id`` (source+target). Text — это
+    ДАННЫЕ сцены, а не инструкция для LLM (§14): ограничен по длине и
+    очищается от маркеров prompt injection при создании.
+    """
+
+    __tablename__ = "relationship_issues"
+    __table_args__ = (
+        Index("ix_rel_issues_rel_state", "relationship_id", "state"),
+        Index("ix_rel_issues_state", "state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    relationship_id: Mapped[int] = mapped_column(
+        ForeignKey("character_relationships.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    issue_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
+    created_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    resolved_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_mention_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    relationship: Mapped["CharacterRelationship"] = relationship(
+        back_populates="issues"
+    )
+
+
 class CharacterRelationship(Base):
     """Динамическое отношение персонажа к другому персонажу (направленное).
 
@@ -287,6 +322,9 @@ class CharacterRelationship(Base):
     chat: Mapped["Chat"] = relationship()
     source_character: Mapped["Character"] = relationship(foreign_keys=[source_character_id])
     target_character: Mapped["Character"] = relationship(foreign_keys=[target_character_id])
+    issues: Mapped[list["RelationshipIssue"]] = relationship(
+        back_populates="relationship", cascade="all, delete-orphan"
+    )
 
 
 class RelationshipEvent(Base):

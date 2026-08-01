@@ -404,6 +404,17 @@ async def process_user_message_streaming(
         logger.warning("[chat_id=%d] Failed to build behavior drivers block: %s", chat_id, exc)
         drivers_blocks = {c.id: "" for c in characters}
 
+    # Open issues data block per NPC (Sprint 1 п.5-6, docs/relations.md §14)
+    open_issues_blocks: dict[int, str] = {}
+    try:
+        for c in characters:
+            open_issues_blocks[c.id] = await relationship_service.build_open_issues_block(
+                db, chat_id, c.id, c.name, character_names,
+            )
+    except Exception as exc:
+        logger.warning("[chat_id=%d] Failed to build open issues block: %s", chat_id, exc)
+        open_issues_blocks = {c.id: "" for c in characters}
+
     # Track prior replies in this round for anti-mimicry (P2)
     prior_replies: list[tuple[str, str]] = []
 
@@ -503,6 +514,7 @@ async def process_user_message_streaming(
                 locations=chat_locations,
                 relationships_block=relationships_blocks.get(current_character.id, ""),
                 behavior_drivers_block=drivers_blocks.get(current_character.id, ""),
+                open_issues_block=open_issues_blocks.get(current_character.id, ""),
                 built_context=built_context,
             ):
                 if event["type"] == "token":
@@ -817,6 +829,10 @@ async def _analyze_and_update_relationships(
             # Only NPCs are sources; targets include the player
             sources = [c for c in all_chars if not getattr(c, "is_player", False)]
 
+            # One round_id per round (docs/relations.md §6; the user-message
+            # anchor is a separate Sprint 1 item, kept here for forward-compat).
+            round_id = f"round_{chat_id}_{datetime.utcnow().isoformat()}"
+
             for source_char in sources:
                 for target_char in all_chars:
                     if source_char.id == target_char.id:
@@ -853,6 +869,16 @@ async def _analyze_and_update_relationships(
                         f"  - {e.description}" for e in recent_events if e.description
                     )
 
+                    open_issues = await relationship_service.list_open_issues(db, rel)
+                    open_issues_payload = [
+                        {
+                            "id": issue.id,
+                            "issue_type": issue.issue_type,
+                            "text": issue.text,
+                        }
+                        for issue in open_issues
+                    ]
+
                     deltas = await relationship_analyzer.analyze_relationships(
                         client=client,
                         model_name=model_name,
@@ -871,13 +897,13 @@ async def _analyze_and_update_relationships(
                         interaction_summary=pair_ctx["interaction_summary"],
                         direct_interaction=pair_ctx["direct_interaction"],
                         observed_target=pair_ctx["observed_target"],
+                        open_issues=open_issues_payload,
                     )
 
                     for delta in deltas:
                         delta = _constrain_pair_delta(delta, rel, pair_ctx)
                         await relationship_service.apply_delta(
-                            db, delta, chat_id,
-                            round_id=f"round_{chat_id}_{datetime.utcnow().isoformat()}",
+                            db, delta, chat_id, round_id=round_id,
                         )
 
             logger.info("[chat_id=%d] Relationship analysis complete", chat_id)
@@ -1212,6 +1238,15 @@ async def regenerate_message_streaming(
     except Exception as exc:
         logger.warning("[chat_id=%d] Failed to build behavior drivers block: %s", chat_id, exc)
 
+    # Open issues data block for this character (Sprint 1 п.5-6)
+    open_issues_block = ""
+    try:
+        open_issues_block = await relationship_service.build_open_issues_block(
+            db, chat_id, character.id, character.name, character_names,
+        )
+    except Exception as exc:
+        logger.warning("[chat_id=%d] Failed to build open issues block: %s", chat_id, exc)
+
     # Presence & prior replies visible to this character
     history_message_ids = [m.id for m in context_messages if m.id is not None]
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
@@ -1299,6 +1334,7 @@ async def regenerate_message_streaming(
             locations=chat_locations,
             relationships_block=relationships_block,
             behavior_drivers_block=drivers_block,
+            open_issues_block=open_issues_block,
             built_context=built_context,
         ):
             if event["type"] == "token":

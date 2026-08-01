@@ -32,6 +32,11 @@ HIDDEN_ATTRACTION_RESENTMENT = 50
 DISTRUST_TRUST = 30
 DISTRUST_RESENTMENT = 50
 
+# Open Issues (docs/relations.md §7.3): an open issue is an active plot hook —
+# a derived label so it outranks base tendencies but stays tone-neutral.
+OPEN_ISSUE_DERIVED = "открытый вопрос"
+OPEN_ISSUE_DRIVER_WEIGHT = 5
+
 
 _VOWELS = frozenset("аеёиоуыэюя")
 
@@ -125,8 +130,10 @@ def interpret(
     Args:
         rel: object exposing affection/trust/attraction/resentment/jealousy
             and relationship_type (ORM CharacterRelationship or a plain stub).
-        open_issues: reserved for Sprint 1 item 5 (Open Issues); currently not
-            used, kept for API forward-compatibility.
+        open_issues: iterable of open issues for this edge (Sprint 1 item 5).
+            Each item only needs to be truthy — the interpreter treats open
+            issues as a signal that an unresolved hook exists, without reading
+            their text (which is untrusted LLM data, see §14).
 
     Returns:
         RelationshipInterpretation with semantic labels and derived combos.
@@ -136,6 +143,8 @@ def interpret(
     attraction = int(getattr(rel, "attraction", 0))
     resentment = int(getattr(rel, "resentment", 0))
     jealousy = int(getattr(rel, "jealousy", 0))
+
+    open_issues = list(open_issues or ())
 
     trust_label = _band(trust, TRUST_LOW, TRUST_HIGH, "low", "medium", "high")
     attachment = _band(affection, AFFECTION_LOW, AFFECTION_HIGH, "low", "medium", "high")
@@ -163,6 +172,8 @@ def interpret(
         derived.append("скрытое влечение")
     if trust < DISTRUST_TRUST and resentment >= DISTRUST_RESENTMENT:
         derived.append("недоверие + обида")
+    if open_issues:
+        derived.append(OPEN_ISSUE_DERIVED)
 
     return RelationshipInterpretation(
         relationship_type=getattr(rel, "relationship_type", "") or "",
@@ -208,6 +219,9 @@ def format_interpretation(
     if "недоверие + обида" in interp.derived:
         parts.append(f"Недоверие и обида к {dat} глубоки.")
 
+    if OPEN_ISSUE_DERIVED in interp.derived:
+        parts.append(f"Между тобой и {dat} остался нерешённый вопрос, и ты к нему мысленно возвращаешься.")
+
     if interp.jealousy == "high":
         parts.append(f"Тебя задевает, когда {target_name} проводит время с другими.")
     elif interp.jealousy == "moderate":
@@ -231,6 +245,7 @@ _DRIVER_WEIGHTS = {
     "болезненная привязанность": 6,
     "недоверие + обида": 6,
     "скрытое влечение": 5,
+    OPEN_ISSUE_DERIVED: OPEN_ISSUE_DRIVER_WEIGHT,
 }
 
 
@@ -252,6 +267,7 @@ def weighted_behavior_drivers(
         "болезненная привязанность": f"Ты держишься за {acc}, но твоя привязанность к {dat} болезненна.",
         "недоверие + обида": f"Недоверие и обида к {dat} глубоки.",
         "скрытое влечение": f"Тебя тянет к {dat}, но ты скрываешь это.",
+        OPEN_ISSUE_DERIVED: f"Ты помнишь о нерешённом вопросе с {dat} и возвращаешься к нему, когда появляется повод.",
     }
     for key, phrase in derived_phrases.items():
         if key in interp.derived:

@@ -8,6 +8,7 @@ from app.relationship_service import (
     apply_delta,
     build_behavior_drivers_block,
     build_relationships_block,
+    create_issue,
     get_or_create_relationship,
     get_relationship,
     get_recent_events,
@@ -351,3 +352,15 @@ class TestBuildBehaviorDriversBlock:
         )
         driver_lines = [ln for ln in block.splitlines() if ln.startswith("- ")]
         assert len(driver_lines) == 2
+
+    async def test_open_issue_feeds_drivers(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        await create_issue(
+            db_session, rel, issue_type="lie",
+            text="Character B солгал Character A", importance=7,
+        )
+        block = await build_behavior_drivers_block(
+            db_session, chat.id, a.id, "Character A", self._names(three_characters),
+        )
+        assert "нерешённом вопросе" in block

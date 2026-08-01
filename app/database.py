@@ -495,9 +495,43 @@ def ensure_schema(db_engine) -> None:
                     {"new": _new_cat, "old": _old_cat},
                 )
 
+        # ----- Open Issues table (docs/relations.md §7.1) -----
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS relationship_issues (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    relationship_id INTEGER NOT NULL REFERENCES character_relationships(id) ON DELETE CASCADE,
+                    issue_type TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    importance INTEGER NOT NULL DEFAULT 5,
+                    state TEXT NOT NULL DEFAULT 'open',
+                    created_round_id TEXT,
+                    resolved_round_id TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at DATETIME,
+                    last_mention_round_id TEXT
+                )
+                """
+            )
+        )
+
         # Indexes AFTER all column migrations
         for ddl in INDEXES:
             conn.execute(text(ddl))
+
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_rel_issues_rel_state "
+                "ON relationship_issues (relationship_id, state)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_rel_issues_state "
+                "ON relationship_issues (state)"
+            )
+        )
 
 
 async def init_db() -> None:
