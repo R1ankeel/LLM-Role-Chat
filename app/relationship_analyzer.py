@@ -56,6 +56,7 @@ def _build_analyzer_prompt(
     hearsay: bool = False,
     hearsay_cap: int | None = None,
     open_issues_text: str = "",
+    third_party_notes: list[str] | None = None,
 ) -> str:
     valid_types = ", ".join(settings.relationship_valid_types)
     transitions_text = _format_transitions_for_prompt()
@@ -105,6 +106,8 @@ def _build_analyzer_prompt(
         f"Известные открытые вопросы этой пары:\n{open_issues_text or 'нет'}\n"
     )
 
+    third_party_text = "\n".join(third_party_notes) if third_party_notes else "нет"
+
     return (
         f"Проанализируй, как меняются отношения {source_name} к {target_name} "
         f"после этого раунда.\n\n"
@@ -126,6 +129,7 @@ def _build_analyzer_prompt(
         f"Разрешённые переходы:\n{transitions_text}\n"
         f"Недавние события:\n{recent_events_text}\n\n"
         f"{issues_instruction}\n"
+        f"Заметки третьих лиц (отношения {target_name} с другими):\n{third_party_text}\n\n"
         f"Текст раунда (только строки, относящиеся к этой паре):\n{round_text}\n\n"
         "Верни ТОЛЬКО валидный JSON (без markdown и лишнего текста):\n"
         "{\n"
@@ -289,6 +293,7 @@ async def analyze_relationships(
     hearsay: bool = False,
     hearsay_cap: int | None = None,
     open_issues: list[dict] | None = None,
+    third_party_notes: list[str] | None = None,
 ) -> list[RelationshipDelta]:
     analyzer_model = settings.relationship_analyzer_model or model_name
 
@@ -311,6 +316,7 @@ async def analyze_relationships(
         hearsay=hearsay,
         hearsay_cap=hearsay_cap,
         open_issues_text=_format_open_issues(open_issues or []),
+        third_party_notes=third_party_notes,
     )
 
     messages = [
@@ -358,7 +364,9 @@ def _build_batch_prompt(
             interaction_summary, recent_events_text,
             open_issues (list of {"id", "issue_type", "text"}),
             excerpt,
-            hearsay_cap (optional, hearsay mode), hearsay_source_name (optional).
+            hearsay_cap (optional, hearsay mode), hearsay_source_name (optional),
+            third_party_notes (optional, list of str, Triadic MVP),
+            trajectory (optional, str, Trajectory §11).
     """
     valid_types = ", ".join(settings.relationship_valid_types)
     transitions_text = _format_transitions_for_prompt()
@@ -395,6 +403,10 @@ def _build_batch_prompt(
         else:
             mode_note = "доказательств нет — пару НЕ включать в ответ"
         open_issues_text = _format_open_issues(p.get("open_issues") or [])
+        third_party_notes = p.get("third_party_notes", [])
+        third_party_text = "\n".join(third_party_notes) if third_party_notes else "нет"
+        trajectory_text = p.get("trajectory", "")
+        trajectory_section = f"  траектория (snapshot-based):\n{trajectory_text}\n" if trajectory_text else ""
         section = (
             f"[ПАРА {i}] {p['source_name']} (id={p['source_id']}) -> "
             f"{p['target_name']} (id={p['target_id']})\n"
@@ -407,6 +419,8 @@ def _build_batch_prompt(
             f"  взаимодействие в раунде: {p['interaction_summary'] or 'нет данных'}\n"
             f"  недавние события:\n{p['recent_events_text'] or '(нет)'}\n"
             f"  известные открытые вопросы этой пары:\n{open_issues_text or 'нет'}\n"
+            f"  заметки третьих лиц:\n{third_party_text}\n"
+            f"{trajectory_section}"
             f"  текст раунда (только строки, относящиеся к паре):\n"
             f"{p['excerpt'] or '(нет)'}"
         )

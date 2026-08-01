@@ -355,3 +355,70 @@ class TestAnalyzerPrompt:
         assert "это слух" in prompt
         assert f"|дельты| <= {settings.relationship_hearsay_cap}" in prompt
         assert "relationship_type НЕ менять" in prompt
+
+
+class TestThirdPartyNotes:
+    """Triadic MVP (§13): third-party notes from current round."""
+
+    def test_third_party_ids_collected_when_target_mentioned(self):
+        # C addresses A about B -> C is third party for A->B pair
+        snap = _snap("character", 3, "B вчера ушел", targets=[1])
+        locations = {1: "hall", 2: "hall", 3: "hall", PLAYER_ID: "hall"}
+        ctx = _build_pair_relationship_context(
+            [snap], _char(1, "A", "hall"), _char(2, "B", "hall"),
+            NAMES, locations, player_id=PLAYER_ID,
+        )
+        assert 3 in ctx["third_party_ids"]
+
+    def test_third_party_ids_when_target_speaks_about_others(self):
+        # B speaks about C -> C is third party for A->B pair
+        snap = _snap("character", 2, "C любит котиков", location="hall")
+        locations = {1: "hall", 2: "hall", 3: "hall", PLAYER_ID: "hall"}
+        ctx = _build_pair_relationship_context(
+            [snap], _char(1, "A", "hall"), _char(2, "B", "hall"),
+            NAMES, locations, player_id=PLAYER_ID,
+        )
+        assert 3 in ctx["third_party_ids"]
+
+    def test_third_party_ids_excludes_source_and_target(self):
+        # A speaks about B -> no third party for A->B (source and target)
+        snap = _snap("character", 1, "B, ты хороший", targets=[2])
+        locations = {1: "hall", 2: "hall", 3: "hall", PLAYER_ID: "hall"}
+        ctx = _build_pair_relationship_context(
+            [snap], _char(1, "A", "hall"), _char(2, "B", "hall"),
+            NAMES, locations, player_id=PLAYER_ID,
+        )
+        assert 1 not in ctx["third_party_ids"]
+        assert 2 not in ctx["third_party_ids"]
+
+    def test_third_party_ids_empty_when_unrelated(self):
+        # C talks about weather, unrelated to A->B
+        snap = _snap("character", 3, "Погода сегодня отличная", location="hall")
+        locations = {1: "hall", 2: "hall", 3: "hall", PLAYER_ID: "hall"}
+        ctx = _build_pair_relationship_context(
+            [snap], _char(1, "A", "hall"), _char(2, "B", "hall"),
+            NAMES, locations, player_id=PLAYER_ID,
+        )
+        assert ctx["third_party_ids"] == []
+
+    def test_analyzer_prompt_includes_third_party_notes(self):
+        prompt = _build_analyzer_prompt(
+            source_name="A",
+            target_name="B",
+            source_character_id=1,
+            target_character_id=2,
+            current_type="нейтральное",
+            affection=50,
+            trust=50,
+            attraction=0,
+            resentment=0,
+            jealousy=0,
+            recent_events_text="",
+            round_text="",
+            interaction_summary="",
+            direct_interaction=False,
+            observed_target=True,
+            third_party_notes=["[третье лицо] B ↔ C: соперники, ревность=60"],
+        )
+        assert "Заметки третьих лиц" in prompt
+        assert "B ↔ C: соперники, ревность=60" in prompt

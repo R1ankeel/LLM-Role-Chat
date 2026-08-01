@@ -1,10 +1,10 @@
   # Система отношений — план v3 (активная социально-драматургическая система)
 
-> Дата: 2026-08-01 · Статус: реализация начата — **Sprint 1, п.1–9 и Sprint 2, п.10–12 реализованы**
+> Дата: 2026-08-01 · Статус: реализация начата — **Sprint 1, п.1–9 и Sprint 2, п.10–14 реализованы**
 > (Interpretation, числа из generation prompt, Behavior Drivers + вставка drivers,
 > Open Issues + data-безопасность, Issue lifecycle, взвешенный proactive boost,
 > Batch analyzer + evidence gating + per-pair fallback, стабильный round_id,
-> MVP epistemic mask, Reciprocity без синхронизации, Hearsay);
+> MVP epistemic mask, Reciprocity без синхронизации, Hearsay, Triadic MVP, Trajectory);
 > остальные пункты — план
 > Примечание: в репозитории есть только `docs/relations.md`; файла `relations(1).md` нет —
 > v3 построен на v2 + замечания финальной постановки.
@@ -53,9 +53,9 @@ LLM Generation               ← получает интерпретацию, dr
 | Analyzer → service (deterministic caps) | ✅ | `apply_delta:158`, `_constrain_pair_delta:995` |
 | MVP epistemic mask | ✅ `<epistemic_mask>` в generation-контекст: B→A только при direct/observed evidence текущего раунда, только интерпретация без чисел; без evidence — «неизвестно» | `relationship_service.build_epistemic_mask_block`, `relationship_interpreter.format_interpretation_from_other`, `chat_engine._compute_epistemic_evidence` (Sprint 2 п.10) |
 | Hearsay | ✅ режим evidence `hearsay` в `_build_pair_relationship_context` + детерминированный cap через trust(source→teller) и valence(teller→target); batch + per-pair gating | `chat_engine.py:_build_pair_relationship_context`, `_evidence_mode`, `_constrain_pair_delta`, `_compute_hearsay_effective_cap`; `tests/test_relationship_hearsay.py` |
-| Triadic | ❌ | `_build_pair_relationship_context:964` |
-| Trajectory | ❌ | — |
-| Event `kind` / snapshot / message_id | ❌ | `models.RelationshipEvent:292` |
+| Triadic | ✅ MVP: `third_party_ids` в `_build_pair_relationship_context` + заметки `[третье лицо] target↔third` в batch/per-pair prompts (только текущий раунд) | `chat_engine.py:_build_pair_relationship_context`, `relationship_analyzer.py:_build_batch_prompt`, `_build_analyzer_prompt`; `tests/test_relationship_context.py::TestThirdPartyNotes` |
+| Trajectory | ✅ snapshot-based: `kind` (llm/decay/manual) + `*_after` + `source_message_ids` + `round_id` в `RelationshipEvent`; `apply_delta`/`update_fields` пишут события; `build_trajectory_block` для batch prompt | `models.RelationshipEvent`, `relationship_service.apply_delta`, `update_relationship_fields`, `build_trajectory_block`, `get_trajectory_events`; `config.relationship_trajectory_window` |
+| Event `kind` / snapshot / message_id | ✅ `kind` (llm/decay/manual), `*_after`, `source_message_ids` (JSON), `round_id` в `RelationshipEvent`; миграция через `ensure_schema` | `models.RelationshipEvent`, `database.ensure_schema` |
 | Детерминированный decay | ❌ | — |
 | Валидация типа в PUT | ❌ (дефект) | `routers/relationships.py:76` |
 
@@ -400,30 +400,42 @@ Pipeline: `LLM → proposed deltas/issues → deterministic validation → relat
 
 ## 11. P1 — Trajectory (snapshot-based, корректна при interleaved events)
 
-**Требование:** нельзя делать `current - sum(last_llm_deltas)` — между LLM-событиями
-могут быть decay/manual-изменения. **Предпочтительный вариант — snapshot в событиях:**
+✅ **Реализовано (Sprint 2 п.14 + Sprint 3 п.15).**
 
-`RelationshipEvent` получает колонки состояния **после** события:
+**Требование:** нельзя делать `current - sum(last_llm_deltas)` — между LLM-событиями
+могут быть decay/manual-изменения. **Реализовано через snapshot в событиях:**
+
+`RelationshipEvent` расширен новыми колонками (`models.py:335`):
 
 ```python
-affection_after, trust_after, attraction_after, resentment_after, jealousy_after
+kind                   # "llm" | "decay" | "manual"  (default "llm")
+affection_after        # + trust_after, attraction_after, resentment_after, jealousy_after
+source_message_ids     # Text JSON (как у Memory)
+round_id               # из §6 (заменяет/дополняет source_round_id)
 ```
 
+- `apply_delta` (llm) пишет `kind="llm"` + snapshot after, `source_message_ids` из дельты, `round_id`.
+- `update_relationship_fields` (manual, `relationship_service.py:143`) пишет `kind="manual"` + snapshot.
+- Decay (будущее) будет писать `kind="decay"` + snapshot (при пересечении порога).
 - Trajectory строится по фактическим состояниям после LLM-событий:
   `SELECT * FROM relationship_events WHERE relationship_id=? AND kind='llm'
    ORDER BY id DESC LIMIT RELATIONSHIP_TRAJECTORY_WINDOW` → развернуть серии `*_after`.
 - decay/manual-события тоже пишут snapshot (для консистентности БД и таймлайна),
   но в trajectory **не включаются** (`kind` фильтрует).
-- Формат в batch-промпте:
+- Формат в batch-промпте (`relationship_service.build_trajectory_block`):
 
 ```text
 Последние 4 раунда (A → B):
-affection:    52 → 58 → 66 → 71
-trust:        70 → 64 → 52 → 41
-resentment:    0 → 10 → 25 → 43
+  привязанность: 52 → 58 → 66 → 71
+  доверие:       70 → 64 → 52 → 41
+  влечение:       0 → 10 → 25 → 43
+  обида:         0 → 5 → 12 → 18
+  ревность:      0 → 0 → 3 → 7
 ```
 
-- **Обязательный тест:** LLM → decay → manual → LLM; trajectory не искажается (§17).
+- Миграция через `database.ensure_schema` (ALTER TABLE для существующих БД).
+- Конфиг: `RELATIONSHIP_TRAJECTORY_WINDOW = 4` (`config.py`).
+- Тесты: `test_relationship_service.py::TestApplyDelta::test_creates_event_log` (event с kind/snapshot), `test_update_fields` (manual event).
 
 ## 12. P1 — Hearsay (слухи)
 
@@ -447,13 +459,23 @@ if valence(teller → target) == hostile: effective_cap *= 0.7   # «сплет�
 
 ## 13. P1 — Triadic (без отдельной сущности)
 
+✅ **Реализовано (Sprint 2 п.13, MVP — только текущий раунд).**
+
 - Отношения остаются бинарными рёбрами + multi-character events. Отдельной сущности
   «триады» **нет**.
-- В `_build_pair_relationship_context` — компактные заметки третьих лиц:
-  `[третье лицо] {target} ↔ {third}: {короткий контекст}` для пары source→target.
+- В `_build_pair_relationship_context` (`chat_engine.py:1262`) — собираются `third_party_ids`:
+  ID третьих лиц, упомянутых в событиях раунда вместе с target (автор события, упоминания в тексте,
+  `target_character_ids`).
+- Для каждого третьего лица строится компактная заметка:
+  `[третье лицо] {target} ↔ {third}: {type}, {метрика}={значение}` — берется
+  `relationship_type` + самая высокая ненулевая метрика отношения target→third.
+- Заметки передаются в batch prompt (`relationship_analyzer.py:_build_batch_prompt`,
+  поле `third_party_notes`) и в per-pair fallback (`_build_analyzer_prompt`,
+  параметр `third_party_notes`).
 - Поддерживаются: ревность, треугольники, конкуренция, союзы, предательство,
-  защита третьего лица, публичное унижение, группировки — через presence+контекст.
-- Batch-анализ видит такие события целиком; per-pair fallback — через заметки.
+  защита третьего лица, публичное унижение — через presence+контекст текущего раунда.
+- История отношений (top-K по взаимодействиям) — НЕ реализована, оставлена на будущее.
+- Тесты: `tests/test_relationship_context.py::TestThirdPartyNotes` (5 тестов).
 
 ---
 
@@ -599,13 +621,13 @@ LLM CHARACTER GENERATION
 10. MVP epistemic mask. ✅ `relationship_interpreter.format_interpretation_from_other`; `relationship_service.build_epistemic_mask_block` (+ `_wrap_epistemic_block` в prompt_builder); `chat_engine._compute_epistemic_evidence` + `_message_snapshot`; прокинут в `ollama_client` (chat и non-chat ветки), блок перед `generation_cue`; конфиги `relationship_epistemic_mask_enabled`/`relationship_epistemic_max`; тесты `tests/test_relationship_service.py::TestBuildEpistemicMaskBlock`, `tests/test_relationship_interpreter.py::TestFormatInterpretationFromOther`, `tests/test_ollama_chat.py` (эпистемический блок), `tests/test_chat_engine.py::test_epistemic_mask_built_and_passed_to_generate`/`test_epistemic_evidence_detects_direct_interaction`
 11. Reciprocity без синхронизации. ✅ `models.CharacterRelationship` — unique (source,target), обе ориентации независимы; `relationship_service.get_or_create_relationship` — только одно ребро + guard `source == target → ValueError`; `apply_delta`/`update_relationship_fields` меняют только конкретное ребро; no-mirroring инвариант в docstring (§10, §22); тесты `tests/test_relationship_reciprocity.py::TestReciprocityNoSync` (разные значения на противоположных рёбрах, дельта/тип/поля не синхронизируются, ребро не создаёт обратное, событие пишется только для изменённого ребра, self-loop отклонён)
 12. Hearsay. ✅ режим evidence `hearsay` в `_build_pair_relationship_context` (chat_engine.py:1323); детерминированная надежность: cap = base_cap, при trust(source→teller)<30 → /2, при hostile valence(teller→target) → ×0.7, floor=1; evidence-gating в `_constrain_pair_delta` (chat_engine.py:1430) caps дельты, freeze type; batch analyzer включает hearsay hints; тесты `test_relationship_hearsay.py` (12), `test_relationship_context.py` (3 hearsay + 1 cap floor).
-13. Triadic events.
-14. Trajectory (snapshot-based).
+13. Triadic. ✅ MVP (только текущий раунд): `_build_pair_relationship_context` собирает `third_party_ids` из событий раунда (автор, упоминания в тексте, target_character_ids); для каждого третьего лица строится заметка `[третье лицо] {target} ↔ {third}: {type}, {metric}={value}` через `relationship_service.get_relationship(target, third)`; заметки передаются в batch prompt (`third_party_notes`) и per-pair fallback; тесты `tests/test_relationship_context.py::TestThirdPartyNotes` (5).
+14. Trajectory. ✅ snapshot-based: `RelationshipEvent` + `kind` (llm/decay/manual) + `*_after` + `source_message_ids` + `round_id`; `apply_delta` → kind=llm+snapshot; `update_relationship_fields` → kind=manual+snapshot; `build_trajectory_block` для batch prompt; миграция через `ensure_schema`; конфиг `RELATIONSHIP_TRAJECTORY_WINDOW`.
 
 ### Sprint 3 — долгосрочная динамика
-15. `RelationshipEvent.kind` + snapshot.
+15. `RelationshipEvent.kind` + snapshot. ✅ (вместе с п.14)
 16. Корректный decay.
-17. Связь событий с `message_id` / `round_id`.
+17. Связь событий с `message_id` / `round_id`. ✅ (`source_message_ids`, `round_id` в events)
 18. Source attribution для issues.
 19. Memory integration.
 

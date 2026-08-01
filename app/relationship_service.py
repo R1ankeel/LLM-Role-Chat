@@ -1,5 +1,6 @@
 """Service layer for character relationship CRUD and delta application."""
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -167,6 +168,30 @@ async def update_relationship_fields(
     if description is not None:
         rel.description = description
     rel.updated_at = datetime.utcnow()
+
+    # Create manual event with snapshot (docs/relations.md §17)
+    event = RelationshipEvent(
+        relationship_id=rel.id,
+        kind="manual",
+        description="Ручное обновление через API",
+        reason="",
+        delta_affection=0,
+        delta_trust=0,
+        delta_attraction=0,
+        delta_resentment=0,
+        delta_jealousy=0,
+        affection_after=rel.affection,
+        trust_after=rel.trust,
+        attraction_after=rel.attraction,
+        resentment_after=rel.resentment,
+        jealousy_after=rel.jealousy,
+        importance=1,
+        source_message_ids="[]",
+        round_id=None,
+        source_round_id=None,
+    )
+    db.add(event)
+
     await db.commit()
     await db.refresh(rel)
     return rel
@@ -271,9 +296,10 @@ async def apply_delta(
     rel.updated_at = datetime.utcnow()
     await db.flush()
 
-    # Create event log
+    # Create event log with kind + snapshot after (docs/relations.md §11, §17)
     event = RelationshipEvent(
         relationship_id=rel.id,
+        kind="llm",
         description=delta.description or "",
         reason=delta.reason or "",
         delta_affection=_clamp_delta(delta.delta_affection),
@@ -281,7 +307,14 @@ async def apply_delta(
         delta_attraction=_clamp_delta(delta.delta_attraction),
         delta_resentment=_clamp_delta(delta.delta_resentment),
         delta_jealousy=_clamp_delta(delta.delta_jealousy),
+        affection_after=rel.affection,
+        trust_after=rel.trust,
+        attraction_after=rel.attraction,
+        resentment_after=rel.resentment,
+        jealousy_after=rel.jealousy,
         importance=delta.importance,
+        source_message_ids=json.dumps(delta.source_message_ids or []),
+        round_id=round_id,
         source_round_id=round_id,
     )
     db.add(event)
@@ -845,3 +878,52 @@ async def tick_open_issues(
                 int(issue.rounds_since_last_mention or 0) + 1
             )
             await db.flush()
+
+
+# ---------------------------------------------------------------------------
+# Trajectory (docs/relations.md §11, §17)
+# ---------------------------------------------------------------------------
+async def get_trajectory_events(
+    db: AsyncSession,
+    relationship_id: int,
+    window: int = 4,
+) -> list[RelationshipEvent]:
+    """Get LLM events for trajectory (kind='llm' only, reverse chronological)."""
+    stmt = (
+        select(RelationshipEvent)
+        .where(
+            RelationshipEvent.relationship_id == relationship_id,
+            RelationshipEvent.kind == "llm",
+        )
+        .order_by(RelationshipEvent.id.desc())
+        .limit(window)
+    )
+    result = await db.execute(stmt)
+    return list(reversed(result.scalars().all()))
+
+
+def build_trajectory_block(
+    events: list[RelationshipEvent],
+    source_name: str,
+    target_name: str,
+) -> str:
+    """Format trajectory as a compact table for batch prompt (§11).
+
+    Columns: affection, trust, attraction, resentment, jealousy
+    Shows *_after values from each LLM event, oldest first.
+    """
+    if not events:
+        return ""
+
+    lines = [f"Последние {len(events)} раунда ({source_name} → {target_name}):"]
+    metrics = [
+        ("привязанность", "affection_after"),
+        ("доверие", "trust_after"),
+        ("влечение", "attraction_after"),
+        ("обида", "resentment_after"),
+        ("ревность", "jealousy_after"),
+    ]
+    for metric_name, attr in metrics:
+        values = [str(getattr(e, attr, 0)) for e in events]
+        lines.append(f"  {metric_name:<12}: {' → '.join(values)}")
+    return "\n".join(lines)

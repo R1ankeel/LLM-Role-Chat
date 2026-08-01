@@ -339,6 +339,8 @@ class RelationshipEvent(Base):
     __table_args__ = (
         Index("ix_rel_events_rel_id", "relationship_id"),
         Index("ix_rel_events_ts", "relationship_id", "timestamp"),
+        Index("ix_rel_events_kind", "kind"),
+        Index("ix_rel_events_round", "round_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -347,6 +349,9 @@ class RelationshipEvent(Base):
         nullable=False,
         index=True,
     )
+    kind: Mapped[str] = mapped_column(
+        String(20), default="llm", nullable=False
+    )  # "llm" | "decay" | "manual"
     description: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     delta_affection: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -354,7 +359,15 @@ class RelationshipEvent(Base):
     delta_attraction: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     delta_resentment: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     delta_jealousy: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Snapshot of state AFTER this event
+    affection_after: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    trust_after: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attraction_after: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    resentment_after: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    jealousy_after: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     importance: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    source_message_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)  # JSON array
+    round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     source_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

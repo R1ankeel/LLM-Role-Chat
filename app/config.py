@@ -253,6 +253,10 @@ class Settings(BaseSettings):
     relationship_hearsay_cap: int = Field(
         default=3, alias="RELATIONSHIP_HEARSAY_CAP"
     )
+    # Trajectory window (docs/relations.md §11): how many LLM events to include
+    relationship_trajectory_window: int = Field(
+        default=4, alias="RELATIONSHIP_TRAJECTORY_WINDOW"
+    )
 
     relationship_analyzer_prompt: str = Field(
         default=(

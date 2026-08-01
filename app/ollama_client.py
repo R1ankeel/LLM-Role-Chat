@@ -1766,6 +1766,7 @@ async def extract_scene_state(
     Returns:
         Dict with time_of_day, character_locations or None on failure
     """
+    import json
     # Build current state dict for prompt
     if current_scene_state:
         current_state = {
@@ -1845,7 +1846,6 @@ async def extract_scene_state(
 
     # Parse JSON response
     try:
-        import json
         result = json.loads(content)
         # Validate structure
         if not isinstance(result, dict):

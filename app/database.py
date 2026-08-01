@@ -393,6 +393,40 @@ def ensure_schema(db_engine) -> None:
             )
         )
 
+        # Migration: add new columns to relationship_events for Trajectory (docs/relations.md §11, §17)
+        if inspector.has_table("relationship_events"):
+            rel_event_columns = {col["name"] for col in inspector.get_columns("relationship_events")}
+            new_rel_event_columns = [
+                ("kind", "TEXT NOT NULL DEFAULT 'llm'"),
+                ("affection_after", "INTEGER NOT NULL DEFAULT 0"),
+                ("trust_after", "INTEGER NOT NULL DEFAULT 0"),
+                ("attraction_after", "INTEGER NOT NULL DEFAULT 0"),
+                ("resentment_after", "INTEGER NOT NULL DEFAULT 0"),
+                ("jealousy_after", "INTEGER NOT NULL DEFAULT 0"),
+                ("source_message_ids", "TEXT NOT NULL DEFAULT '[]'"),
+                ("round_id", "TEXT"),
+            ]
+            for column_name, column_type in new_rel_event_columns:
+                if column_name not in rel_event_columns:
+                    conn.execute(
+                        text(f"ALTER TABLE relationship_events ADD COLUMN {column_name} {column_type}")
+                    )
+                    logger.info("Added %s column to relationship_events", column_name)
+
+            # Add indexes for new columns
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_rel_events_kind "
+                    "ON relationship_events (kind)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_rel_events_round "
+                    "ON relationship_events (round_id)"
+                )
+            )
+
         # Backfill: create player characters for existing chats
         existing_chat_ids = conn.execute(text("SELECT id FROM chats")).fetchall()
         for (chat_id,) in existing_chat_ids:

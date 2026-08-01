@@ -1021,6 +1021,49 @@ async def _analyze_and_update_relationships(
                     ]
                     mentioned_issue_ids.update(issue.id for issue in open_issues)
 
+                    # Trajectory (docs/relations.md §11): snapshot-based from LLM events
+                    trajectory_events = await relationship_service.get_trajectory_events(
+                        db, rel.id, window=settings.relationship_trajectory_window,
+                    )
+                    trajectory_text = relationship_service.build_trajectory_block(
+                        trajectory_events,
+                        source_char.name,
+                        target_char.name,
+                    )
+
+                    # Triadic MVP (§13): build third-party notes for target's
+                    # relationships with characters mentioned in this round.
+                    third_party_notes: list[str] = []
+                    third_party_ids = pair_ctx.get("third_party_ids", [])
+                    for third_id in third_party_ids:
+                        if third_id == source_char.id or third_id == target_char.id:
+                            continue
+                        third_rel = await relationship_service.get_relationship(
+                            db, target_char.id, third_id,
+                        )
+                        if third_rel is None:
+                            continue
+                        third_name = character_names.get(third_id, f"ID:{third_id}")
+                        target_name = character_names.get(target_char.id, f"ID:{target_char.id}")
+                        # Format: [третье лицо] {target} ↔ {third}: {type}, {метрика}={значение}
+                        # Show relationship_type + top non-zero metric
+                        metrics = [
+                            ("привязанность", third_rel.affection),
+                            ("доверие", third_rel.trust),
+                            ("влечение", third_rel.attraction),
+                            ("обида", third_rel.resentment),
+                            ("ревность", third_rel.jealousy),
+                        ]
+                        non_zero = [(name, val) for name, val in metrics if val > 0]
+                        if non_zero:
+                            # Pick highest metric
+                            top_metric = max(non_zero, key=lambda x: x[1])
+                            metric_str = f"{top_metric[0]}={top_metric[1]}"
+                        else:
+                            metric_str = "нейтральное"
+                        note = f"[третье лицо] {target_name} ↔ {third_name}: {third_rel.relationship_type}, {metric_str}"
+                        third_party_notes.append(note)
+
                     pairs.append(
                         {
                             "source_char": source_char,
@@ -1040,6 +1083,8 @@ async def _analyze_and_update_relationships(
                             "current_type": rel.relationship_type,
                             "recent_events_text": events_text,
                             "open_issues": open_issues_payload,
+                            "third_party_notes": third_party_notes,
+                            "trajectory": trajectory_text,
                         }
                     )
 
@@ -1087,6 +1132,8 @@ async def _analyze_and_update_relationships(
                             if p["pair_ctx"].get("hearsay_source") is not None
                             else ""
                         ),
+                        "third_party_notes": p.get("third_party_notes", []),
+                        "trajectory": p.get("trajectory", ""),
                     }
                     for p in pairs
                 ]
@@ -1207,6 +1254,7 @@ async def _run_per_pair_analysis(
             hearsay=p["pair_ctx"].get("hearsay", False),
             hearsay_cap=p["pair_ctx"].get("hearsay_effective_cap"),
             open_issues=p["open_issues"],
+            third_party_notes=p.get("third_party_notes"),
         )
         for delta in deltas:
             gated = _constrain_pair_delta(delta, p["rel"], p["pair_ctx"])
@@ -1241,7 +1289,7 @@ def _build_pair_relationship_context(
     is annotated with the speaker and addressees.
 
     Returns: excerpt, interaction_summary, direct_interaction, observed_target,
-    any_evidence.
+    any_evidence, third_party_ids (for Triadic MVP).
     """
     if max_lines is None:
         max_lines = settings.relationship_max_pair_context_lines
@@ -1263,6 +1311,7 @@ def _build_pair_relationship_context(
     observed_target = False
     hearsay = False
     hearsay_source = None
+    third_party_ids: set[int] = set()
 
     for snap in round_snapshots:
         role = (snap.get("role") or "").strip().lower()
@@ -1307,6 +1356,14 @@ def _build_pair_relationship_context(
                 observed_target = True
             else:
                 continue
+            # Target speaks about others -> those are third parties relevant to target
+            for tid in targets:
+                if tid != source.id and tid != target.id:
+                    third_party_ids.add(tid)
+            # Also check content for name mentions
+            for cid, cname in character_names.items():
+                if cid != source.id and cid != target.id and _text_mentions_name(content, cname):
+                    third_party_ids.add(cid)
         else:
             # Third party speaks; relevant only if perceived and about the target
             presence = perception.can_character_perceive_event(
@@ -1328,6 +1385,15 @@ def _build_pair_relationship_context(
                 hearsay_source = author_id
             else:
                 observed_target = True
+            # Third party is relevant to target (they're talking about target)
+            third_party_ids.add(author_id)
+            # Also check if they mention other characters
+            for tid in targets:
+                if tid != source.id and tid != target.id:
+                    third_party_ids.add(tid)
+            for cid, cname in character_names.items():
+                if cid != source.id and cid != target.id and cid != author_id and _text_mentions_name(content, cname):
+                    third_party_ids.add(cid)
 
         speaker = character_names.get(author_id, f"ID:{author_id}")
         addressee_names = [character_names.get(t, f"ID:{t}") for t in targets]
@@ -1350,6 +1416,7 @@ def _build_pair_relationship_context(
         "hearsay": hearsay,
         "hearsay_source": hearsay_source,
         "any_evidence": bool(excerpt.strip()),
+        "third_party_ids": list(third_party_ids),
     }
 
 

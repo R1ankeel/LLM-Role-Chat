@@ -486,6 +486,7 @@ class RelationshipDelta(BaseModel):
     importance: int = Field(default=5, ge=1, le=10)
     update_description: bool = False
     issues: list[IssueDelta] = Field(default_factory=list)
+    source_message_ids: list[int] = Field(default_factory=list)
 
     @field_validator("delta_affection", "delta_trust", "delta_attraction",
                      "delta_resentment", "delta_jealousy", mode="after")
