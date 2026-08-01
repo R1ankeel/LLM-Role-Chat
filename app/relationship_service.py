@@ -19,6 +19,7 @@ from .models import (
     DEFAULT_RESENTMENT,
     DEFAULT_TRUST,
     CharacterRelationship,
+    Memory,
     RelationshipEvent,
     RelationshipIssue,
 )
@@ -320,6 +321,15 @@ async def apply_delta(
     db.add(event)
     await db.commit()
     await db.refresh(rel)
+
+    # Create memory for significant relationship events (Sprint 3 item 19)
+    try:
+        await _maybe_create_memory_from_event(db, rel, event, chat_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to create memory from relationship event: %s", exc
+        )
+
     return rel
 
 
@@ -552,6 +562,66 @@ async def _is_near_dup(db: AsyncSession, rel: CharacterRelationship, issue_type:
     return any(_jaccard(text, ex.text) >= threshold for ex in existing)
 
 
+async def _validate_source_message_ids(
+    proposed_ids: list[int],
+    round_id: Optional[str],
+    chat_id: int,
+    db: AsyncSession,
+) -> list[int]:
+    """Validate proposed source_message_ids against messages in the round.
+
+    If proposed_ids are empty or invalid, fall back to all user/character
+    messages in this round. Returns validated list of message IDs.
+    """
+    if not round_id:
+        return proposed_ids
+
+    # Parse round_id: r{chat_id}-m{user_message_id}
+    # Get all messages in this round (user message + subsequent character replies)
+    try:
+        # round_id format: r{chat_id}-m{user_message_id}
+        if not round_id.startswith("r") or "-m" not in round_id:
+            return proposed_ids
+        parts = round_id.split("-m")
+        if len(parts) != 2:
+            return proposed_ids
+        round_chat_id = int(parts[0][1:])  # skip 'r'
+        user_message_id = int(parts[1])
+
+        if round_chat_id != chat_id:
+            return proposed_ids
+
+        # Get all messages in this chat from the user message onwards in this round
+        # We'll consider messages with timestamp >= user message timestamp
+        # For simplicity, get recent messages in this chat
+        from sqlalchemy import select
+        from .models import Message
+
+        # Get user message timestamp
+        user_msg = await db.get(Message, user_message_id)
+        if user_msg is None:
+            return proposed_ids
+
+        # Get all messages in this chat after the user message (same round)
+        stmt = select(Message.id).where(
+            Message.chat_id == chat_id,
+            Message.timestamp >= user_msg.timestamp,
+        ).order_by(Message.timestamp)
+        result = await db.execute(stmt)
+        valid_ids = [row[0] for row in result.all()]
+
+        if not proposed_ids:
+            return valid_ids
+
+        # Return intersection of proposed and valid
+        valid_set = set(valid_ids)
+        return [mid for mid in proposed_ids if mid in valid_set]
+
+    except Exception:
+        # On any error, return proposed (will be empty list if none)
+        return proposed_ids
+
+
 async def create_issue(
     db: AsyncSession,
     rel: CharacterRelationship,
@@ -560,6 +630,8 @@ async def create_issue(
     text: str,
     importance: int = 5,
     round_id: Optional[str] = None,
+    source_message_ids: list[int] | None = None,
+    chat_id: Optional[int] = None,
 ) -> Optional[RelationshipIssue]:
     """Create an open issue for a specific relationship edge (§7.2).
 
@@ -594,6 +666,11 @@ async def create_issue(
         )
         return None
 
+    # Validate and store source_message_ids (Sprint 3 item 18)
+    validated_ids = []
+    if source_message_ids and chat_id and round_id:
+        validated_ids = await _validate_source_message_ids(source_message_ids, round_id, chat_id, db)
+
     issue = RelationshipIssue(
         relationship_id=rel.id,
         issue_type=issue_type,
@@ -602,6 +679,7 @@ async def create_issue(
         state="open",
         created_round_id=round_id,
         last_mention_round_id=round_id,
+        source_message_ids=json.dumps(validated_ids),
     )
     db.add(issue)
     await db.flush()
@@ -615,6 +693,8 @@ async def resolve_issue(
     *,
     reason: str = "",
     round_id: Optional[str] = None,
+    source_message_ids: list[int] | None = None,
+    chat_id: Optional[int] = None,
 ) -> Optional[RelationshipIssue]:
     """Resolve an open issue, only if it belongs to this relationship edge (§7.2).
 
@@ -638,10 +718,27 @@ async def resolve_issue(
     if issue.state == "resolved":
         logger.debug("Issue %d already resolved; skipping", issue_id)
         return None
+
+    # Update source_message_ids for resolution (Sprint 3 item 18)
+    if source_message_ids and chat_id and round_id:
+        validated_ids = await _validate_source_message_ids(source_message_ids, round_id, chat_id, db)
+        if validated_ids:
+            issue.source_message_ids = json.dumps(validated_ids)
+
     issue.state = "resolved"
     issue.resolved_round_id = round_id
     issue.resolved_at = datetime.utcnow()
     await db.flush()
+
+    # Create memory for resolved issue (Sprint 3 item 19)
+    if chat_id:
+        try:
+            await _maybe_create_memory_from_resolved_issue(db, rel, issue, chat_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to create memory from resolved issue: %s", exc
+            )
+
     return issue
 
 
@@ -682,6 +779,8 @@ async def apply_issue_deltas(
                 text=issue_delta.text,
                 importance=issue_delta.importance,
                 round_id=round_id,
+                source_message_ids=issue_delta.source_message_ids,
+                chat_id=chat_id,
             )
             if issue is not None:
                 applied.append(issue)
@@ -693,6 +792,8 @@ async def apply_issue_deltas(
                 db, rel, issue_delta.issue_id,
                 reason=issue_delta.reason or "",
                 round_id=round_id,
+                source_message_ids=issue_delta.source_message_ids,
+                chat_id=chat_id,
             )
             if issue is not None:
                 applied.append(issue)
@@ -878,6 +979,236 @@ async def tick_open_issues(
                 int(issue.rounds_since_last_mention or 0) + 1
             )
             await db.flush()
+
+
+# ---------------------------------------------------------------------------
+# Decay (Sprint 3 item 16, docs/relations.md §18)
+# ---------------------------------------------------------------------------
+async def apply_decay(
+    db: AsyncSession,
+    chat_id: int,
+    round_id: str,
+) -> list[RelationshipEvent]:
+    """Apply per-round decay to jealousy and resentment for all relationships in chat.
+
+    - jealousy: -RELATIONSHIP_DECAY_JEALOUSY_PER_ROUND per round (default 3)
+    - resentment: -RELATIONSHIP_DECAY_RESENTMENT_PER_ROUND per round (default 1)
+    - affection/trust/attraction: no decay
+
+    Creates RelationshipEvent(kind="decay") ONLY when value crosses a multiple of 10:
+    20→19 (event), 10→9 (event), 0→0 (no event if already 0).
+
+    Returns list of created decay events.
+    """
+    from sqlalchemy import select
+
+    jealousy_decay = settings.relationship_decay_jealousy_per_round
+    resentment_decay = settings.relationship_decay_resentment_per_round
+
+    stmt = select(CharacterRelationship).where(CharacterRelationship.chat_id == chat_id)
+    result = await db.execute(stmt)
+    relationships = list(result.scalars().all())
+
+    created_events: list[RelationshipEvent] = []
+
+    for rel in relationships:
+        old_jealousy = rel.jealousy
+        old_resentment = rel.resentment
+
+        new_jealousy = max(0, old_jealousy - jealousy_decay)
+        new_resentment = max(0, old_resentment - resentment_decay)
+
+        # Check if either crossed a multiple-of-10 boundary
+        jealousy_crossed = (old_jealousy // 10) != (new_jealousy // 10) and old_jealousy > 0
+        resentment_crossed = (old_resentment // 10) != (new_resentment // 10) and old_resentment > 0
+
+        if not jealousy_crossed and not resentment_crossed:
+            continue
+
+        # Apply changes
+        rel.jealousy = new_jealousy
+        rel.resentment = new_resentment
+        rel.updated_at = datetime.utcnow()
+        await db.flush()
+
+        # Create decay event with snapshot
+        event = RelationshipEvent(
+            relationship_id=rel.id,
+            kind="decay",
+            description="Естественное затухание эмоций",
+            reason="",
+            delta_affection=0,
+            delta_trust=0,
+            delta_attraction=0,
+            delta_resentment=new_resentment - old_resentment,
+            delta_jealousy=new_jealousy - old_jealousy,
+            affection_after=rel.affection,
+            trust_after=rel.trust,
+            attraction_after=rel.attraction,
+            resentment_after=rel.resentment,
+            jealousy_after=rel.jealousy,
+            importance=1,
+            source_message_ids="[]",
+            round_id=round_id,
+            source_round_id=round_id,
+        )
+        db.add(event)
+        created_events.append(event)
+
+    if created_events:
+        await db.commit()
+
+    return created_events
+
+
+# ---------------------------------------------------------------------------
+# Memory Integration (Sprint 3 item 19, docs/relations.md §19)
+# ---------------------------------------------------------------------------
+async def _maybe_create_memory_from_event(
+    db: AsyncSession,
+    rel: CharacterRelationship,
+    event: RelationshipEvent,
+    chat_id: int,
+) -> Optional["Memory"]:
+    """Create a Memory for significant relationship events (Sprint 3 item 19).
+
+    Criteria (configurable):
+    - event.kind == "llm" (not decay/manual)
+    - ANY metric |delta| >= RELATIONSHIP_MEMORY_DELTA_THRESHOLD (default 10)
+    - OR relationship_type changed (detected via event.reason mentioning type change)
+
+    Memory content: natural language summary using interpreter (no raw numbers).
+    Category: "отношения"
+    source_message_ids: from event.source_message_ids
+    importance: derived from event.importance (scaled 0.1..1.0)
+    """
+    if not settings.relationship_memory_enabled:
+        return None
+
+    # Only for LLM events, not decay/manual
+    if event.kind != "llm":
+        return None
+
+    # Check significance: any delta >= threshold OR type change
+    max_delta = max(
+        abs(event.delta_affection),
+        abs(event.delta_trust),
+        abs(event.delta_attraction),
+        abs(event.delta_resentment),
+        abs(event.delta_jealousy),
+    )
+    threshold = settings.relationship_memory_delta_threshold
+
+    type_changed = "тип" in (event.reason or "").lower() and (
+        "изменил" in (event.reason or "").lower()
+        or "стал" in (event.reason or "").lower()
+        or "стало" in (event.reason or "").lower()
+    )
+
+    if max_delta < threshold and not type_changed:
+        return None
+
+    # Generate memory content using interpreter (no raw numbers)
+    from .relationship_interpreter import interpret, format_interpretation
+
+    interp = interpret(rel)
+    target_name = rel.target_character.name if rel.target_character else f"ID:{rel.target_character_id}"
+    source_name = rel.source_character.name if rel.source_character else f"ID:{rel.source_character_id}"
+
+    # Build a descriptive summary
+    changes = []
+    if event.delta_affection != 0:
+        direction = "улучшилась" if event.delta_affection > 0 else "ухудшилась"
+        changes.append(f"привязанность {direction}")
+    if event.delta_trust != 0:
+        direction = "выросло" if event.delta_trust > 0 else "упало"
+        changes.append(f"доверие {direction}")
+    if event.delta_attraction != 0:
+        direction = "усилилось" if event.delta_attraction > 0 else "ослабло"
+        changes.append(f"влечение {direction}")
+    if event.delta_resentment != 0:
+        direction = "выросла" if event.delta_resentment > 0 else "уменьшилась"
+        changes.append(f"обида {direction}")
+    if event.delta_jealousy != 0:
+        direction = "выросла" if event.delta_jealousy > 0 else "уменьшилась"
+        changes.append(f"ревность {direction}")
+
+    if type_changed:
+        changes.append(f"тип отношений стал «{event.relationship_type or rel.relationship_type}»")
+
+    if not changes:
+        return None
+
+    interp_text = format_interpretation(interp, target_name)
+    interp_part = f" ({interp_text})" if interp_text else ""
+
+    content = (
+        f"Отношения {source_name} к {target_name}: {', '.join(changes)}."
+        f"{interp_part} Причина: {event.reason or event.description or 'неизвестно'}"
+    )
+
+    # Parse source_message_ids from event
+    import json
+    try:
+        source_msg_ids = json.loads(event.source_message_ids or "[]")
+    except Exception:
+        source_msg_ids = []
+
+    # Create memory via crud
+    from . import crud
+    from .schemas import MemoryCreate
+
+    memory = MemoryCreate(
+        chat_id=chat_id,
+        character_id=rel.source_character_id,
+        content=content,
+        importance=min(1.0, max(0.1, event.importance / 10.0)),
+        category="отношения",
+    )
+
+    created = await crud.create_memory(db, memory, source_message_ids=source_msg_ids)
+    return created
+
+
+async def _maybe_create_memory_from_resolved_issue(
+    db: AsyncSession,
+    rel: CharacterRelationship,
+    issue: "RelationshipIssue",
+    chat_id: int,
+) -> Optional["Memory"]:
+    """Create a Memory when an issue is resolved (Sprint 3 item 19)."""
+    if not settings.relationship_memory_enabled:
+        return None
+
+    target_name = rel.target_character.name if rel.target_character else f"ID:{rel.target_character_id}"
+    source_name = rel.source_character.name if rel.source_character else f"ID:{rel.source_character_id}"
+
+    content = (
+        f"Разрешён открытый вопрос в отношениях {source_name} к {target_name}: "
+        f"{issue.issue_type} — {issue.text}. "
+        f"Причина: {issue.resolved_at and 'неизвестно' or ''}"
+    )
+
+    # Parse source_message_ids from issue
+    import json
+    try:
+        source_msg_ids = json.loads(issue.source_message_ids or "[]")
+    except Exception:
+        source_msg_ids = []
+
+    from . import crud
+    from .schemas import MemoryCreate
+
+    memory = MemoryCreate(
+        chat_id=chat_id,
+        character_id=rel.source_character_id,
+        content=content,
+        importance=min(1.0, max(0.1, issue.importance / 10.0)),
+        category="отношения",
+    )
+
+    created = await crud.create_memory(db, memory, source_message_ids=source_msg_ids)
+    return created
 
 
 # ---------------------------------------------------------------------------

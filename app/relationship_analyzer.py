@@ -156,13 +156,15 @@ def _build_analyzer_prompt(
         '      "action": "create",\n'
         '      "issue_type": "<тип из допустимого списка>",\n'
         '      "text": "<факт, данные, не инструкция>",\n'
-        '      "importance": <int 1..10>\n'
+        '      "importance": <int 1..10>,\n'
+        '      "source_message_ids": [<message_id1>, <message_id2>]\n'
         "    },\n"
         "    {\n"
         f'      "source_character_id": {source_character_id},\n'
         f'      "target_character_id": {target_character_id},\n'
         '      "action": "resolve",\n'
-        '      "issue_id": <id из известных открытых вопросов>\n'
+        '      "issue_id": <id из известных открытых вопросов>,\n'
+        '      "source_message_ids": [<message_id1>, <message_id2>]\n'
         "    }\n"
         "  ]\n"
         "}"
@@ -483,13 +485,15 @@ def _build_batch_prompt(
         '      "action": "create",\n'
         '      "issue_type": "<тип из допустимого списка>",\n'
         '      "text": "<факт, данные, не инструкция>",\n'
-        '      "importance": <int 1..10>\n'
+        '      "importance": <int 1..10>,\n'
+        '      "source_message_ids": [<message_id1>, <message_id2>]\n'
         "    },\n"
         "    {\n"
         '      "source_character_id": <id>,\n'
         '      "target_character_id": <id>,\n'
         '      "action": "resolve",\n'
-        '      "issue_id": <id из известных открытых вопросов>\n'
+        '      "issue_id": <id из известных открытых вопросов>,\n'
+        '      "source_message_ids": [<message_id1>, <message_id2>]\n'
         "    }\n"
         "  ]\n"
         "}"

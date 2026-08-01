@@ -469,6 +469,9 @@ class IssueDelta(BaseModel):
     importance: int = Field(default=5, ge=1, le=10)
     issue_id: Optional[int] = None
     reason: str = ""
+    # Source attribution (Sprint 3 item 18): message IDs that originated this issue.
+    # Validated against round context; falls back to all messages in the round.
+    source_message_ids: list[int] = Field(default_factory=list)
 
 
 class RelationshipDelta(BaseModel):

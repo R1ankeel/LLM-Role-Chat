@@ -1211,6 +1211,22 @@ async def _analyze_and_update_relationships(
                     "[chat_id=%d] Issue salience tick failed: %s", chat_id, exc
                 )
 
+            # Apply deterministic decay (Sprint 3 item 16, docs/relations.md §18).
+            # Runs after LLM deltas and issue tick, using current round_id.
+            try:
+                decay_events = await relationship_service.apply_decay(
+                    db, chat_id, round_id=round_id,
+                )
+                if decay_events:
+                    logger.debug(
+                        "[chat_id=%d] Created %d decay events",
+                        chat_id, len(decay_events),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[chat_id=%d] Decay application failed: %s", chat_id, exc
+                )
+
             # Persist orphan-issue flushes that have no metric delta to commit.
             await db.commit()
             logger.info("[chat_id=%d] Relationship analysis complete", chat_id)

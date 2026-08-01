@@ -258,6 +258,22 @@ class Settings(BaseSettings):
         default=4, alias="RELATIONSHIP_TRAJECTORY_WINDOW"
     )
 
+    # Decay (Sprint 3 item 16, docs/relations.md §18): per-round decay for jealousy and resentment
+    relationship_decay_jealousy_per_round: int = Field(
+        default=3, alias="RELATIONSHIP_DECAY_JEALOUSY_PER_ROUND"
+    )
+    relationship_decay_resentment_per_round: int = Field(
+        default=1, alias="RELATIONSHIP_DECAY_RESENTMENT_PER_ROUND"
+    )
+
+    # Memory integration (Sprint 3 item 19): create memories for significant relationship events
+    relationship_memory_enabled: bool = Field(
+        default=True, alias="RELATIONSHIP_MEMORY_ENABLED"
+    )
+    relationship_memory_delta_threshold: int = Field(
+        default=10, alias="RELATIONSHIP_MEMORY_DELTA_THRESHOLD"
+    )
+
     relationship_analyzer_prompt: str = Field(
         default=(
             "Проанализируй раунд ролевой игры ниже и определи, как меняются "

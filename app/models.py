@@ -278,6 +278,9 @@ class RelationshipIssue(Base):
     rounds_since_last_mention: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
     )
+    # Source attribution (Sprint 3 item 18): JSON array of message IDs that
+    # originated/led to this issue (validated against round context).
+    source_message_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
 
     relationship: Mapped["CharacterRelationship"] = relationship(
         back_populates="issues"

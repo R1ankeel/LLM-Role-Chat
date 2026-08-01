@@ -564,6 +564,17 @@ def ensure_schema(db_engine) -> None:
                 logger.info(
                     "Added rounds_since_last_mention column to relationship_issues"
                 )
+            # Migration: source attribution for issues (Sprint 3 item 18)
+            if "source_message_ids" not in issue_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE relationship_issues ADD COLUMN "
+                        "source_message_ids TEXT NOT NULL DEFAULT '[]'"
+                    )
+                )
+                logger.info(
+                    "Added source_message_ids column to relationship_issues"
+                )
 
         # Indexes AFTER all column migrations
         for ddl in INDEXES:
