@@ -250,3 +250,22 @@ class TestBuildRelationshipsBlock:
         assert "Character B" in block
         assert "Character C" in block
         assert "нейтральное" in block
+
+    async def test_interpretation_instead_of_numbers(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        await update_relationship_fields(
+            db_session,
+            await get_or_create_relationship(db_session, chat.id, a.id, b.id),
+            affection=80,
+            trust=20,
+        )
+        block = await build_relationships_block(
+            db_session, chat.id, a.id, "Character A",
+            {c.id: c.name for c in three_characters},
+        )
+        assert "Character B" in block
+        assert "привязан" in block
+        assert "не доверяешь" in block
+        assert "affection=" not in block
+        assert "привязанность=" not in block
+        assert "=80" not in block

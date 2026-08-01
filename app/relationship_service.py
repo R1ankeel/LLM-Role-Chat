@@ -19,6 +19,7 @@ from .models import (
     CharacterRelationship,
     RelationshipEvent,
 )
+from .relationship_interpreter import format_interpretation, interpret
 from .schemas import RelationshipDelta
 
 logger = logging.getLogger(__name__)
@@ -263,10 +264,16 @@ def format_relationship_for_prompt(
     target_name: str,
     events: list[RelationshipEvent],
 ) -> str:
+    """Format one relationship for the generation prompt.
+
+    Uses the deterministic interpreter instead of raw metrics: the character
+    model gets semantic labels, never numbers (docs/relations.md §4-§5).
+    """
+    interp = interpret(rel)
     lines = [f"{target_name}: {rel.relationship_type}"]
-    lines.append(f"  привязанность={rel.affection}, доверие={rel.trust}, "
-                 f"влечение={rel.attraction}, обида={rel.resentment}, "
-                 f"ревность={rel.jealousy}")
+    text = format_interpretation(interp, target_name)
+    if text:
+        lines.append(f"  {text}")
     if rel.description:
         lines.append(f"  описание: {rel.description}")
     if events:
