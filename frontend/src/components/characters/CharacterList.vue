@@ -57,7 +57,12 @@ function select(id: number) {
         @click="select(character.id)"
         @keydown.enter="select(character.id)"
       >
-        <Avatar :name="character.name" size="sm" class="character-row__avatar" />
+        <Avatar
+          :name="character.name"
+          :image-url="character.avatar_url"
+          size="sm"
+          class="character-row__avatar"
+        />
         <div class="character-row__info">
           <div class="character-row__name-row">
             <span class="character-row__name" :style="{ color: accent(character.name) }">

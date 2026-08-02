@@ -6,11 +6,13 @@ const props = withDefaults(
   defineProps<{
     name: string
     imageUrl?: string | null
-    size?: 'sm' | 'md' | 'lg'
+    size?: 'sm' | 'md' | 'lg' | 'xl'
+    shape?: 'rounded' | 'circle'
   }>(),
   {
     imageUrl: null,
     size: 'md',
+    shape: 'rounded',
   },
 )
 
@@ -25,7 +27,13 @@ const initials = computed(() => {
 </script>
 
 <template>
-  <span class="avatar" :class="`avatar--${size}`" :style="{ background: accent }" role="img" :aria-label="name">
+  <span
+    class="avatar"
+    :class="[`avatar--${size}`, `avatar--${shape}`]"
+    :style="{ background: accent }"
+    role="img"
+    :aria-label="name"
+  >
     <img v-if="imageUrl" class="avatar__img" :src="imageUrl" :alt="name" />
     <span v-else class="avatar__initials">{{ initials }}</span>
   </span>
@@ -70,5 +78,16 @@ const initials = computed(() => {
   height: 56px;
   font-size: var(--text-md);
   border-radius: var(--radius-lg);
+}
+
+.avatar--xl {
+  width: 168px;
+  height: 168px;
+  font-size: 44px;
+  border-radius: var(--radius-lg);
+}
+
+.avatar--circle {
+  border-radius: 50%;
 }
 </style>

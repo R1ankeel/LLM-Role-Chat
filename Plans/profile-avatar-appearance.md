@@ -1,6 +1,6 @@
 # План внедрения: Character Profile, аватарки и внешность (docs/Profile.docx)
 
-> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). Frontend-этапы 2–6 — ещё не начаты.
+> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). Frontend-этапы 3–6 — ещё не начаты.
 > **Источник ТЗ:** `docs/Profile.docx` (34 пункта, 6 этапов, критерии готовности в §34).
 > **Ограничения ТЗ:** не переписывать frontend целиком, расширять существующую архитектуру, старый frontend (`app/static/`) не трогать, один `CharacterProfileModal`, единый источник истины (`CharacterStore`).
 
@@ -15,7 +15,7 @@
 | Единый `CharacterProfileModal` | `components/settings/CharacterProfileModal.vue` | Уже существует, но смонтирован ВНУТРИ `SettingsModal` (`SettingsModal.vue:30`) → открыть из правой панели или сообщения невозможно |
 | Точка входа «Settings → Персонажи» | `components/settings/CharacterSettings.vue:20` → `ui.openCharacterProfile(id)` | Работает, открывает тот же модал |
 | Поле `appearance` | `types/character.ts:46` (`CharacterForm.appearance`) и `CharacterFormFields.vue:128` | ✅ frontend 1 — `characterToForm`/`formToCharacterUpdate` прокидывают `appearance` в `PUT /characters/{id}` (хардкод `''` убран); UI-ввод уже есть в `CharacterFormFields` |
-| Аватар-компонент | `components/common/Avatar.vue` | Проп `imageUrl` уже есть, но размеры только `sm/md/lg`, форма только скруглённая (`--radius`), круглой миниатюры нет; в сообщениях/списках не передаётся `avatar_url` |
+| Аватар-компонент | `components/common/Avatar.vue` | ✅ Этап 2 — проп `size` расширен до `sm/md/lg/xl` (xl = 168 px, для профиля), добавлен проп `shape: 'rounded' | 'circle'` (круглая миниатюра для сообщений); placeholder (инициалы + accent) сохранён; `imageUrl` пробрасывается во все места использования (списки, сообщения, профиль, Player, delete-confirm) |
 | Механика синхронизации | `stores/characters.ts` `update()` — после `PUT` объект заменяется в массиве → все компоненты (профиль, списки, правая панель) обновляются автоматически — единый источник истины уже соблюдён; ✅ frontend 1 — то же для аватара: `uploadAvatar()`/`removeAvatar()` |
 | Отображение локации в сообщении | `MessageItem.vue:57` | «Alice · Classroom» уже есть (вторичный текст) |
 
@@ -146,12 +146,23 @@
 
 ### Этап 2 — Avatar-компонент
 
-- `components/common/Avatar.vue` — это и есть единый `CharacterAvatar` (§12). Расширить:
-  - размер `xl` (160–220 px, для профиля), добавить `size` в пропсы;
-  - проп `shape: 'rounded' | 'circle'` (круглая миниатюра для сообщений);
-  - оставить placeholder (инициалы + accent) как полноценный UI-элемент (§10.1);
-  - `imageUrl` уже есть — везде передавать `character.avatar_url`.
-- Заменить использование во всех списках/сообщениях: `CharacterList`, `CharacterSettings`, `CharacterDetails`, `MessageItem`, `PlayerSettings`, профиль.
+> **Статус: ✅ ВЫПОЛНЕН** (`npm run build` — vue-tsc strict + vite — проходит).
+
+- ✅ `components/common/Avatar.vue` — единый `CharacterAvatar` (§12) расширен:
+  - размер `xl` (168 px, диапазон 160–220, для профиля) — добавлен в union пропа `size`;
+  - проп `shape: 'rounded' | 'circle'` — `rounded` по умолчанию (обратная совместимость), `circle` → `border-radius: 50%` (круглая миниатюра для сообщений);
+  - placeholder (инициалы + accent) сохранён как полноценный UI-элемент (§10.1);
+  - `imageUrl` был и остался — теперь передаётся везде.
+- ✅ Проброс `character.avatar_url` во всех списках/сообщениях:
+  - `CharacterList.vue` (`character-row__avatar`, `size="sm"`);
+  - `CharacterSettings.vue` (`character-settings__avatar`, `size="sm"`);
+  - `CharacterDetails.vue` (`size="lg"`);
+  - `MessageItem.vue` — обе роли (character и user) передают `props.character?.avatar_url`, обе — `shape="circle"` (для user пока остаётся имя-заглушка «Я»; смена имени player-персонажа — Этап 4);
+  - `PlayerSettings.vue` (`size="lg"`);
+  - профиль `CharacterProfileModal.vue` — `size="xl"`;
+  - заодно `CharacterDeleteConfirm.vue` (`size="lg"`) — вне списка ТЗ, но консистентно.
+- ✅ `vite.config.ts`: добавлен dev-прокси `/static → localhost:8000`, чтобы `<img src="/static/avatars/...">` работал на `:3000` (§2.2, риск §7). `Sidebar.vue` не трогался (чат, у чатов нет `avatar_url`).
+- Кликабельность avatar+имя (сообщение / правая панель) — намеренно не входит в этот этап, это Этап 4.
 
 ### Этап 3 — Единый `CharacterProfileModal` (реализация ТЗ §7–§8, §28–§30)
 
@@ -207,7 +218,7 @@ Frontend: тестовой инфраструктуры нет — провер�
 
 | Критерий | Покрытие |
 |----------|----------|
-| avatar у персонажа, показ в профиле/сообщениях/списках | ✅ Этап B (backend хранилище/upload) + frontend 2–4 |
+| avatar у персонажа, показ в профиле/сообщениях/списках | ✅ Этап B (backend хранилище/upload) + ✅ Этап 2 (показ аватара/placeholder во всех местах); клики — frontend 4 |
 | avatar можно изменить, отсутствующий → placeholder | ✅ Этап B (upload/delete + замена файла) + frontend 3 |
 | отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); ✅ frontend 1 (типы/API/store/mocks), UI-редактирование — frontend 3 |
 | `appearance` игрока поддерживается | frontend 5 |
@@ -242,7 +253,7 @@ Frontend: тестовой инфраструктуры нет — провер�
 2. ✅ **Backend B** (avatar storage + endpoints + Pillow) → тесты.
 3. ✅ **Backend C** (appearance в контекст, изоляция) → тесты `test_prompt_builder.py` / `test_context_builder.py`.
 4. ✅ **Frontend 1** (типы/api/store/mocks) → `npm run build` (vue-tsc strict) проходит.
-5. **Frontend 2** (Avatar component: xl/circle/avatar_url).
+5. ✅ **Frontend 2** (Avatar component: xl/circle/avatar_url + vite-прокси `/static`) → `npm run build` (vue-tsc strict) проходит.
 6. **Frontend 3** (CharacterProfileModal редизайн + перенос монтирования).
 7. **Frontend 4** (три точки входа).
 8. **Frontend 5** (Player).

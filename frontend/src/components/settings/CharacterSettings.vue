@@ -60,7 +60,12 @@ function remove(characterId: number) {
         class="character-settings__row"
         :style="{ animationDelay: `${Math.min(index, 10) * 24}ms` }"
       >
-        <Avatar :name="character.name" size="sm" class="character-settings__avatar" />
+        <Avatar
+          :name="character.name"
+          :image-url="character.avatar_url"
+          size="sm"
+          class="character-settings__avatar"
+        />
         <div class="character-settings__info">
           <div class="character-settings__name-row">
             <span class="character-settings__name" :style="{ color: accent(character.name) }">

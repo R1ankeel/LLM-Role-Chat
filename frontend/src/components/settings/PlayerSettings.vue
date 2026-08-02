@@ -40,7 +40,7 @@ async function save() {
     <h3 class="player-settings__heading">Игрок</h3>
 
     <div v-if="player" class="player-settings__card">
-      <Avatar :name="player.name" size="lg" />
+      <Avatar :name="player.name" :image-url="player.avatar_url" size="lg" />
       <div class="player-settings__info">
         <span class="player-settings__label">Текущее имя</span>
         <span class="player-settings__name">{{ player.name }}</span>

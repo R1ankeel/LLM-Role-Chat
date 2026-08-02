@@ -48,7 +48,13 @@ function onDelete() {
     :class="[`message-item--${message.role}`, { 'is-streaming': isStreaming }]"
   >
     <template v-if="message.role === 'character'">
-      <Avatar :name="authorName" size="sm" class="message-item__avatar" />
+      <Avatar
+        :name="authorName"
+        :image-url="props.character?.avatar_url"
+        size="sm"
+        shape="circle"
+        class="message-item__avatar"
+      />
       <div class="message-item__body">
         <div class="message-item__meta">
           <span class="message-item__author" :style="{ color: authorAccent }">
@@ -100,7 +106,13 @@ function onDelete() {
           <p class="message-item__text">{{ message.content }}</p>
         </div>
       </div>
-      <Avatar name="Я" size="sm" class="message-item__avatar" />
+      <Avatar
+        name="Я"
+        :image-url="props.character?.avatar_url"
+        size="sm"
+        shape="circle"
+        class="message-item__avatar"
+      />
     </template>
   </article>
 </template>

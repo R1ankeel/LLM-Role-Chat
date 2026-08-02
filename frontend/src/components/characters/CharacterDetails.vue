@@ -87,7 +87,7 @@ function focusLocation() {
     </button>
 
     <header class="character-details__header">
-      <Avatar :name="selected.name" size="lg" />
+      <Avatar :name="selected.name" :image-url="selected.avatar_url" size="lg" />
       <div class="character-details__heading">
         <h3 class="character-details__name" :style="{ color: accent }">{{ selected.name }}</h3>
         <div class="character-details__badges">

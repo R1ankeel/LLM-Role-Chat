@@ -75,7 +75,7 @@ async function submit() {
     @close="close"
   >
     <div class="character-profile__header">
-      <Avatar :name="target.name" size="lg" />
+      <Avatar :name="target.name" :image-url="target.avatar_url" size="xl" />
       <div class="character-profile__heading">
         <span class="character-profile__name" :style="{ color: accent }">{{ target.name }}</span>
         <span class="character-profile__meta">

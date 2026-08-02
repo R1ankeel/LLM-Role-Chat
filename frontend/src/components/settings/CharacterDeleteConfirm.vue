@@ -48,7 +48,7 @@ async function confirm() {
     @close="ui.cancelCharacterDelete"
   >
     <div class="character-delete__content">
-      <Avatar :name="target.name" size="lg" />
+      <Avatar :name="target.name" :image-url="target.avatar_url" size="lg" />
       <div class="character-delete__text">
         <span class="character-delete__name" :style="{ color: accent }">{{ target.name }}</span>
         <p class="character-delete__description">
