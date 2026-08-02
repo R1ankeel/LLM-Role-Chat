@@ -16,6 +16,7 @@ from . import crud
 from . import memory_service
 from . import models
 from . import ollama_client
+from . import pending_intervention
 from . import perception
 from . import relationship_analyzer
 from . import relationship_service
@@ -334,6 +335,12 @@ async def process_user_message_streaming(
     # per turn, fixed once to the user-message id. utcnow() is never used for it.
     round_id = f"r{chat_id}-m{user_message.id}"
 
+    # One-time user intervention ("Вмешательство") — read once as a snapshot
+    # and consumed only after a fully successful round.
+    round_intervention = pending_intervention.get_intervention(chat_id)
+    directive = round_intervention.instruction if round_intervention else None
+    round_generation_ok = True
+
     round_messages: list = [user_message]
     yield {"type": "message", "message": _message_to_dict(user_message)}
 
@@ -625,6 +632,7 @@ async def process_user_message_streaming(
                 proactive_boost=proactive_boosts.get(current_character.id, 0.0),
                 built_context=built_context,
                 epistemic_mask_block=epistemic_mask_block,
+                directive=directive,
             ):
                 if event["type"] == "token":
                     # Forward token to SSE with character_id for frontend avatar
@@ -639,6 +647,7 @@ async def process_user_message_streaming(
                 exc,
             )
             response_text = f"*[{current_character.name} молчит, не в силах ответить]*"
+            round_generation_ok = False
 
         char_location = getattr(current_character, "location", "") or ""
         # Detect remote communication channel from response text
@@ -890,6 +899,14 @@ async def process_user_message_streaming(
             chat.model_name,
         )
     )
+
+    # Consume the one-time intervention after a fully successful round. If a
+    # character fell back to the "молчит" placeholder, the round is considered
+    # failed and the instruction is preserved for a retry (docs/intervention.md).
+    if directive is not None and round_generation_ok:
+        pending_intervention.consume_intervention(
+            chat_id, expected=round_intervention
+        )
 
 
 async def _analyze_and_update_relationships(
@@ -1960,6 +1977,11 @@ async def regenerate_message_streaming(
     other_names = get_other_character_names(characters, character.id)
     enable_thinking = bool(getattr(chat, "thinking_mode", settings.enable_thinking))
 
+    # One-time user intervention applies to regeneration too, but is NOT
+    # consumed here — it survives until a full round is generated.
+    pending = pending_intervention.get_intervention(chat_id, character.id)
+    directive = pending.instruction if pending else None
+
     response_text = ""
     try:
         async for event in ollama_client.generate(
@@ -1992,6 +2014,7 @@ async def regenerate_message_streaming(
             proactive_boost=proactive_boost,
             built_context=built_context,
             epistemic_mask_block=epistemic_mask_block,
+            directive=directive,
         ):
             if event["type"] == "token":
                 yield {

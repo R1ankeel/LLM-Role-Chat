@@ -24,6 +24,7 @@ import type {
   RelationshipUpdateInput,
   SceneStateUpdateInput,
   TimelinePage,
+  InterventionRead,
 } from '@/api/types'
 import {
   MOCK_MODELS as mockModels,
@@ -49,6 +50,8 @@ function nextId(): number {
   seq += 1
   return seq
 }
+
+const mockInterventions: Record<number, InterventionRead> = {}
 
 function delay<T>(value: T, ms = LATENCY_MS): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms))
@@ -445,6 +448,26 @@ export const mockApi: Api = {
     const list = mockMessages[chatId] ?? []
     const index = list.findIndex((m) => m.id === messageId)
     if (index !== -1) list.splice(index, 1)
+    return delay(undefined)
+  },
+
+  getIntervention(chatId: number): Promise<InterventionRead | null> {
+    return delay(clone(mockInterventions[chatId] ?? null))
+  },
+
+  setIntervention(chatId: number, instruction: string): Promise<InterventionRead> {
+    const entry: InterventionRead = {
+      chat_id: chatId,
+      character_id: null,
+      instruction,
+      created_at: nowIso(),
+    }
+    mockInterventions[chatId] = entry
+    return delay(clone(entry))
+  },
+
+  deleteIntervention(chatId: number): Promise<void> {
+    delete mockInterventions[chatId]
     return delay(undefined)
   },
 

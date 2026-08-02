@@ -468,6 +468,29 @@ class UserMessage(BaseModel):
         return parse_target_ids(value)
 
 
+# ------------------------- One-time intervention -------------------------
+class InterventionCreate(BaseModel):
+    """Body for PUT /api/chats/{chat_id}/intervention."""
+
+    instruction: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("instruction", mode="before")
+    @classmethod
+    def _strip_instruction(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class InterventionRead(BaseModel):
+    """Pending one-time intervention state."""
+
+    chat_id: int
+    character_id: Optional[int] = None
+    instruction: str
+    created_at: datetime
+
+
 # ------------------------- Memory Jobs (P3) -------------------------
 class MemoryJobRead(BaseModel):
     """Job status for memory processing observability."""

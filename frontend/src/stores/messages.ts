@@ -9,6 +9,7 @@ import type { Message } from '@/types/message'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useSceneStore } from '@/stores/scene'
+import { useInterventionStore } from '@/stores/intervention'
 
 export type GenerationStatus = 'idle' | 'sending' | 'waiting' | 'streaming'
 
@@ -58,6 +59,11 @@ export const useMessagesStore = defineStore('messages', () => {
       generatingCharacterId.value = null
       currentStream.value = null
     }
+  }
+
+  function refreshIntervention() {
+    const id = chatId()
+    if (id !== null) void useInterventionStore().refresh(id)
   }
 
   function clearRestoreTimer() {
@@ -202,11 +208,13 @@ export const useMessagesStore = defineStore('messages', () => {
       .onDone(() => {
         setStatus('idle')
         void refreshScene(id)
+        refreshIntervention()
       })
       .onError((error) => {
         if (stream.aborted) {
           setStatus('idle')
           void refreshScene(id)
+          refreshIntervention()
           return
         }
         if (streamingMessage) {
@@ -215,6 +223,7 @@ export const useMessagesStore = defineStore('messages', () => {
         }
         handleStreamError(error)
         setStatus('idle')
+        refreshIntervention()
       })
   }
 

@@ -5,6 +5,7 @@ import type { Api } from '@/api/types'
 import * as chatsApi from '@/api/chats'
 import * as charactersApi from '@/api/characters'
 import * as messagesApi from '@/api/messages'
+import * as interventionApi from '@/api/intervention'
 import * as sceneApi from '@/api/scene'
 import * as relationshipsApi from '@/api/relationships'
 import * as healthApi from '@/api/health'
@@ -39,6 +40,9 @@ export const api: Api = useMocks
       stopGeneration: messagesApi.stopGeneration,
       getGenerationStatus: messagesApi.getGenerationStatus,
       deleteMessage: messagesApi.deleteMessage,
+      getIntervention: interventionApi.getIntervention,
+      setIntervention: interventionApi.setIntervention,
+      deleteIntervention: interventionApi.deleteIntervention,
       fetchRelationshipGraph: relationshipsApi.fetchRelationshipGraph,
       fetchRelationshipIssues: relationshipsApi.fetchRelationshipIssues,
       fetchOutgoingRelationships: relationshipsApi.fetchOutgoingRelationships,

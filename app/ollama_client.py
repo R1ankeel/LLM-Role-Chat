@@ -18,6 +18,7 @@ from .prompt_builder import (
     build_character_summary_block,
     build_extraction_system,
     build_extraction_user,
+    build_intervention_block,
     build_isolated_block,
     build_memories_block,
     build_negative_prompting_block,
@@ -726,6 +727,7 @@ def _build_generation_messages(
     behavior_drivers_block: str = "",
     open_issues_block: str = "",
     epistemic_mask_block: str = "",
+    directive_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -745,6 +747,7 @@ def _build_generation_messages(
         behavior_drivers_block,
         open_issues_block,
         epistemic_mask_block,
+        directive_block,
         generation_cue,
         build_negative_prompting_block(),
     )
@@ -811,6 +814,7 @@ async def _generate_once(
     built_context: schemas.BuiltContext | None = None,
     proactive_boost: float = 0.0,
     epistemic_mask_block: str = "",
+    directive: str | None = None,
 ) -> tuple[str, str, bool, int, list[str]]:
     """One LLM call + isolation sanitize. Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list)."""
     api_mode = "chat" if settings.use_chat_api else "generate"
@@ -898,6 +902,7 @@ async def _generate_once(
         )
 
     isolated_block = build_isolated_block() if is_isolated else ""
+    directive_block = build_intervention_block(directive) if directive else ""
 
     tokens_collected = []
 
@@ -925,6 +930,7 @@ async def _generate_once(
             behavior_drivers_block=behavior_drivers_block,
             open_issues_block=open_issues_block,
             epistemic_mask_block=epistemic_mask_block,
+            directive_block=directive_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -966,6 +972,8 @@ async def _generate_once(
             context_parts.append(open_issues_block)
         if epistemic_mask_block:
             context_parts.append(epistemic_mask_block)
+        if directive_block:
+            context_parts.append(directive_block)
         context_parts.append(generation_cue)
         full_prompt = "\n\n".join(context_parts)
         prompt_len = len(full_prompt)
@@ -1220,6 +1228,7 @@ async def generate(
     built_context: schemas.BuiltContext | None = None,
     proactive_boost: float = 0.0,
     epistemic_mask_block: str = "",
+    directive: str | None = None,
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1305,6 +1314,7 @@ async def generate(
             built_context=built_context,
             proactive_boost=proactive_boost,
             epistemic_mask_block=epistemic_mask_block,
+            directive=directive,
         )
 
         if not isolation_ok:

@@ -2,19 +2,50 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useChatsStore } from '@/stores/chats'
 import { useMessagesStore } from '@/stores/messages'
+import { useInterventionStore } from '@/stores/intervention'
 
 const chats = useChatsStore()
 const messages = useMessagesStore()
+const intervention = useInterventionStore()
 
 const text = ref('')
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const countdown = ref<number | null>(null)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
+const editorOpen = ref(false)
+const draft = ref('')
+
 const hasChat = computed(() => Boolean(chats.currentChat))
 const generating = computed(() => messages.isGenerating)
 const error = computed(() => messages.generationError)
 const blocked = computed(() => countdown.value !== null || error.value?.kind === 'conflict')
+
+function openInterventionEditor() {
+  draft.value = intervention.instruction?.instruction ?? ''
+  editorOpen.value = true
+}
+
+function closeInterventionEditor() {
+  editorOpen.value = false
+  draft.value = ''
+}
+
+async function saveIntervention() {
+  const chatId = chats.currentChatId
+  if (!chatId || !draft.value.trim() || intervention.busy) return
+  await intervention.set(chatId, draft.value)
+  editorOpen.value = false
+  draft.value = ''
+}
+
+async function removeIntervention() {
+  const chatId = chats.currentChatId
+  if (!chatId) return
+  await intervention.remove(chatId)
+  editorOpen.value = false
+  draft.value = ''
+}
 
 function startCountdown(seconds: number) {
   stopCountdown()
@@ -113,6 +144,65 @@ function onKeydown(e: KeyboardEvent) {
         </button>
       </div>
     </transition>
+
+    <div v-if="hasChat" class="intervention">
+      <button
+        v-if="!editorOpen && !intervention.active"
+        class="intervention__toggle"
+        title="Вмешательство — одноразовая инструкция для следующего ответа"
+        aria-label="Открыть вмешательство"
+        @click="openInterventionEditor"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" fill="currentColor" />
+        </svg>
+        <span>Вмешательство</span>
+      </button>
+
+      <div v-else-if="editorOpen" class="intervention__editor">
+        <textarea
+          v-model="draft"
+          class="intervention__input"
+          rows="2"
+          placeholder="Что должно произойти в следующем ответе?…"
+          aria-label="Текст вмешательства"
+        ></textarea>
+        <div class="intervention__actions">
+          <button
+            class="intervention__save"
+            :disabled="!draft.trim() || intervention.busy"
+            @click="saveIntervention"
+          >
+            Сохранить
+          </button>
+          <button class="intervention__cancel" @click="closeInterventionEditor">Отмена</button>
+        </div>
+        <p class="intervention__hint">Сработает один раз — при следующем ответе персонажей.</p>
+      </div>
+
+      <div
+        v-else
+        class="intervention__active"
+        role="button"
+        tabindex="0"
+        title="Редактировать вмешательство"
+        @click="openInterventionEditor"
+        @keydown.enter="openInterventionEditor"
+      >
+        <span class="intervention__badge">⚡ Вмешательство активно</span>
+        <span class="intervention__preview">{{ intervention.instruction?.instruction }}</span>
+        <button
+          class="intervention__remove"
+          title="Удалить вмешательство"
+          aria-label="Удалить вмешательство"
+          @click.stop="removeIntervention"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+    </div>
 
     <div
       class="composer"
@@ -303,6 +393,145 @@ function onKeydown(e: KeyboardEvent) {
   text-align: center;
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+.intervention {
+  margin-bottom: var(--space-2);
+}
+
+.intervention__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px dashed var(--accent-border-strong);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.intervention__toggle:hover {
+  background: var(--accent-border);
+  border-style: solid;
+}
+
+.intervention__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-border-strong);
+  border-radius: var(--radius);
+}
+
+.intervention__input {
+  resize: vertical;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  min-height: 48px;
+  max-height: 160px;
+}
+
+.intervention__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.intervention__save,
+.intervention__cancel {
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.intervention__save {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.intervention__save:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.intervention__save:disabled {
+  background: var(--bg-active);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.intervention__cancel {
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.intervention__cancel:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.intervention__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.intervention__active {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.intervention__active:hover {
+  border-color: var(--accent-border-strong);
+}
+
+.intervention__badge {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.intervention__preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+}
+
+.intervention__remove {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.intervention__remove:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 @media (max-width: 767px) {

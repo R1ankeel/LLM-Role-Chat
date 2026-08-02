@@ -13,6 +13,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [database.md](database.md) | Схема базы данных (SQLite), индексы, миграции |
 | [configuration.md](configuration.md) | Все настройки через `.env` (значения по умолчанию) |
 | [relations.md](relations.md) | Система отношений между персонажами (анализатор, интерпретатор, issues, epistemic mask) |
+| [intervention.md](intervention.md) | Одноразовое «Вмешательство» игрока: жизнь инструкции, API, промпт |
 
 ## Краткий обзор
 

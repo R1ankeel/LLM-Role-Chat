@@ -552,6 +552,19 @@ def build_isolated_block() -> str:
     return _TEMPLATES.get("isolated", "")
 
 
+def build_intervention_block(text: str) -> str:
+    """Build a one-time user intervention block for the next generation.
+
+    Empty text yields an empty block so callers can append safely.
+    """
+    if not text or not text.strip():
+        return ""
+    template = _TEMPLATES.get("intervention", {}).get("block", "")
+    if not template:
+        return ""
+    return template.format(text=text.strip())
+
+
 def build_scene_state_user(current_state: dict, history: str, character_names: str, locations: str = "[]") -> str:
     """Localized user prompt for scene state extraction."""
     template = _TEMPLATES["scene_state"]["user_prefix"]

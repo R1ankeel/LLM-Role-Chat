@@ -5,13 +5,14 @@ import json
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import chat_engine
 from .. import crud
 from .. import generation_tracker
 from .. import models
+from .. import pending_intervention
 from .. import schemas
 from ..database import AsyncSessionLocal, get_async_db
 from ..ratelimit import check_rate_limit, update_rate_limit
@@ -128,6 +129,86 @@ async def send_message(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ------------------------- One-time intervention -------------------------
+@router.put(
+    "/chats/{chat_id}/intervention",
+    response_model=schemas.InterventionRead,
+    status_code=status.HTTP_200_OK,
+)
+async def put_chat_intervention(
+    chat_id: int,
+    payload: schemas.InterventionCreate,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Set (or replace) a one-time intervention for the next generation.
+
+    The instruction is stored in memory only and is consumed automatically
+    after a fully successful round. The user may delete it manually.
+    """
+    if await crud.get_chat(db, chat_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Чат не найден",
+        )
+    instruction = payload.instruction.strip()
+    if not instruction:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Вмешательство не может быть пустым",
+        )
+    entry = pending_intervention.set_intervention(chat_id, instruction)
+    return schemas.InterventionRead(
+        chat_id=entry.chat_id,
+        character_id=entry.character_id,
+        instruction=entry.instruction,
+        created_at=entry.created_at,
+    )
+
+
+@router.get(
+    "/chats/{chat_id}/intervention",
+    response_model=schemas.InterventionRead | None,
+    status_code=status.HTTP_200_OK,
+)
+async def get_chat_intervention(
+    chat_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Return the pending intervention for a chat, or ``null`` if none."""
+    if await crud.get_chat(db, chat_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Чат не найден",
+        )
+    entry = pending_intervention.get_intervention(chat_id)
+    if entry is None:
+        return None
+    return schemas.InterventionRead(
+        chat_id=entry.chat_id,
+        character_id=entry.character_id,
+        instruction=entry.instruction,
+        created_at=entry.created_at,
+    )
+
+
+@router.delete(
+    "/chats/{chat_id}/intervention",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_chat_intervention(
+    chat_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Delete a pending intervention before it is used."""
+    if await crud.get_chat(db, chat_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Чат не найден",
+        )
+    pending_intervention.remove_intervention(chat_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/chats/{chat_id}/stop-generation", status_code=status.HTTP_200_OK)

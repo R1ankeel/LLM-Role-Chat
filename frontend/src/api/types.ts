@@ -119,6 +119,14 @@ export interface TimelinePage {
   offset?: number
 }
 
+/** PUT/GET /chats/{id}/intervention — одноразовое вмешательство для следующего хода. */
+export interface InterventionRead {
+  chat_id: number
+  character_id: number | null
+  instruction: string
+  created_at: string
+}
+
 export interface Api {
   fetchHealth(): Promise<HealthResponse>
   fetchModels(): Promise<ModelsResponse>
@@ -147,6 +155,9 @@ export interface Api {
   stopGeneration(chatId: number): Promise<void>
   getGenerationStatus(chatId: number): Promise<boolean>
   deleteMessage(chatId: number, messageId: number): Promise<void>
+  getIntervention(chatId: number): Promise<InterventionRead | null>
+  setIntervention(chatId: number, instruction: string): Promise<InterventionRead>
+  deleteIntervention(chatId: number): Promise<void>
   fetchRelationshipGraph(chatId: number): Promise<RelationshipGraph>
   fetchRelationshipIssues(
     chatId: number,

@@ -6,6 +6,7 @@ import { useMessagesStore } from '@/stores/messages'
 import { useCharactersStore } from '@/stores/characters'
 import { useSceneStore } from '@/stores/scene'
 import { useRelationshipsStore } from '@/stores/relationships'
+import { useInterventionStore } from '@/stores/intervention'
 import { toNumber } from '@/router'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import MessageList from '@/components/chat/MessageList.vue'
@@ -23,6 +24,7 @@ const messages = useMessagesStore()
 const characters = useCharactersStore()
 const scene = useSceneStore()
 const relationships = useRelationshipsStore()
+const intervention = useInterventionStore()
 
 async function openChat(id: number) {
   const detail = await chats.openChat(id)
@@ -36,6 +38,7 @@ async function openChat(id: number) {
     messages.loadForChat(id),
     scene.loadForChat(id),
     relationships.loadForChat(id),
+    intervention.refresh(id),
   ])
 }
 
@@ -54,6 +57,7 @@ onBeforeUnmount(() => {
   characters.reset()
   scene.reset()
   relationships.reset()
+  intervention.reset()
   chats.clearChat()
 })
 </script>
