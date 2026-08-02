@@ -10,6 +10,8 @@ export interface Character {
   background: string
   relationships: string
   location: string
+  appearance: string
+  avatar_url: string
   temperature?: number | null
   order_index: number
   is_player: boolean
@@ -28,8 +30,8 @@ export interface CharacterSummary {
 
 /**
  * Форма персонажа для Settings (create/update). Совпадает с полями
- * CharacterUpdate/CharacterCreate; `appearance` — frontend-only UI-задел,
- * не сохраняется в backend (пока только разметка, TODO: поле Character).
+ * CharacterUpdate/CharacterCreate; `appearance` и `avatar_url` сохраняются
+ * в backend (PUT /characters/{id}).
  */
 export interface CharacterForm {
   name: string
@@ -44,6 +46,7 @@ export interface CharacterForm {
   temperature?: number | null
   order_index: number
   appearance: string
+  avatar_url: string
 }
 
 export function characterToForm(character: Character): CharacterForm {
@@ -59,7 +62,8 @@ export function characterToForm(character: Character): CharacterForm {
     location: character.location,
     temperature: character.temperature ?? 0.8,
     order_index: character.order_index,
-    appearance: '',
+    appearance: character.appearance,
+    avatar_url: character.avatar_url,
   }
 }
 
@@ -75,6 +79,8 @@ export function formToCharacterUpdate(form: CharacterForm): {
   location: string
   temperature: number | null
   order_index: number
+  appearance: string
+  avatar_url: string
 } {
   return {
     name: form.name,
@@ -91,5 +97,7 @@ export function formToCharacterUpdate(form: CharacterForm): {
         ? form.temperature
         : null,
     order_index: form.order_index,
+    appearance: form.appearance,
+    avatar_url: form.avatar_url,
   }
 }

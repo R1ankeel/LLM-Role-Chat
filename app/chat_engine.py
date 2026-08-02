@@ -565,6 +565,9 @@ async def process_user_message_streaming(
                 round_messages=round_messages,
                 character_names=character_names,
                 character_locations=character_locations,
+                character_appearances={
+                    c.name: c.appearance or "" for c in all_characters
+                },
                 summary=summary_text,
                 summary_through_message_id=(
                     getattr(summary_obj, "through_message_id", None)
@@ -1931,6 +1934,9 @@ async def regenerate_message_streaming(
             round_messages=round_messages,
             character_names=character_names,
             character_locations=character_locations,
+            character_appearances={
+                c.name: c.appearance or "" for c in all_characters
+            },
             summary=summary_text,
             summary_through_message_id=(
                 getattr(summary_obj, "through_message_id", None)

@@ -193,6 +193,8 @@
 7. Финальный проход: триминг в порядке приоритета (retrieved → memories → summary → recent).
 8. Диагностика (`ContextDiagnostics`) и по-компонентный подсчёт токенов.
 
+Scene-блок (`prompt_builder.build_scene_block`) принимает `character_appearances` (map имя → внешность, Этап C плана profile-avatar-appearance): в него добавляется строка `Внешность рядом стоящих: …` **только** для персонажей той же локации, что и текущий (co-present) — изоляция знаний сохраняется. Сама внешность персонажа попадает в его `<character>`-карту через `<appearance>`-тег. `format_character_descriptor` (трекер локаций/эстракция памяти) внешность не включает.
+
 Бюджет считается в `context_budget.build_budget` (приоритет: reserve 15% → state P0 → summary P2 → memory P2 → retrieval P3 → recent-остаток). Динамический `num_ctx` на чат отслеживает `context_state.ContextState` (старт с `MIN_CTX`, только рост до `MAX_CTX` с safety factor 1.3).
 
 ## Поток восприятия (Perception → Witness)

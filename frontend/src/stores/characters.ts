@@ -138,6 +138,30 @@ export const useCharactersStore = defineStore('characters', () => {
     }
   }
 
+  async function uploadAvatar(characterId: number, file: File) {
+    mutating.value = true
+    try {
+      const updated = await api.uploadCharacterAvatar(characterId, file)
+      const index = characters.value.findIndex((c) => c.id === characterId)
+      if (index !== -1) characters.value[index] = updated
+      return updated
+    } finally {
+      mutating.value = false
+    }
+  }
+
+  async function removeAvatar(characterId: number) {
+    mutating.value = true
+    try {
+      const updated = await api.deleteCharacterAvatar(characterId)
+      const index = characters.value.findIndex((c) => c.id === characterId)
+      if (index !== -1) characters.value[index] = updated
+      return updated
+    } finally {
+      mutating.value = false
+    }
+  }
+
   function reset() {
     characters.value = []
     selectedId.value = null
@@ -170,6 +194,8 @@ export const useCharactersStore = defineStore('characters', () => {
     update,
     remove,
     updatePlayerName,
+    uploadAvatar,
+    removeAvatar,
     reset,
   }
 })

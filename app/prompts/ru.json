@@ -7,7 +7,8 @@
       "background": "background",
       "speech_style": "speech_style",
       "relationships": "relationships",
-      "boundaries": "boundaries"
+      "boundaries": "boundaries",
+      "appearance": "appearance"
     }
   },
   "scene": "Сюжет: {general_prompt}",

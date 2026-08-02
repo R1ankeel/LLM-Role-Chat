@@ -1,6 +1,6 @@
 # План внедрения: Character Profile, аватарки и внешность (docs/Profile.docx)
 
-> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). Этап C и все frontend-этапы 1–6 — ещё не начаты.
+> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). Frontend-этапы 2–6 — ещё не начаты.
 > **Источник ТЗ:** `docs/Profile.docx` (34 пункта, 6 этапов, критерии готовности в §34).
 > **Ограничения ТЗ:** не переписывать frontend целиком, расширять существующую архитектуру, старый frontend (`app/static/`) не трогать, один `CharacterProfileModal`, единый источник истины (`CharacterStore`).
 
@@ -14,21 +14,21 @@
 |-----|-----|-------------|
 | Единый `CharacterProfileModal` | `components/settings/CharacterProfileModal.vue` | Уже существует, но смонтирован ВНУТРИ `SettingsModal` (`SettingsModal.vue:30`) → открыть из правой панели или сообщения невозможно |
 | Точка входа «Settings → Персонажи» | `components/settings/CharacterSettings.vue:20` → `ui.openCharacterProfile(id)` | Работает, открывает тот же модал |
-| Поле `appearance` | `types/character.ts:46` (`CharacterForm.appearance`) и `CharacterFormFields.vue:128` | **Frontend-only UI-задел**: не сохраняется в backend (помечено TODO) |
+| Поле `appearance` | `types/character.ts:46` (`CharacterForm.appearance`) и `CharacterFormFields.vue:128` | ✅ frontend 1 — `characterToForm`/`formToCharacterUpdate` прокидывают `appearance` в `PUT /characters/{id}` (хардкод `''` убран); UI-ввод уже есть в `CharacterFormFields` |
 | Аватар-компонент | `components/common/Avatar.vue` | Проп `imageUrl` уже есть, но размеры только `sm/md/lg`, форма только скруглённая (`--radius`), круглой миниатюры нет; в сообщениях/списках не передаётся `avatar_url` |
-| Механика синхронизации | `stores/characters.ts` `update()` | После `PUT` объект заменяется в массиве → все компоненты (профиль, списки, правая панель) обновляются автоматически — единый источник истины уже соблюдён |
+| Механика синхронизации | `stores/characters.ts` `update()` — после `PUT` объект заменяется в массиве → все компоненты (профиль, списки, правая панель) обновляются автоматически — единый источник истины уже соблюдён; ✅ frontend 1 — то же для аватара: `uploadAvatar()`/`removeAvatar()` |
 | Отображение локации в сообщении | `MessageItem.vue:57` | «Alice · Classroom» уже есть (вторичный текст) |
 
 ### 1.2 Чего нет (требуется по ТЗ)
 
 | Требование ТЗ | Статус |
 |---------------|--------|
-| Поля `appearance` и `avatar_url` в `Character` | ✅ Этап A — колонки, схема, миграция добавлены (`app/models.py:77-78`, `app/schemas.py`, `app/database.py`) |
+| Поля `appearance` и `avatar_url` в `Character` | ✅ Этап A — колонки, схема, миграция добавлены (`app/models.py:77-78`, `app/schemas.py`, `app/database.py`); ✅ frontend 1 — поля в типах `Character`/`CharacterForm` (`types/character.ts`) |
 | Хранение и загрузка аватара (upload/validate/обработка) | ✅ Этап B — `app/avatar_service.py` (magic-bytes, лимит размера, ресайз/конвертация в WebP, безопасные имена), `POST/DELETE /characters/{id}/avatar`; каталог `app/static/avatars/` создаётся при старте |
 | Единый профиль из трёх точек входа (сообщение, правая панель, Settings) | Частично — из Settings да; из сообщения и правой панели нет |
 | Кликабельные avatar+имя в сообщениях | Нет — `MessageItem.vue:51/54` не кликабельны; у сообщений игрока `<Avatar name="Я">` (не аватар player-персонажа) |
 | Кликабельные avatar+имя в правой панели | Нет — `CharacterList.vue:21` клик открывает inline `CharacterDetails`, а не единый профиль |
-| `appearance` в Character Context (self + для присутствующих в той же локации) | Нет — `prompt_builder.py` `_CHARACTER_SECTIONS` (стр. 17), `build_scene_block` (стр. 190), `ru.json` `section_tags`, `format_character_descriptor` (стр. 347) |
+| `appearance` в Character Context (self + для присутствующих в той же локации) | ✅ Этап C — `prompt_builder.py` `_CHARACTER_SECTIONS` += `appearance`, `build_scene_block` += `character_appearances` (только co-present), `ru.json` `section_tags.appearance`, `ContextBuilder.build` += `character_appearances`, `chat_engine.py:558/1924` передают map |
 | Диапазон `temperature` в backend-схеме | ✅ Этап A — `ge=0.0, le=2.0` в `CharacterBase`/`CharacterUpdate` (`schemas.py`); фронт использует 0–2 |
 | Player: редактирование имени + аватар + внешность | Частично — `PlayerSettings.vue` редактирует только имя |
 | Задел под будущие характеристики (отношения, память, состояние…) | Учтено архитектурой единого профиля (§31) |
@@ -77,6 +77,7 @@
 - `ContextBuilder.build` получает новый параметр `character_appearances` (map name→appearance); `chat_engine.py:558` передаёт map, собранную из `characters` (доступны объекты) — фильтрация по локации уже внутри `build_scene_block`.
 - Никаких глобальных списков внешностей в общий system prompt (§20, §32). Не менять существующую witness/isolation логику — только расширить входные данные scene-блока.
 - Обратить внимание: `ollama_client.py:1634` (`scene state extraction`) шлёт `format_character_descriptor` для всех персонажей — это engine-вызов (не генерация за персонажа); если в descriptor добавить appearance, он попадёт в трекер локаций, но не в роли. Проверить и при необходимости appearance туда НЕ включать (оставить только в character card) — решение на этапе C.
+- **Резолюция (Этап C):** `format_character_descriptor` appearance НЕ включает. Внешность попадает в контекст только через `<appearance>` в character card (self) и через строку «Внешность рядом стоящих» в scene-блоке для co-present. Трекер локаций / эстракция памяти внешность не получают — риск §7 снят. Текст строки: `Внешность рядом стоящих: Имя — <описание>, ...` (только непустые внешности, только персонажи той же локации).
 
 ### 2.5 Temperature
 
@@ -111,14 +112,19 @@
 
 ### Этап C — Appearance в контекст
 
-- `app/prompts/ru.json`: `character.section_tags.appearance = "appearance"`.
+> **Статус: ✅ ВЫПОЛНЕН.**
+
+- `app/prompts/ru.json`: `character.section_tags.appearance = "appearance"` ✅.
 - `app/prompt_builder.py`:
-  - `_CHARACTER_SECTIONS` += `"appearance"` → попадает в `build_character_card` (self);
-  - `build_scene_block(..., character_appearances=None)`: для same-location имён добавлять строки внешности (только для co-present);
-  - `format_character_descriptor`: решить включать ли appearance (п.2.4 — скорее НЕ включать).
-- `app/context_builder.py` `ContextBuilder.build` += параметр `character_appearances`, пробросить в `build_scene_block`.
-- `app/chat_engine.py` (строки 558 и 1924): собрать `{character.name: character.appearance}` и передать.
-- Тесты: `tests/test_prompt_builder.py` / `test_context_builder.py` (см. §5).
+  - `_CHARACTER_SECTIONS` += `"appearance"` → попадает в `build_character_card` (self) как `<appearance>`-тег ✅;
+  - `build_scene_block(..., character_appearances=None)`: для same-location имён добавляет строку `Внешность рядом стоящих: Имя — <описание>, ...` (только co-present, только непустые внешности; ключи — имена персонажей) ✅;
+  - `format_character_descriptor`: **НЕ включает appearance** (резолюция п.2.4) ✅.
+- `app/context_builder.py` `ContextBuilder.build` += параметр `character_appearances`, проброшен в `build_scene_block` ✅.
+- `app/chat_engine.py` (строки 558 и 1924): собирается `{character.name: character.appearance or ""}` из `all_characters` (включая player) и передаётся в `build` ✅.
+- Legacy-fallback `ollama_client.py:868` (`build_scene_block` при `context_enabled=False`) — без изменений: старый контекст не получает внешность co-present (осознанно, обратная совместимость).
+- ✅ Тесты: `tests/test_prompt_builder.py` (`TestBuildSceneBlock` — same-location включена / другой локации исключена / пустые внешности / без аргумента) и `tests/test_context_builder.py` (прокидывание `character_appearances`, изоляция при `viewer_location != other_location`).
+
+> **Замечание:** заодно исправлен давно падавший тест `test_full_character_card` — assertion `<relationships>` в character card был ошибочным (relationships добавляется динамически через `build_relationships_block`, в статической карточке его нет).
 
 ---
 
@@ -126,12 +132,17 @@
 
 ### Этап 1 — Типы, API, store, mock-синхронизация (база)
 
-- `types/character.ts`: `Character` += `appearance: string`, `avatar_url: string`; `CharacterForm` += `avatar_url` (appearance уже есть); `characterToForm`/`formToCharacterUpdate` — прокинуть `appearance` (убрать хардкод `''`), `avatar_url` в update.
-- `api/types.ts`: `CharacterUpdateInput` += `appearance?`, `avatar_url?`; `Api` += `uploadCharacterAvatar(characterId, file): Promise<Character>`, `deleteCharacterAvatar(characterId): Promise<Character>`.
-- `api/characters.ts`: реализовать `uploadCharacterAvatar` (multipart FormData, нельзя JSON — body `FormData`), `deleteCharacterAvatar`.
-- `api/index.ts`: зарегистрировать в фасаде.
-- `mocks/service.ts` + `mocks/data.ts`: реализовать те же методы 1:1 (интерфейс `Api` строго совпадает), mock-avatar_url (например, на `mockCharacters` добавить `avatar_url` у части персонажей).
-- `stores/characters.ts`: `uploadAvatar(characterId, file)`, `removeAvatar(characterId)` — после успеха заменять объект в массиве (как `update()`), флаг `mutating`.
+> **Статус: ✅ ВЫПОЛНЕН** (`npm run build` — vue-tsc strict + vite — проходит).
+
+- ✅ `types/character.ts`: `Character` += `appearance: string`, `avatar_url: string`; `CharacterForm` += `avatar_url`; `characterToForm` — прокинул `appearance: character.appearance` (убран хардкод `''`) и добавил `avatar_url: character.avatar_url`; `formToCharacterUpdate` — в возврат добавлены `appearance` и `avatar_url` (и в тип возврата).
+- ✅ `api/types.ts`: `CharacterUpdateInput` += `appearance?`, `avatar_url?`; `Api` += `uploadCharacterAvatar(characterId, file): Promise<Character>`, `deleteCharacterAvatar(characterId): Promise<Character>`.
+- ✅ `api/characters.ts`: `uploadCharacterAvatar` (multipart `FormData`, поле формы `file`, соответствует `UploadFile = File(...)` в `app/routers/characters.py:95`), `deleteCharacterAvatar`.
+- ✅ `api/index.ts`: оба метода зарегистрированы в фасаде (real-ветка).
+- ✅ `mocks/service.ts` + `mocks/data.ts`: методы 1:1 с `Api` (`uploadCharacterAvatar` ставит `/static/avatars/{id}-mock.webp`, `deleteCharacterAvatar` → `avatar_url = ""`); `mockCharacters` — добавлены `appearance` и `avatar_url` (обязательные поля типа), `avatar_url` задан у части персонажей (Alice id 102), `appearance` — у Alice и Bob; в `createCharacter`/`createChat` (player) — поля со значением `''`; `updateCharacter` mock применяет `patch.appearance`/`patch.avatar_url`.
+- ✅ `stores/characters.ts`: `uploadAvatar(characterId, file)`, `removeAvatar(characterId)` — после успеха объект заменяется в массиве (как `update()`), флаг `mutating`.
+- ✅ Компоненты (`CharacterCreateModal.vue`, `CharacterProfileModal.vue`): начальные `reactive<CharacterForm>` += `avatar_url: ''` (новое обязательное поле формы).
+
+> **Замечание (технический задел):** `uploadCharacterAvatar` требует multipart-тело без JSON. Существующий `request()` всегда сериализовал тело в JSON и ставил `Content-Type: application/json`, поэтому в `api/client.ts` аддитивно расширен `RequestOptions` полем `rawBody?: BodyInit`: при его передаче тело уходит как есть, `Content-Type` не выставляется (boundary генерирует браузер). JSON-ветка не изменена.
 
 ### Этап 2 — Avatar-компонент
 
@@ -185,8 +196,8 @@ Backend (pytest, существующая структура `tests/`):
   - upload: несуществующий персонаж → 404; недопустимый тип (магик-байты) → 400; слишком большой файл → 400; успешный upload → `avatar_url` начинается с `/static/avatars/`, файл существует и является валидным WebP;
   - delete avatar → `avatar_url == ""`, файл удалён;
   - замена аватара удаляет старый файл.
-- `tests/test_prompt_builder.py`: `<appearance>` присутствует в character card (self); scene-блок содержит внешность только для персонажей той же локации, НЕ содержит для других локаций (изоляция).
-- `tests/test_context_builder.py`: `character_appearances` прокидывается; при `viewer_location != other_location` внешность другого не включается.
+- `tests/test_prompt_builder.py` (✅ Этап C-часть реализована): `<appearance>` присутствует в character card (self); scene-блок содержит внешность только для персонажей той же локации, НЕ содержит для других локаций (изоляция).
+- `tests/test_context_builder.py` (✅ Этап C-часть реализована): `character_appearances` прокидывается; при `viewer_location != other_location` внешность другого не включается.
 
 Frontend: тестовой инфраструктуры нет — проверка `npm run build` (vue-tsc strict) + ручные сценарии (три точки входа, upload/delete аватара, синхронизация без reload).
 
@@ -198,10 +209,10 @@ Frontend: тестовой инфраструктуры нет — провер�
 |----------|----------|
 | avatar у персонажа, показ в профиле/сообщениях/списках | ✅ Этап B (backend хранилище/upload) + frontend 2–4 |
 | avatar можно изменить, отсутствующий → placeholder | ✅ Этап B (upload/delete + замена файла) + frontend 3 |
-| отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); UI-часть — frontend 1/3 |
+| отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); ✅ frontend 1 (типы/API/store/mocks), UI-редактирование — frontend 3 |
 | `appearance` игрока поддерживается | frontend 5 |
-| `appearance` попадает в Character Context | Этап C |
-| `appearance` не нарушает изоляцию | Этап C (тест) |
+| `appearance` попадает в Character Context | ✅ Этап C (самостоятельно + co-present в scene-блоке) |
+| `appearance` не нарушает изоляцию | ✅ Этап C (тест) |
 | клик по avatar/имени в сообщении → профиль | frontend 4 |
 | клик в Right Panel → профиль | frontend 4 |
 | клик в Settings → тот же профиль | frontend 3–4 |
@@ -217,8 +228,8 @@ Frontend: тестовой инфраструктуры нет — провер�
 |------|--------|---------|
 | Раздача `/static` в dev (порт 3000) | низкий | proxy `/static → :8000` в `vite.config.ts` |
 | Nested модалки (профиль поверх Settings) | низкий | z-index вложенных модалок, перенос в `ChatView` |
-| Изоляция знаний при добавлении appearance | средний | Appearance только в character card (self) и в scene-блок для same-location; тест изоляции; не менять witness-логику |
-| Внешность в scene-state extraction для всех персонажей | низкий | Осознанное решение: в `format_character_descriptor` appearance НЕ включать (п.2.4) |
+| Изоляция знаний при добавлении appearance | средний | ✅ Appearance только в character card (self) и в scene-блок для same-location; тест изоляции; witness-логика не менялась |
+| Внешность в scene-state extraction для всех персонажей | низкий | ✅ Осознанное решение: в `format_character_descriptor` appearance НЕ включать (п.2.4) |
 | Большие/невалидные файлы | средний | magic-byte валидация, лимит размера, ресайз через Pillow |
 | Расхождение с макетом | средний | Ручная сверка на Этапах 3 и 6 (PNG из docs/) |
 | Инерция кликов в правой панели (была детализация) | средний | UX-решение на Этапе 5: клик → единый профиль, отношения/память доступны изнутри модалки и/или вторичного inline-слоя |
@@ -229,8 +240,8 @@ Frontend: тестовой инфраструктуры нет — провер�
 
 1. ✅ **Backend A** (модель/схема/миграция) → тесты `test_character_profile.py` (A-часть).
 2. ✅ **Backend B** (avatar storage + endpoints + Pillow) → тесты.
-3. **Backend C** (appearance в контекст, изоляция) → тесты.
-4. **Frontend 1** (типы/api/store/mocks) → build.
+3. ✅ **Backend C** (appearance в контекст, изоляция) → тесты `test_prompt_builder.py` / `test_context_builder.py`.
+4. ✅ **Frontend 1** (типы/api/store/mocks) → `npm run build` (vue-tsc strict) проходит.
 5. **Frontend 2** (Avatar component: xl/circle/avatar_url).
 6. **Frontend 3** (CharacterProfileModal редизайн + перенос монтирования).
 7. **Frontend 4** (три точки входа).

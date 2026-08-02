@@ -19,6 +19,8 @@ export interface RequestOptions {
   body?: unknown
   query?: Record<string, unknown>
   signal?: AbortSignal
+  /** Raw body (e.g. FormData) sent as-is without JSON/Content-Type handling. */
+  rawBody?: BodyInit
 }
 
 export async function toApiError(res: Response): Promise<ApiError> {
@@ -33,7 +35,7 @@ export async function toApiError(res: Response): Promise<ApiError> {
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, query, signal } = opts
+  const { method = 'GET', body, query, signal, rawBody } = opts
 
   let url = `${API_BASE}${path}`
   if (query) {
@@ -45,12 +47,21 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     if (qs) url += `?${qs}`
   }
 
+  let initHeaders: Record<string, string> | undefined
+  let initBody: BodyInit | null | undefined
+  if (rawBody !== undefined) {
+    initBody = rawBody
+  } else if (body !== undefined) {
+    initHeaders = { 'Content-Type': 'application/json' }
+    initBody = JSON.stringify(body)
+  }
+
   let res: Response
   try {
     res = await fetch(url, {
       method,
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: initHeaders,
+      body: initBody,
       signal,
     })
   } catch (error) {

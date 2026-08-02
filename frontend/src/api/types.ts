@@ -57,6 +57,8 @@ export interface CharacterUpdateInput {
   background?: string
   relationships?: string
   location?: string
+  appearance?: string
+  avatar_url?: string
   temperature?: number | null
   order_index?: number
 }
@@ -129,6 +131,8 @@ export interface Api {
   createCharacter(chatId: number, input: CharacterCreateInput): Promise<Character>
   updateCharacter(characterId: number, patch: CharacterUpdateInput): Promise<Character>
   deleteCharacter(characterId: number): Promise<void>
+  uploadCharacterAvatar(characterId: number, file: File): Promise<Character>
+  deleteCharacterAvatar(characterId: number): Promise<Character>
   updatePlayerName(chatId: number, name: string): Promise<Character>
   fetchMemories(characterId: number): Promise<Memory[]>
   fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null>

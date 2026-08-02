@@ -27,6 +27,19 @@ export function deleteCharacter(characterId: number): Promise<void> {
   return request(`/characters/${characterId}`, { method: 'DELETE' })
 }
 
+export function uploadCharacterAvatar(characterId: number, file: File): Promise<Character> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request<Character>(`/characters/${characterId}/avatar`, {
+    method: 'POST',
+    rawBody: formData,
+  })
+}
+
+export function deleteCharacterAvatar(characterId: number): Promise<Character> {
+  return request<Character>(`/characters/${characterId}/avatar`, { method: 'DELETE' })
+}
+
 export function updatePlayerName(chatId: number, name: string): Promise<Character> {
   return request<Character>(`/chats/${chatId}/player`, { method: 'PUT', body: { name } })
 }

@@ -20,6 +20,7 @@ _CHARACTER_SECTIONS = (
     "background",
     "speech_style",
     "boundaries",
+    "appearance",
 )
 
 
@@ -194,6 +195,7 @@ def build_scene_block(
     *,
     current_character_name: str | None = None,
     character_locations: dict[str, str] | None = None,
+    character_appearances: dict[str, str] | None = None,
     locations: str = "[]",
 ) -> str:
     """Build scene block with per-character location tracking (P3).
@@ -204,6 +206,8 @@ def build_scene_block(
         present_character_names: Deprecated — kept for backward compat.
         current_character_name: Name of the character whose prompt is being built.
         character_locations: Map of character_name -> current_location.
+        character_appearances: Map of character_name -> appearance, shown only for
+            characters co-present with the current character (knowledge isolation).
         locations: JSON array of allowed locations for this chat.
     """
     parts = []
@@ -235,6 +239,20 @@ def build_scene_block(
             ]
             if same_loc:
                 parts.append(f"Рядом с тобой: {', '.join(sorted(same_loc))}")
+
+            # Appearances of co-present characters only (knowledge isolation):
+            # a character sees how the others next to them look, but nothing
+            # about characters located elsewhere.
+            appearances = character_appearances or {}
+            co_present_with_appearance = [
+                f"{name} — {appearances[name].strip()}"
+                for name in sorted(same_loc)
+                if name in appearances and (appearances.get(name) or "").strip()
+            ]
+            if co_present_with_appearance:
+                parts.append(
+                    f"Внешность рядом стоящих: {', '.join(co_present_with_appearance)}"
+                )
         elif present_character_names:
             # Fallback for legacy callers
             parts.append(f"Присутствуют: {', '.join(present_character_names)}")

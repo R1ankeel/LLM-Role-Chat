@@ -174,6 +174,8 @@ export const mockApi: Api = {
       background: input.background ?? '',
       relationships: input.relationships ?? '',
       location: input.location ?? '',
+      appearance: '',
+      avatar_url: '',
       temperature: input.temperature ?? 0.8,
       order_index: input.order_index ?? list.length,
       is_player: false,
@@ -196,6 +198,8 @@ export const mockApi: Api = {
       if (patch.background != null) char.background = patch.background
       if (patch.relationships != null) char.relationships = patch.relationships
       if (patch.location != null) char.location = patch.location
+      if (patch.appearance != null) char.appearance = patch.appearance
+      if (patch.avatar_url != null) char.avatar_url = patch.avatar_url
       if (patch.temperature != null) char.temperature = patch.temperature
       if (patch.order_index != null) char.order_index = patch.order_index
       return delay(clone(char))
@@ -209,6 +213,28 @@ export const mockApi: Api = {
       if (index !== -1) {
         list.splice(index, 1)
         return delay(undefined)
+      }
+    }
+    throw new Error('Персонаж не найден')
+  },
+
+  uploadCharacterAvatar(characterId: number, _file: File): Promise<Character> {
+    for (const list of Object.values(mockCharacters)) {
+      const char = list.find((c) => c.id === characterId)
+      if (char) {
+        char.avatar_url = `/static/avatars/${characterId}-mock.webp`
+        return delay(clone(char))
+      }
+    }
+    throw new Error('Персонаж не найден')
+  },
+
+  deleteCharacterAvatar(characterId: number): Promise<Character> {
+    for (const list of Object.values(mockCharacters)) {
+      const char = list.find((c) => c.id === characterId)
+      if (char) {
+        char.avatar_url = ''
+        return delay(clone(char))
       }
     }
     throw new Error('Персонаж не найден')
@@ -302,6 +328,8 @@ export const mockApi: Api = {
         background: '',
         relationships: '',
         location: '—',
+        appearance: '',
+        avatar_url: '',
         order_index: 0,
         is_player: true,
         created_at: chat.created_at,

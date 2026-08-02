@@ -13,6 +13,7 @@ from app.prompt_builder import (
     build_examples_block,
     build_memories_block,
     build_recent_dialogue_block,
+    build_scene_block,
     build_system_prompt,
 )
 from app.role_isolation import build_role_isolation_block
@@ -27,6 +28,7 @@ def _character(**kwargs) -> SimpleNamespace:
         "speech_style": "",
         "relationships": "",
         "boundaries": "",
+        "appearance": "",
         "example_messages": "",
     }
     defaults.update(kwargs)
@@ -52,14 +54,22 @@ class TestBuildCharacterCard:
                 speech_style="Короткие фразы",
                 relationships="Друг игрока",
                 boundaries="Не знает магии",
+                appearance="Высокая, каштановые волосы, шрам на щеке",
             )
         )
         assert "<personality>Добрая</personality>" in card
         assert "<traits>Любит чай</traits>" in card
         assert "<background>Из северного края</background>" in card
         assert "<speech_style>Короткие фразы</speech_style>" in card
-        assert "<relationships>Друг игрока</relationships>" in card
         assert "<boundaries>Не знает магии</boundaries>" in card
+        assert "<appearance>Высокая, каштановые волосы, шрам на щеке</appearance>" in card
+        # relationships is added dynamically via build_relationships_block,
+        # never rendered inside the static character card.
+        assert "<relationships>" not in card
+
+    def test_empty_appearance_not_in_card(self):
+        card = build_character_card(_character(name="Боб"))
+        assert "<appearance>" not in card
 
 
 class TestBuildExamplesBlock:
@@ -193,3 +203,72 @@ class TestBuildAntiMimicryBlock:
         assert "В этом ходе уже ответили: Bob." in block
         assert "Bob says hello" not in block  # Content not included, only names
         assert "Alice" in block
+
+
+class TestBuildSceneBlock:
+    """Appearance reaches the scene block only for co-present characters."""
+
+    def _scene_state(self, cl_map):
+        return SimpleNamespace(
+            time_of_day="",
+            custom_state=None,
+            character_locations=cl_map,
+        )
+
+    def test_appearance_included_for_same_location(self):
+        scene_state = self._scene_state(
+            {"Алиса": "Таверна", "Боб": "Таверна", "Игрок": "Таверна"}
+        )
+        block = build_scene_block(
+            "Сюжет: вечер в таверне.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+            character_appearances={
+                "Алиса": "Высокая, каштановые волосы",
+                "Боб": "Бородатый кузнец с татуировками",
+                "Игрок": "",
+            },
+        )
+        assert "Рядом с тобой: Боб, Игрок" in block
+        assert "Внешность рядом стоящих: Боб — Бородатый кузнец с татуировками" in block
+        # The current character's own appearance is not listed in the scene block
+        assert "Высокая, каштановые волосы" not in block
+
+    def test_appearance_excluded_for_other_location(self):
+        scene_state = self._scene_state(
+            {"Алиса": "Таверна", "Боб": "Подвал", "Игрок": "Таверна"}
+        )
+        block = build_scene_block(
+            "Сюжет: вечер в таверне.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+            character_appearances={"Боб": "Скрытная фигура в капюшоне"},
+        )
+        assert "Боб" not in block  # not co-present, name is not listed at all
+        assert "Внешность рядом стоящих" not in block
+        assert "капюшон" not in block
+
+    def test_empty_appearances_produce_no_line(self):
+        scene_state = self._scene_state({"Алиса": "Таверна", "Боб": "Таверна"})
+        block = build_scene_block(
+            "Сюжет.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+            character_appearances={"Боб": ""},
+        )
+        assert "Рядом с тобой: Боб" in block
+        assert "Внешность рядом стоящих" not in block
+
+    def test_no_appearances_arg_backward_compatible(self):
+        scene_state = self._scene_state({"Алиса": "Таверна", "Боб": "Таверна"})
+        block = build_scene_block(
+            "Сюжет.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+        )
+        assert "Рядом с тобой: Боб" in block
+        assert "Внешность рядом стоящих" not in block

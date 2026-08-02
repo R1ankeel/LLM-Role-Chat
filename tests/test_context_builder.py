@@ -1,5 +1,7 @@
 """Tests for the token-aware ContextBuilder (TZ §27 scenarios)."""
 
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 
@@ -358,3 +360,64 @@ async def test_newest_round_message_always_included(db_session, chat, three_char
     )
 
     assert "Текущий ответ персонажа" in built.recent_text
+
+
+def _scene_state_with_locations():
+    return SimpleNamespace(time_of_day="", custom_state=None, character_locations={})
+
+
+async def test_character_appearance_reaches_scene_for_same_location(
+    db_session, chat, three_characters
+):
+    viewer, other, third = three_characters
+    await _add_message(db_session, chat.id, "Сцена в таверне.", role="user")
+    window = await _load_window(db_session, chat.id)
+
+    built = await _build(
+        db_session,
+        chat,
+        viewer,
+        three_characters,
+        window,
+        character_locations={
+            viewer.id: "Таверна",
+            other.id: "Таверна",
+            third.id: "Подвал",
+        },
+        viewer_location="Таверна",
+        scene_state=_scene_state_with_locations(),
+        character_appearances={
+            other.name: "Бородатый кузнец с татуировками",
+            third.name: "Скрытная фигура в капюшоне",
+        },
+    )
+
+    assert "Рядом с тобой: Character B" in built.scene_text
+    assert (
+        "Внешность рядом стоящих: Character B — Бородатый кузнец с татуировками"
+        in built.scene_text
+    )
+    assert "капюшон" not in built.scene_text
+
+
+async def test_character_appearance_excluded_for_other_location(
+    db_session, chat, three_characters
+):
+    viewer, other, _ = three_characters
+    await _add_message(db_session, chat.id, "Сцена в таверне.", role="user")
+    window = await _load_window(db_session, chat.id)
+
+    built = await _build(
+        db_session,
+        chat,
+        viewer,
+        three_characters,
+        window,
+        character_locations={viewer.id: "Таверна", other.id: "Подвал"},
+        viewer_location="Таверна",
+        scene_state=_scene_state_with_locations(),
+        character_appearances={other.name: "Бородатый кузнец с татуировками"},
+    )
+
+    assert "Внешность рядом стоящих" not in built.scene_text
+    assert "Бородатый кузнец" not in built.scene_text

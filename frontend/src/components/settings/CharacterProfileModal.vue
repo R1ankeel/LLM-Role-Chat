@@ -30,6 +30,7 @@ const form = reactive<CharacterForm>({
   temperature: 0.8,
   order_index: 0,
   appearance: '',
+  avatar_url: '',
 })
 
 watch(

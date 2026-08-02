@@ -91,6 +91,7 @@ class ContextBuilder:
         round_messages: list,
         character_names: dict[int, str],
         character_locations: dict[int, str],
+        character_appearances: dict[str, str] | None = None,
         summary: str | None = None,
         summary_through_message_id: int | None = None,
         memories: list | None = None,
@@ -212,6 +213,7 @@ class ContextBuilder:
             character_locations=merge_char_locations(
                 scene_state, character_locations, character_names
             ),
+            character_appearances=character_appearances,
             locations=locations,
         )
         instructions_text = self._build_instructions_text(
