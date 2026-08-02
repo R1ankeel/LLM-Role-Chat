@@ -8,13 +8,17 @@ export const useSceneStore = defineStore('scene', () => {
   const scene = ref<SceneState | null>(null)
   const worldEvents = ref<WorldEvent[]>([])
   const loading = ref(false)
+  const error = ref<string | null>(null)
   const locationSaving = ref(false)
 
   async function loadForChat(chatId: number) {
     loading.value = true
+    error.value = null
     try {
       scene.value = await api.fetchScene(chatId)
       worldEvents.value = await api.fetchWorldEvents(chatId)
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Не удалось загрузить состояние мира.'
     } finally {
       loading.value = false
     }
@@ -37,7 +41,8 @@ export const useSceneStore = defineStore('scene', () => {
   function reset() {
     scene.value = null
     worldEvents.value = []
+    error.value = null
   }
 
-  return { scene, worldEvents, loading, locationSaving, loadForChat, injectEvent, updatePlayerLocation, reset }
+  return { scene, worldEvents, loading, error, locationSaving, loadForChat, injectEvent, updatePlayerLocation, reset }
 })

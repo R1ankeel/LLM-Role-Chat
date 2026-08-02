@@ -7,10 +7,12 @@ import * as charactersApi from '@/api/characters'
 import * as messagesApi from '@/api/messages'
 import * as sceneApi from '@/api/scene'
 import * as relationshipsApi from '@/api/relationships'
+import * as healthApi from '@/api/health'
 
 export const api: Api = useMocks
   ? mockApi
   : {
+      fetchHealth: healthApi.fetchHealth,
       fetchModels: chatsApi.fetchModels,
       fetchChats: chatsApi.fetchChats,
       fetchChatDetail: chatsApi.fetchChatDetail,

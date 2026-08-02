@@ -5,6 +5,8 @@ import { accentForName } from '@/utils/color'
 import Avatar from '@/components/common/Avatar.vue'
 import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
 
 const characters = useCharactersStore()
 
@@ -22,13 +24,34 @@ function select(id: number) {
 </script>
 
 <template>
-  <template v-if="sorted.length">
+  <template v-if="characters.loading && !characters.characters.length">
+    <div class="character-list" aria-hidden="true">
+      <div v-for="i in 3" :key="i" class="character-row character-row--skeleton">
+        <Skeleton width="28px" height="28px" radius="8px" />
+        <div class="character-row__skeleton-lines">
+          <Skeleton width="60%" height="11px" />
+          <Skeleton width="40%" height="9px" />
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <ErrorState
+    v-else-if="characters.error"
+    icon="👥"
+    title="Не удалось загрузить персонажей"
+    :description="characters.error"
+    :retry="false"
+  />
+
+  <template v-else-if="sorted.length">
     <ul class="character-list">
       <li
-        v-for="character in sorted"
+        v-for="(character, index) in sorted"
         :key="character.id"
         class="character-row"
         :class="{ 'character-row--active': characters.selectedId === character.id }"
+        :style="{ animationDelay: `${Math.min(index, 10) * 24}ms` }"
         role="button"
         tabindex="0"
         @click="select(character.id)"
@@ -77,6 +100,20 @@ function select(id: number) {
   border-radius: var(--radius);
   transition: background var(--transition-fast);
   cursor: pointer;
+  animation: character-in var(--transition-base) both;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
+}
+
+@keyframes character-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .character-row:hover {
@@ -114,6 +151,18 @@ function select(id: number) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.character-row--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+.character-row__skeleton-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .character-row__chevron {

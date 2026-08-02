@@ -29,6 +29,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 - **Фронтенд**: одностраничное приложение (Vanilla JS), SSE-стриминг ответов, вкладки настроек, управления персонажами/памятью/сценой/отношениями.
 - **UI отношений (Sprint 4)**: модалка «Отношения» (кнопка 🕸️ в шапке чата) — граф отношений (SVG), таймлайн пары, открытые вопросы всего чата с решением, ручное редактирование (тип, метрики, описание, добавление ребра).
 - **UI отношений (новый frontend, Этап 5)**: та же функциональность в Vue — кнопка «Отношения» в шапке, модалка с вкладками «Граф / Список / Вопросы» (SVG-граф с перетаскиванием узлов, клик по ребру → детали пары: метрики, issues с «Решить», таймлайн с «Загрузить ещё»), правая панель: список персонажей → детали (описание, редактируемая локация, память, сводка) → компактные отношения выбранного персонажа, панель мира (время/погода/напряжение/цель + смена локации игрока).
+- **Полировка (новый frontend, Этап 6)**: скелетоны загрузки и ErrorState во всех списках/панелях, тосты-уведомления (создание/переименование/удаление сцены, сохранение локаций и отношений, закрытие вопросов), глобальный баннер «Backend недоступен» с retry (поллинг `/api/health`), виртуализация длинной ленты через `content-visibility`, анимации появления/hover и переходы drawer'ов, респонсивная полировка (сворачиваемый sidebar на tablet, тач-таргеты и безопасные отступы на mobile, модалки капаются по ширине).
 
 ## Структура репозитория
 
@@ -113,14 +114,14 @@ npm run preview      # локальный просмотр production-сборк
 
 - `types/` — TS-интерфейсы, повторяющие Pydantic-схемы;
 - `api/` — единственный слой сетевых запросов: `client.ts` (ApiError, `request` с `query`), `sse.ts`
-  (`MessageStream`: `onToken/onMessage/onDone/onError/abort`), домены `chats/characters/messages/scene/relationships`, фасад `index.ts` с переключателем `useMocks`;
+  (`MessageStream`: `onToken/onMessage/onDone/onError/abort`), домены `chats/characters/messages/scene/relationships/health`, фасад `index.ts` с переключателем `useMocks`;
 - `mocks/` — mock-данные и mock-сервис (`data.ts`, `service.ts`), интерфейс 1:1 с `api/`;
 - `stores/` — Pinia: `chats` (числовой `currentChatId`, «последний чат» в localStorage), `messages`
   (реальный SSE-стрим, отрицательные temp-id, ошибки rate-limit/conflict, восстановление генерации),
   `characters` (выбранный персонаж, память/сводка, смена локации), `relationships` (граф, issues,
-  outgoing/incoming, таймлайн пары), `scene`, `ui`;
+  outgoing/incoming, таймлайн пары), `scene`, `ui` (панели, drawer'ы, тема, тосты), `health` (проверка доступности backend);
 - `router/` — маршруты: `/` (redirect на последний чат) и `/chat/:chatId` (валидация числового id);
-- `components/` — `layout/` (AppLayout, Sidebar, MainPanel, RightPanel), `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView), `characters/` (CharacterList, CharacterDetails, RelationshipView, RelationshipGraph, RelationshipPairDetail, RelationshipModal), `scene/` (WorldStatePanel), `common/` (Avatar, Badge, Modal, EmptyState, ProgressBar);
+- `components/` — `layout/` (AppLayout, Sidebar, MainPanel, RightPanel), `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView), `characters/` (CharacterList, CharacterDetails, RelationshipView, RelationshipGraph, RelationshipPairDetail, RelationshipModal), `scene/` (WorldStatePanel), `common/` (Avatar, Badge, Modal, EmptyState, ErrorState, Skeleton, ProgressBar, Toasts);
 - `composables/` — `useViewport.ts` (desktop/tablet/mobile);
 - `utils/color.ts` — детерминированные accent-цвета персонажей; `utils/format.ts` — форматирование дат/времени;
 - `styles/` — дизайн-токены, базовые стили, компонентные классы.

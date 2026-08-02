@@ -76,7 +76,7 @@ const percent = computed(() => {
 }
 
 .progress-bar--romance .progress-bar__fill {
-  background: #d1607a;
+  background: var(--romance);
 }
 
 .progress-bar--neutral .progress-bar__fill {

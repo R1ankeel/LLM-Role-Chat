@@ -13,22 +13,24 @@ defineProps<{
     class="generation-indicator"
     :class="{ 'is-active': status !== 'idle' || restoring }"
   >
-    <span v-if="restoring" class="generation-indicator__inner">
-      <span class="generation-indicator__dots" aria-hidden="true">
-        <i /><i /><i />
+    <transition name="fade" mode="out-in">
+      <span v-if="restoring" key="restoring" class="generation-indicator__inner">
+        <span class="generation-indicator__dots" aria-hidden="true">
+          <i /><i /><i />
+        </span>
+        <span class="generation-indicator__text">
+          Генерация продолжается…
+        </span>
       </span>
-      <span class="generation-indicator__text">
-        Генерация продолжается…
+      <span v-else-if="status !== 'idle'" key="streaming" class="generation-indicator__inner">
+        <span class="generation-indicator__dots" aria-hidden="true">
+          <i /><i /><i />
+        </span>
+        <span class="generation-indicator__text">
+          {{ status === 'streaming' && name ? `${name} размышляет…` : 'Думает…' }}
+        </span>
       </span>
-    </span>
-    <span v-else-if="status !== 'idle'" class="generation-indicator__inner">
-      <span class="generation-indicator__dots" aria-hidden="true">
-        <i /><i /><i />
-      </span>
-      <span class="generation-indicator__text">
-        {{ status === 'streaming' && name ? `${name} размышляет…` : 'Думает…' }}
-      </span>
-    </span>
+    </transition>
   </div>
 </template>
 
@@ -44,6 +46,16 @@ defineProps<{
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--transition-base);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 
 .generation-indicator__dots {

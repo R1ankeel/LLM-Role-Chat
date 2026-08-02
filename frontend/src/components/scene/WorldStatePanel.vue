@@ -2,10 +2,14 @@
 import { computed, ref } from 'vue'
 import { useSceneStore } from '@/stores/scene'
 import { useChatsStore } from '@/stores/chats'
+import { useUiStore } from '@/stores/ui'
 import ProgressBar from '@/components/common/ProgressBar.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
 
 const scene = useSceneStore()
 const chats = useChatsStore()
+const ui = useUiStore()
 
 const locationDraft = ref('')
 const saving = ref(false)
@@ -37,6 +41,9 @@ async function saveLocation() {
   try {
     await scene.updatePlayerLocation(chatId, value)
     locationDraft.value = ''
+    ui.toast('Локация игрока обновлена', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось обновить локацию.', 'error')
   } finally {
     saving.value = false
   }
@@ -45,7 +52,25 @@ async function saveLocation() {
 
 <template>
   <div class="world-state-panel">
-    <dl class="world-state">
+    <template v-if="scene.loading && !scene.scene">
+      <div class="world-state__skeleton" aria-hidden="true">
+        <Skeleton width="100%" height="12px" />
+        <Skeleton width="100%" height="12px" />
+        <Skeleton width="80%" height="12px" />
+        <Skeleton width="100%" height="14px" />
+      </div>
+    </template>
+
+    <ErrorState
+      v-else-if="scene.error"
+      icon="🌍"
+      title="Не удалось загрузить мир"
+      :description="scene.error"
+      :retry="false"
+    />
+
+    <template v-else>
+      <dl class="world-state">
       <div class="world-state__row">
         <dt>Время</dt>
         <dd>{{ timeOfDay }}</dd>
@@ -100,6 +125,7 @@ async function saveLocation() {
         </button>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -108,6 +134,12 @@ async function saveLocation() {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.world-state__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .world-state {

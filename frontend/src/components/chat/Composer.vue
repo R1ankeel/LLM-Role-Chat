@@ -180,14 +180,14 @@ function onKeydown(e: KeyboardEvent) {
 
 .composer-error--rate-limit,
 .composer-error--conflict {
-  background: var(--danger-soft, rgba(224, 77, 82, 0.1));
-  border: 1px solid rgba(224, 77, 82, 0.3);
-  color: #e0484e;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
 }
 
 .composer-error--generic {
   background: var(--accent-soft);
-  border: 1px solid rgba(108, 140, 255, 0.3);
+  border: 1px solid var(--accent-border);
   color: var(--accent);
 }
 
@@ -242,7 +242,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .composer--generating {
-  border-color: rgba(108, 140, 255, 0.45);
+  border-color: var(--accent-border-strong);
 }
 
 .composer__input {
@@ -276,7 +276,7 @@ function onKeydown(e: KeyboardEvent) {
 
 .composer__send {
   background: var(--accent);
-  color: #0c0f1a;
+  color: var(--on-accent);
 }
 
 .composer__send:hover:not(:disabled) {
@@ -303,5 +303,20 @@ function onKeydown(e: KeyboardEvent) {
   text-align: center;
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+@media (max-width: 767px) {
+  .composer-wrap {
+    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .composer__input {
+    font-size: 16px;
+  }
+
+  .composer__action {
+    width: 40px;
+    height: 40px;
+  }
 }
 </style>

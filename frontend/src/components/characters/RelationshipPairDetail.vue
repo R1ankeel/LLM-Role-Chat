@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useRelationshipsStore } from '@/stores/relationships'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
+import { useUiStore } from '@/stores/ui'
 import {
   RELATIONSHIP_METRICS,
   RELATIONSHIP_TYPES,
@@ -16,6 +17,7 @@ import { formatTime, formatDateTime } from '@/utils/format'
 import { accentForName } from '@/utils/color'
 import Badge from '@/components/common/Badge.vue'
 import ProgressBar from '@/components/common/ProgressBar.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
 
 const props = defineProps<{
   sourceId: number
@@ -30,6 +32,7 @@ const emit = defineEmits<{
 const relationships = useRelationshipsStore()
 const chats = useChatsStore()
 const characters = useCharactersStore()
+const ui = useUiStore()
 
 const chatId = computed(() => chats.currentChatId ?? 0)
 const pair = computed(() => relationships.pair)
@@ -117,6 +120,9 @@ async function save() {
       description: descriptionDraft.value,
     })
     editing.value = false
+    ui.toast('Отношения обновлены', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось сохранить отношения.', 'error')
   } finally {
     saving.value = false
   }
@@ -135,6 +141,9 @@ async function resolveIssue(issueId: number) {
     reasonOpen.value = null
     timelineOffset.value = 0
     await relationships.loadTimeline(chatId.value, props.sourceId, props.targetId, 0, 50)
+    ui.toast('Вопрос закрыт', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось закрыть вопрос.', 'error')
   } finally {
     resolving.value = null
   }
@@ -307,7 +316,13 @@ function metricLabel(key: string): string {
 
       <div class="rel-detail__block">
         <h4 class="rel-detail__block-title">Таймлайн</h4>
-        <template v-if="relationships.timeline && relationships.timeline.events.length">
+        <template v-if="relationships.timelineLoading && !relationships.timeline">
+          <div class="rel-detail__pair-skeleton" aria-hidden="true">
+            <Skeleton width="100%" height="56px" radius="8px" />
+            <Skeleton width="100%" height="56px" radius="8px" />
+          </div>
+        </template>
+        <template v-else-if="relationships.timeline && relationships.timeline.events.length">
           <div
             v-for="event in relationships.timeline.events"
             :key="event.id"
@@ -351,7 +366,12 @@ function metricLabel(key: string): string {
       </div>
     </template>
 
-    <p v-else class="rel-detail__hint">Загрузка…</p>
+    <div v-else class="rel-detail__pair-skeleton" aria-hidden="true">
+      <Skeleton width="60%" height="12px" />
+      <Skeleton width="100%" height="40px" radius="10px" />
+      <Skeleton width="100%" height="8px" />
+      <Skeleton width="90%" height="8px" />
+    </div>
   </div>
 </template>
 
@@ -474,6 +494,12 @@ function metricLabel(key: string): string {
 .rel-detail__hint {
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+
+.rel-detail__pair-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .rel-detail__block {
@@ -705,22 +731,22 @@ function metricLabel(key: string): string {
 
 .kind-llm .rel-tl-event__kind {
   background: var(--accent);
-  color: #0c0f1a;
+  color: var(--on-accent);
 }
 
 .kind-decay .rel-tl-event__kind {
   background: var(--success);
-  color: #0c0f1a;
+  color: var(--on-accent);
 }
 
 .kind-manual .rel-tl-event__kind {
   background: var(--warning);
-  color: #0c0f1a;
+  color: var(--on-accent);
 }
 
 .kind-archive .rel-tl-event__kind {
   background: var(--text-muted);
-  color: #0c0f1a;
+  color: var(--on-accent);
 }
 
 .rel-tl-event__time {

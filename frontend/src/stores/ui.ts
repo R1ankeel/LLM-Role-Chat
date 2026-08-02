@@ -3,7 +3,19 @@ import { ref } from 'vue'
 
 export type Viewport = 'desktop' | 'tablet' | 'mobile'
 
+export type ToastType = 'success' | 'info' | 'error' | 'warning'
+
+export interface Toast {
+  id: number
+  type: ToastType
+  message: string
+  timeout: number
+}
+
 const STORAGE_KEY = 'rp-chat:ui'
+
+const DEFAULT_TOAST_MS = 4000
+let toastSeq = 0
 
 interface UiSnapshot {
   sidebarCollapsed: boolean
@@ -35,6 +47,26 @@ export const useUiStore = defineStore('ui', () => {
   const viewport = ref<Viewport>('desktop')
 
   const relationshipsModalOpen = ref(false)
+
+  const toasts = ref<Toast[]>([])
+
+  function pushToast(type: ToastType, message: string, timeout = DEFAULT_TOAST_MS) {
+    const id = ++toastSeq
+    toasts.value.push({ id, type, message, timeout })
+    if (timeout > 0) {
+      window.setTimeout(() => dismissToast(id), timeout)
+    }
+    return id
+  }
+
+  function dismissToast(id: number) {
+    const index = toasts.value.findIndex((t) => t.id === id)
+    if (index !== -1) toasts.value.splice(index, 1)
+  }
+
+  function toast(message: string, type: ToastType = 'info') {
+    pushToast(type, message)
+  }
 
   function persist() {
     localStorage.setItem(
@@ -94,6 +126,10 @@ export const useUiStore = defineStore('ui', () => {
     rightPanelDrawerOpen,
     viewport,
     relationshipsModalOpen,
+    toasts,
+    pushToast,
+    dismissToast,
+    toast,
     toggleSidebar,
     toggleRightPanel,
     openSidebarDrawer,

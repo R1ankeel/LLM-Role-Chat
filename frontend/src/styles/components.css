@@ -27,7 +27,7 @@
 
 .button--primary {
   background: var(--accent);
-  color: #0c0f1a;
+  color: var(--on-accent);
 }
 
 .button--primary:hover:not(:disabled) {
@@ -103,6 +103,18 @@
 .icon-button.is-active {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* Larger touch targets on small screens */
+@media (max-width: 767px) {
+  .icon-button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .button {
+    height: 40px;
+  }
 }
 
 /* ── Panel section headers (right panel etc.) ──────────── */

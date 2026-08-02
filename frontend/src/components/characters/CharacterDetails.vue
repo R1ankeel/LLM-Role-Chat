@@ -9,6 +9,8 @@ import { memoryCategoryLabel } from '@/types/memory'
 import Avatar from '@/components/common/Avatar.vue'
 import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
 
 const characters = useCharactersStore()
 const ui = useUiStore()
@@ -62,6 +64,9 @@ async function saveLocation() {
   try {
     await characters.updateLocation(c.id, value)
     locationDraft.value = ''
+    ui.toast('Локация сохранена', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось сохранить локацию.', 'error')
   } finally {
     saving.value = false
   }
@@ -132,8 +137,18 @@ function focusLocation() {
     <div class="character-details__section">
       <span class="character-details__label">Память ({{ characters.memories.length }})</span>
       <template v-if="characters.detailsLoading">
-        <span class="character-details__hint">Загрузка…</span>
+        <div class="character-details__memory-skeleton" aria-hidden="true">
+          <Skeleton width="100%" height="48px" radius="10px" />
+          <Skeleton width="100%" height="40px" radius="10px" />
+        </div>
       </template>
+      <ErrorState
+        v-else-if="characters.detailsError"
+        icon="🧠"
+        title="Не удалось загрузить память"
+        :description="characters.detailsError"
+        :retry="false"
+      />
       <template v-else-if="sortedMemories.length">
         <ul class="memory-list">
           <li v-for="memory in sortedMemories" :key="memory.id" class="memory-item">
@@ -238,6 +253,12 @@ function focusLocation() {
 .character-details__hint {
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+
+.character-details__memory-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .character-details__location {

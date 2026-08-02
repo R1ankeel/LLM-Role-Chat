@@ -130,6 +130,10 @@ export class MockMessageStream {
 }
 
 export const mockApi: Api = {
+  fetchHealth(): Promise<{ status: string }> {
+    return delay({ status: 'ok' })
+  },
+
   fetchModels(): Promise<ModelsResponse> {
     return delay({ models: [...mockModels], error: null })
   },

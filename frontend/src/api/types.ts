@@ -28,6 +28,10 @@ export interface ModelsResponse {
   error: string | null
 }
 
+export interface HealthResponse {
+  status: string
+}
+
 export interface MessagesPage {
   limit?: number
   offset?: number
@@ -51,6 +55,7 @@ export interface TimelinePage {
 }
 
 export interface Api {
+  fetchHealth(): Promise<HealthResponse>
   fetchModels(): Promise<ModelsResponse>
   fetchChats(): Promise<ChatListItem[]>
   fetchChatDetail(chatId: number): Promise<ChatDetail | null>

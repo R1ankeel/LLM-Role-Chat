@@ -9,6 +9,8 @@ import SystemMessage from '@/components/chat/SystemMessage.vue'
 import WorldEventCard from '@/components/chat/WorldEvent.vue'
 import GenerationIndicator from '@/components/chat/GenerationIndicator.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
 
 const messages = useMessagesStore()
 const characters = useCharactersStore()
@@ -65,7 +67,29 @@ watch(feed, async () => {
 <template>
   <div class="message-list" ref="scrollEl" @scroll.passive="onScroll">
     <div class="message-list__inner">
-      <template v-if="hasContent">
+      <template v-if="messages.loading && !messages.messages.length">
+        <div class="message-list__skeleton" aria-hidden="true">
+          <div v-for="i in 4" :key="i" class="message-list__skeleton-row" :class="{ 'message-list__skeleton-row--right': i % 2 === 0 }">
+            <Skeleton v-if="i % 2 !== 0" width="28px" height="28px" radius="8px" />
+            <div class="message-list__skeleton-bubble">
+              <Skeleton width="40%" height="10px" />
+              <Skeleton width="100%" height="12px" />
+              <Skeleton width="70%" height="12px" />
+            </div>
+            <Skeleton v-if="i % 2 === 0" width="28px" height="28px" radius="8px" />
+          </div>
+        </div>
+      </template>
+
+      <ErrorState
+        v-else-if="messages.loadError"
+        icon="💥"
+        title="Не удалось загрузить переписку"
+        :description="messages.loadError"
+        :retry="false"
+      />
+
+      <template v-else-if="hasContent">
         <div v-for="item in feed" :key="itemKey(item)" class="message-list__row">
           <SystemMessage
             v-if="item.kind === 'message' && item.message.role === 'system'"
@@ -150,10 +174,40 @@ watch(feed, async () => {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
 }
 
 .message-list__indicator {
   margin-top: auto;
+}
+
+.message-list__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.message-list__skeleton-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.message-list__skeleton-row--right {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+}
+
+.message-list__skeleton-bubble {
+  max-width: 72%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--space-3);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
 .message-list__error {
@@ -163,9 +217,9 @@ watch(feed, async () => {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius);
-  background: var(--danger-soft, rgba(224, 77, 82, 0.1));
-  border: 1px solid rgba(224, 77, 82, 0.3);
-  color: #e0484e;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
   font-size: var(--text-sm);
 }
 
@@ -192,7 +246,7 @@ watch(feed, async () => {
   padding: 0 var(--space-3);
   border-radius: 99px;
   background: var(--accent);
-  color: #0c0f1a;
+  color: var(--on-accent);
   font-size: var(--text-xs);
   font-weight: 600;
   box-shadow: var(--shadow-2);

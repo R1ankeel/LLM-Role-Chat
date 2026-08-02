@@ -5,6 +5,7 @@ import type { Character } from '@/types/character'
 import { accentForName } from '@/utils/color'
 import Avatar from '@/components/common/Avatar.vue'
 import { useMessagesStore } from '@/stores/messages'
+import { useUiStore } from '@/stores/ui'
 
 const props = withDefaults(
   defineProps<{
@@ -18,6 +19,7 @@ const props = withDefaults(
 )
 
 const messages = useMessagesStore()
+const ui = useUiStore()
 
 const authorName = computed(() => props.character?.name ?? 'Неизвестный')
 const authorAccent = computed(() => accentForName(authorName.value))
@@ -36,6 +38,7 @@ function onRegenerate() {
 
 function onDelete() {
   void messages.deleteMessage(props.message.id)
+  ui.toast('Сообщение удалено', 'info')
 }
 </script>
 
@@ -165,7 +168,7 @@ function onDelete() {
 
 .message-item--user .message-item__bubble {
   background: var(--accent-soft);
-  border-color: rgba(108, 140, 255, 0.35);
+  border-color: var(--accent-border-strong);
   border-radius: var(--radius);
   border-top-right-radius: var(--radius-sm);
 }

@@ -31,6 +31,7 @@ export const useMessagesStore = defineStore('messages', () => {
   const status = ref<GenerationStatus>('idle')
   const generatingCharacterId = ref<number | null>(null)
   const loading = ref(false)
+  const loadError = ref<string | null>(null)
   const generationError = ref<GenerationError | null>(null)
   const restoringGeneration = ref(false)
   const lastUserContent = ref('')
@@ -70,10 +71,13 @@ export const useMessagesStore = defineStore('messages', () => {
     clearRestoreTimer()
     setStatus('idle')
     generationError.value = null
+    loadError.value = null
     restoringGeneration.value = false
     loading.value = true
     try {
       messages.value = await fetchAll(id)
+    } catch (e) {
+      loadError.value = e instanceof Error ? e.message : 'Не удалось загрузить сообщения.'
     } finally {
       loading.value = false
     }
@@ -111,6 +115,7 @@ export const useMessagesStore = defineStore('messages', () => {
     setStatus('idle')
     messages.value = []
     generationError.value = null
+    loadError.value = null
     restoringGeneration.value = false
   }
 
@@ -306,6 +311,7 @@ export const useMessagesStore = defineStore('messages', () => {
     generatingCharacter,
     generatingName,
     loading,
+    loadError,
     generationError,
     restoringGeneration,
     isGenerating,

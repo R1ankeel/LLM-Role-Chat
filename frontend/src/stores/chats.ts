@@ -36,6 +36,7 @@ export const useChatsStore = defineStore('chats', () => {
   const loadingChats = ref(false)
   const loadingChat = ref(false)
   const loadingModels = ref(false)
+  const error = ref<string | null>(null)
 
   async function loadModels() {
     loadingModels.value = true
@@ -50,8 +51,11 @@ export const useChatsStore = defineStore('chats', () => {
 
   async function loadChats() {
     loadingChats.value = true
+    error.value = null
     try {
       chats.value = await api.fetchChats()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Не удалось загрузить список сцен.'
     } finally {
       loadingChats.value = false
     }
@@ -124,6 +128,7 @@ export const useChatsStore = defineStore('chats', () => {
     loadingChats,
     loadingChat,
     loadingModels,
+    error,
     loadModels,
     loadChats,
     openChat,

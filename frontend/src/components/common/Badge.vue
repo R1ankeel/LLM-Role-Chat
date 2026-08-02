@@ -39,24 +39,24 @@ withDefaults(
 .badge--accent {
   color: var(--accent);
   background: var(--accent-soft);
-  border-color: rgba(108, 140, 255, 0.3);
+  border-color: var(--accent-border);
 }
 
 .badge--success {
   color: var(--success);
   background: var(--success-soft);
-  border-color: rgba(48, 164, 108, 0.3);
+  border-color: var(--success-border);
 }
 
 .badge--warning {
   color: var(--warning);
   background: var(--warning-soft);
-  border-color: rgba(245, 165, 36, 0.3);
+  border-color: var(--warning-border);
 }
 
 .badge--danger {
   color: var(--danger);
   background: var(--danger-soft);
-  border-color: rgba(229, 72, 77, 0.3);
+  border-color: var(--danger-border);
 }
 </style>

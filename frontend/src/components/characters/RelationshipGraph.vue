@@ -316,11 +316,11 @@ function onMouseUp() {
 }
 
 .rel-edge.edge-rom {
-  color: #d1607a;
+  color: var(--romance);
 }
 
 .rel-edge.edge-rom .rel-graph__edge-label {
-  fill: #d1607a;
+  fill: var(--romance);
 }
 
 .rel-edge.edge-neu {
@@ -354,7 +354,7 @@ function onMouseUp() {
 }
 
 .rel-node-player circle {
-  fill: rgba(108, 140, 255, 0.22);
+  fill: var(--accent-glow);
   stroke: var(--accent);
 }
 

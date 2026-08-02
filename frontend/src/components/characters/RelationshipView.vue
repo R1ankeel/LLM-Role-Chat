@@ -8,6 +8,7 @@ import { accentForName } from '@/utils/color'
 import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ProgressBar from '@/components/common/ProgressBar.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
 
 const relationships = useRelationshipsStore()
 const characters = useCharactersStore()
@@ -76,7 +77,13 @@ function relTone(value: number, negative: boolean) {
     </div>
 
     <template v-if="relationships.loading">
-      <span class="relationship-view__hint">Загрузка…</span>
+      <div class="relationship-view__skeleton" aria-hidden="true">
+        <div v-for="i in 2" :key="i" class="rel-card rel-card--skeleton">
+          <Skeleton width="40%" height="11px" />
+          <Skeleton width="100%" height="8px" />
+          <Skeleton width="100%" height="8px" />
+        </div>
+      </div>
     </template>
     <template v-else-if="list.length">
       <ul class="relationship-view__list">
@@ -137,6 +144,16 @@ function relTone(value: number, negative: boolean) {
 .relationship-view__hint {
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+
+.relationship-view__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.rel-card--skeleton {
+  gap: var(--space-3);
 }
 
 .relationship-view__list {

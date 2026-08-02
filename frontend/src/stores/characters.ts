@@ -7,11 +7,13 @@ import type { Memory } from '@/types/memory'
 export const useCharactersStore = defineStore('characters', () => {
   const characters = ref<Character[]>([])
   const loading = ref(false)
+  const error = ref<string | null>(null)
 
   const selectedId = ref<number | null>(null)
   const memories = ref<Memory[]>([])
   const summary = ref<CharacterSummary | null>(null)
   const detailsLoading = ref(false)
+  const detailsError = ref<string | null>(null)
   const locationSaving = ref(false)
 
   const byId = computed(() => new Map(characters.value.map((c) => [c.id, c])))
@@ -25,8 +27,11 @@ export const useCharactersStore = defineStore('characters', () => {
 
   async function loadForChat(chatId: number) {
     loading.value = true
+    error.value = null
     try {
       characters.value = await api.fetchCharacters(chatId, true)
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Не удалось загрузить персонажей.'
     } finally {
       loading.value = false
     }
@@ -41,6 +46,7 @@ export const useCharactersStore = defineStore('characters', () => {
     selectedId.value = characterId
     memories.value = []
     summary.value = null
+    detailsError.value = null
     if (characterId == null) return
     detailsLoading.value = true
     try {
@@ -50,6 +56,8 @@ export const useCharactersStore = defineStore('characters', () => {
       ])
       memories.value = mems
       summary.value = summ
+    } catch (e) {
+      detailsError.value = e instanceof Error ? e.message : 'Не удалось загрузить данные персонажа.'
     } finally {
       detailsLoading.value = false
     }
@@ -72,15 +80,19 @@ export const useCharactersStore = defineStore('characters', () => {
     selectedId.value = null
     memories.value = []
     summary.value = null
+    error.value = null
+    detailsError.value = null
   }
 
   return {
     characters,
     loading,
+    error,
     selectedId,
     memories,
     summary,
     detailsLoading,
+    detailsError,
     locationSaving,
     byId,
     player,

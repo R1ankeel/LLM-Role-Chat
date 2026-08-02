@@ -6,6 +6,8 @@ import { useChatsStore } from '@/stores/chats'
 import { toNumber } from '@/router'
 import Avatar from '@/components/common/Avatar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import Skeleton from '@/components/common/Skeleton.vue'
 import Modal from '@/components/common/Modal.vue'
 
 withDefaults(
@@ -82,16 +84,24 @@ async function createChat() {
       thinking_mode: newThinking.value,
     })
     showNewChat.value = false
+    ui.toast(`Сцена «${chat.name}» создана`, 'success')
     router.push({ name: 'chat', params: { chatId: chat.id } })
     if (ui.viewport === 'mobile') ui.closeSidebarDrawer()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось создать сцену.', 'error')
   } finally {
     creating.value = false
   }
 }
 
 async function deleteChat(id: number) {
-  await chats.deleteChat(id)
-  if (activeChatId.value === id) router.replace({ name: 'home' })
+  try {
+    await chats.deleteChat(id)
+    ui.toast('Сцена удалена', 'success')
+    if (activeChatId.value === id) router.replace({ name: 'home' })
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось удалить сцену.', 'error')
+  }
 }
 
 function startRename(id: number, name: string) {
@@ -102,7 +112,12 @@ function startRename(id: number, name: string) {
 async function commitRename() {
   const id = editingId.value
   if (id && editName.value.trim()) {
-    await chats.renameChat(id, editName.value.trim())
+    try {
+      await chats.renameChat(id, editName.value.trim())
+      ui.toast('Сцена переименована', 'success')
+    } catch (e) {
+      ui.toast(e instanceof Error ? e.message : 'Не удалось переименовать сцену.', 'error')
+    }
   }
   editingId.value = null
 }
@@ -167,15 +182,32 @@ function formatSidebarTime(ts: string | null) {
 
       <nav class="sidebar__list" aria-label="Список чатов">
         <template v-if="chats.loadingChats && !chats.chats.length">
-          <div class="sidebar__loading">Загрузка…</div>
+          <div class="sidebar__skeleton" aria-hidden="true">
+            <div v-for="i in 5" :key="i" class="sidebar__skeleton-row">
+              <Skeleton width="28px" height="28px" radius="8px" />
+              <div class="sidebar__skeleton-lines">
+                <Skeleton width="70%" height="11px" />
+                <Skeleton width="45%" height="9px" />
+              </div>
+            </div>
+          </div>
         </template>
+
+        <ErrorState
+          v-else-if="chats.error"
+          icon="🛰️"
+          title="Не удалось загрузить сцены"
+          :description="chats.error"
+          @retry="chats.loadChats"
+        />
 
         <template v-else-if="filteredChats.length">
           <div
-            v-for="chat in filteredChats"
+            v-for="(chat, index) in filteredChats"
             :key="chat.id"
             class="chat-item"
             :class="{ 'is-active': chat.id === activeChatId }"
+            :style="{ animationDelay: `${Math.min(index, 10) * 24}ms` }"
             role="button"
             tabindex="0"
             @click="openChat(chat.id)"
@@ -428,11 +460,25 @@ function formatSidebarTime(ts: string | null) {
   color: var(--text-muted);
 }
 
-.sidebar__loading {
-  padding: var(--space-4);
-  text-align: center;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
+.sidebar__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.sidebar__skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+}
+
+.sidebar__skeleton-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 /* Chat item */
@@ -445,6 +491,20 @@ function formatSidebarTime(ts: string | null) {
   cursor: pointer;
   transition: background var(--transition-fast);
   position: relative;
+  animation: item-in var(--transition-base) both;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
+@keyframes item-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .chat-item:hover,

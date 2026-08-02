@@ -65,6 +65,7 @@ function onBackdrop(e: MouseEvent) {
 
 .modal {
   width: 100%;
+  max-width: 100%;
   max-height: min(80vh, 640px);
   display: flex;
   flex-direction: column;

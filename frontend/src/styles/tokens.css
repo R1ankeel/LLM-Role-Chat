@@ -24,6 +24,18 @@
   --warning: #f5a524;
   --warning-soft: rgba(245, 165, 36, 0.14);
 
+  /* ── Semantic helpers ────────────────────────────────── */
+  --on-accent: #0c0f1a;
+  --romance: #d1607a;
+  --skeleton-bg: #1e2331;
+  --skeleton-highlight: rgba(255, 255, 255, 0.06);
+  --accent-glow: rgba(108, 140, 255, 0.22);
+  --accent-border: rgba(108, 140, 255, 0.3);
+  --accent-border-strong: rgba(108, 140, 255, 0.45);
+  --danger-border: rgba(229, 72, 77, 0.3);
+  --success-border: rgba(48, 164, 108, 0.3);
+  --warning-border: rgba(245, 165, 36, 0.3);
+
   /* ── Radii ───────────────────────────────────────────── */
   --radius-sm: 6px;
   --radius: 10px;
@@ -64,6 +76,12 @@
   --right-panel-width: 300px;
   --header-height: 56px;
   --composer-max-height: 40vh;
+
+  /* ── Z-index scale ───────────────────────────────────── */
+  --z-drawer: 50;
+  --z-modal: 100;
+  --z-banner: 80;
+  --z-toast: 120;
 
   /* ── Breakpoints (media queries) ─────────────────────── */
   /* tablet  <1024px, mobile <768px */

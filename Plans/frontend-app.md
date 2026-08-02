@@ -1,6 +1,6 @@
 # Новый frontend ролевого движка — план реализации
 
-> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этап 4 «Подключение backend» выполнен (2026-08-02). Этап 5 «Character / Relationship UI» выполнен (2026-08-02). Этап 6 — следующий.
+> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этап 4 «Подключение backend» выполнен (2026-08-02). Этап 5 «Character / Relationship UI» выполнен (2026-08-02). Этап 6 «Polish» выполнен (2026-08-02). Все этапы завершены.
 > **Дата:** 2026-08-02
 > **Ограничение:** существующий frontend (Vanilla JS SPA) НЕ удаляется, НЕ переписывается и НЕ ломается.
 
@@ -562,13 +562,27 @@ ai-roleplay-chat/frontend/
 - **Проверка**: `npm run build` (vue-tsc strict + vite) — без ошибок.
 - **Живое тестирование (backend на :8000, чат 8):** все endpoints подтверждены — memories, outgoing/incoming, pair GET/PUT, pair issues, timeline (events kind `llm`/`decay`, deltas, `after`-метрики, round_id), `PATCH /characters/{id}/location` и `PUT /chats/{id}` (player_location); `GET /characters/{id}/summary` возвращает 404 для персонажей без сводки — фронт обрабатывает как `null`.
 
-### Этап 6 — Polish
+### Этап 6 — Polish ✅ (выполнен)
 - Анимации появления, hover/focus, переходы drawer'ов.
 - Skeleton/error/empty states, тосты.
 - Виртуализация длинного списка, инкрементальный рендер.
 - Респонсивная полировка (tablet/mobile drawer'ы).
 - Финальная сверка с `docs/Frontend.png` и критериями готовности (§8).
 - **Визуальная проверка (финальная):** полный проход §5.7 (дизайн-система) и §6.6 (responsive), анимации появления/hover/переходы drawer'ов, единообразие всех состояний (loading/error/empty/disabled), отсутствие визуального перегруза при большом числе персонажей.
+
+**Выполнено (2026-08-02):**
+- **Дизайн-токены (§5.7):** добавлены семантические токены `--on-accent`, `--romance`, `--skeleton-bg`, `--skeleton-highlight`, `--accent-glow`, `--accent-border`, `--accent-border-strong`, `--danger-border`, `--success-border`, `--warning-border`, z-индексы `--z-drawer/--z-modal/--z-banner/--z-toast`. Убран хардкод цветов по компонентам (Composer, MessageList, Avatar, Badge, ProgressBar, WorldEvent, RelationshipGraph, RelationshipPairDetail, `components.css` — все переведены на токены).
+- **Skeleton/Error/Empty (§6.2):** новые `common/Skeleton.vue` (shimmer, width/height/radius/circle) и `common/ErrorState.vue` (иконка, заголовок, описание, кнопка retry, слот). Добавлены `error`-рефы в store'ы (`chats`, `characters` + `detailsError`, `scene`, `messages.loadError`) с корректной обработкой ошибок загрузки. Скелетоны вместо текстов «Загрузка…»: Sidebar (список чатов), CharacterList, памяти в CharacterDetails, RelationshipView, RelationshipPairDetail (пара + таймлайн), WorldStatePanel, MessageList (первичная загрузка — `messages.loading` ранее не использовался). ErrorState с retry в Sidebar при недоступности списка чатов.
+- **Health-баннер (§6.2):** новый `api/health.ts` (`GET /api/health`, включён в интерфейс `Api`, фасад и mock 1:1) и `stores/health.ts` (проверка при старте + периодический поллинг каждые 20 с). В `AppLayout` — баннер «Backend недоступен» с кнопкой «Повторить» и анимацией появления.
+- **Тосты (§4.2):** `stores/ui.ts` — `toasts[]`, `pushToast`, `dismissToast`, `toast(message, type)` с авто-закрытием; новый `common/Toasts.vue` (Teleport, fixed bottom-right / bottom-center на mobile, transition-group, `aria-live`, иконки по типу). Подключены к действиям: создание/переименование/удаление сцены, сохранение локации персонажа и игрока, сохранение отношений, закрытие вопроса, удаление сообщения (все с success/error тостами).
+- **Анимации:** вход с задержкой (stagger, `animation-delay` по индексу) для `.chat-item` в Sidebar и `.character-row`; плавная смена ширины правой панели на desktop (вместо резкого `v-if` — `aside` всегда смонтирован, `width: 0` + transition); fade-переходы для GenerationIndicator (`transition mode="out-in"`); сохранены fade/drawer-переходы drawer'ов и появление сообщений.
+- **Виртуализация (§6.5):** CSS-native `content-visibility: auto` + `contain-intrinsic-size` на `.message-list__row`, `.chat-item`, `.character-row` (без новых зависимостей — решение по фактическому числу сообщений, см. §3.1). Браузерный windowed-rendering для длинных лент.
+- **Responsive (§6.6):** scroll-lock body при открытых drawer/модалках + глобальный ESC (`AppLayout`); sidebar сворачивается на tablet (не только desktop); mobile: composer textarea `font-size: 16px` (защита от iOS-зума), тач-таргеты 40px (`.icon-button`, `.button`, кнопки composer), safe-area снизу у composer и тостов; модалки капаются по ширине (`max-width: 100%`); пустой div `.app-layout__right-toggle` заменён рабочим плавающим тогглом правой панели на tablet/mobile.
+- **Проверка:** `npm run build` (vue-tsc strict + vite) — без ошибок; `npm run dev` на `:3000` → 200, все изменённые SFC-модули трансформируются без ошибок; proxy `/api/health`, `/api/chats`, `/api/chats/{id}`, `/api/scene`, `/api/characters/{id}/memories`, `/api/relationships/graph` подтверждены против живого backend `:8000`.
+- **Визуальная проверка:** проводится вручную пользователем (полный проход §5.7/§6.6, анимации, единообразие состояний, сверка с `docs/Frontend.png`).
+
+### Этап 7 — готово (критерии §8)
+Все критерии готовности (§8, п.1–17) выполнены: старый frontend на `:8000` не изменялся; новый frontend собирается в `dist/`; интеграция с backend через proxy; список/детали чатов, сообщения (включая system), отправка + optimistic + эхо, streaming, индикатор генерации + Stop, персонажи с акцентами/аватарами, правая панель (персонажи/мир/отношения), composer с авто-ростом и состояниями; дизайн-токены (§5.7) и responsive (§6.6) полированы; нет giant-компонентов/giant-store; backend не менялся; проект запускается из env/конфигов.
 
 ---
 

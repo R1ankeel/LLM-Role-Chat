@@ -37,7 +37,7 @@ const initials = computed(() => {
   place-items: center;
   flex-shrink: 0;
   border-radius: var(--radius);
-  color: #0c0f1a;
+  color: var(--on-accent);
   font-weight: 600;
   user-select: none;
 }

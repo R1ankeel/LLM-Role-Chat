@@ -33,8 +33,8 @@ const timeLabel = computed(() => {
   width: 100%;
   padding: var(--space-3);
   border-radius: var(--radius);
-  background: linear-gradient(135deg, rgba(108, 140, 255, 0.08), rgba(108, 140, 255, 0.03));
-  border: 1px solid rgba(108, 140, 255, 0.18);
+  background: linear-gradient(135deg, var(--accent-glow), rgba(108, 140, 255, 0.03));
+  border: 1px solid var(--accent-glow);
 }
 
 .world-event__icon {
@@ -44,7 +44,7 @@ const timeLabel = computed(() => {
   place-items: center;
   border-radius: var(--radius);
   background: var(--accent-soft);
-  border: 1px solid rgba(108, 140, 255, 0.25);
+  border: 1px solid var(--accent-glow);
   font-size: 15px;
   flex-shrink: 0;
 }

@@ -115,6 +115,9 @@ async function saveEdit(rel: {
     })
     await relationships.loadForChat(chatId)
     editingRel.value = null
+    ui.toast('Отношения сохранены', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось сохранить отношения.', 'error')
   } finally {
     listSaving.value = false
   }
