@@ -1,6 +1,6 @@
 # План внедрения: Character Profile, аватарки и внешность (docs/Profile.docx)
 
-> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). Frontend-этапы 3–6 — ещё не начаты.
+> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 3 (Frontend: единый CharacterProfileModal) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 4 (Frontend: три точки входа) — ВЫПОЛНЕН** (см. §4). Frontend-этапы 5–6 — ещё не начаты.
 > **Источник ТЗ:** `docs/Profile.docx` (34 пункта, 6 этапов, критерии готовности в §34).
 > **Ограничения ТЗ:** не переписывать frontend целиком, расширять существующую архитектуру, старый frontend (`app/static/`) не трогать, один `CharacterProfileModal`, единый источник истины (`CharacterStore`).
 
@@ -12,7 +12,7 @@
 
 | Что | Где | Комментарий |
 |-----|-----|-------------|
-| Единый `CharacterProfileModal` | `components/settings/CharacterProfileModal.vue` | Уже существует, но смонтирован ВНУТРИ `SettingsModal` (`SettingsModal.vue:30`) → открыть из правой панели или сообщения невозможно |
+| Единый `CharacterProfileModal` | `components/settings/CharacterProfileModal.vue` | ✅ Этап 3 — редизайн (верхняя зона с Avatar xl + смена/удаление аватара, редактируемое имя/локация/badge «Игрок»/внешность; §8-блок полей; технические параметры; «Отмена/Сохранить» с закрытием только после успешного сохранения; responsive); монтирование перенесено из `SettingsModal.vue` в `ChatView.vue` (после `<SettingsModal />` — профиль рендерится поверх) |
 | Точка входа «Settings → Персонажи» | `components/settings/CharacterSettings.vue:20` → `ui.openCharacterProfile(id)` | Работает, открывает тот же модал |
 | Поле `appearance` | `types/character.ts:46` (`CharacterForm.appearance`) и `CharacterFormFields.vue:128` | ✅ frontend 1 — `characterToForm`/`formToCharacterUpdate` прокидывают `appearance` в `PUT /characters/{id}` (хардкод `''` убран); UI-ввод уже есть в `CharacterFormFields` |
 | Аватар-компонент | `components/common/Avatar.vue` | ✅ Этап 2 — проп `size` расширен до `sm/md/lg/xl` (xl = 168 px, для профиля), добавлен проп `shape: 'rounded' | 'circle'` (круглая миниатюра для сообщений); placeholder (инициалы + accent) сохранён; `imageUrl` пробрасывается во все места использования (списки, сообщения, профиль, Player, delete-confirm) |
@@ -25,9 +25,9 @@
 |---------------|--------|
 | Поля `appearance` и `avatar_url` в `Character` | ✅ Этап A — колонки, схема, миграция добавлены (`app/models.py:77-78`, `app/schemas.py`, `app/database.py`); ✅ frontend 1 — поля в типах `Character`/`CharacterForm` (`types/character.ts`) |
 | Хранение и загрузка аватара (upload/validate/обработка) | ✅ Этап B — `app/avatar_service.py` (magic-bytes, лимит размера, ресайз/конвертация в WebP, безопасные имена), `POST/DELETE /characters/{id}/avatar`; каталог `app/static/avatars/` создаётся при старте |
-| Единый профиль из трёх точек входа (сообщение, правая панель, Settings) | Частично — из Settings да; из сообщения и правой панели нет |
-| Кликабельные avatar+имя в сообщениях | Нет — `MessageItem.vue:51/54` не кликабельны; у сообщений игрока `<Avatar name="Я">` (не аватар player-персонажа) |
-| Кликабельные avatar+имя в правой панели | Нет — `CharacterList.vue:21` клик открывает inline `CharacterDetails`, а не единый профиль |
+| Единый профиль из трёх точек входа (сообщение, правая панель, Settings) | ✅ Этап 4 — все три точки ведут в единый модал (см. §4) |
+| Кликабельные avatar+имя в сообщениях | ✅ Этап 4 — `MessageItem.vue`: у NPC avatar и имя кликабельны → профиль; у user-сообщений аватар игрока (`characters.player`, avatar_url+имя, имя не выводится по решению) → профиль игрока; локация — вторичный стиль, при отсутствии не показывается (§22) |
+| Кликабельные avatar+имя в правой панели | ✅ Этап 4 — `CharacterList.vue`: клик по строке → единый профиль; inline `CharacterDetails` сохранён как вторичный слой через кнопку-шеврон «Подробности» |
 | `appearance` в Character Context (self + для присутствующих в той же локации) | ✅ Этап C — `prompt_builder.py` `_CHARACTER_SECTIONS` += `appearance`, `build_scene_block` += `character_appearances` (только co-present), `ru.json` `section_tags.appearance`, `ContextBuilder.build` += `character_appearances`, `chat_engine.py:558/1924` передают map |
 | Диапазон `temperature` в backend-схеме | ✅ Этап A — `ge=0.0, le=2.0` в `CharacterBase`/`CharacterUpdate` (`schemas.py`); фронт использует 0–2 |
 | Player: редактирование имени + аватар + внешность | Частично — `PlayerSettings.vue` редактирует только имя |
@@ -50,8 +50,8 @@
 ### 2.1 Единый `CharacterProfileModal`
 
 - Модалка остаётся один (никаких вариантов для Settings/панели/сообщения).
-- **Перенос монтирования**: из `SettingsModal.vue` — на уровень `ChatView.vue` (рядом с `RelationshipModal`, `SettingsModal`). `ui.characterProfileId` уже глобальный → модалка откроется поверх чата из любой точки входа.
-- При открытии из Settings модалка рисуется поверх модалки настроек (проверить z-index `--z-modal` — при необходимости поднять вложенные модалки на `--z-modal + 1`).
+- ✅ **Перенос монтирования** (Этап 3): из `SettingsModal.vue` — на уровень `ChatView.vue` (рядом с `RelationshipModal`, `SettingsModal`, ПОСЛЕ `SettingsModal`). `ui.characterProfileId` уже глобальный → модалка откроется поверх чата из любой точки входа.
+- ✅ При открытии из Settings модалка рисуется поверх модалки настроек — без правки z-index: обе на `--z-modal: 100`, порядок в DOM решает (профиль объявлен после настроек в `ChatView`). Escape-стек `Modal.vue` закрывает только верхнюю модалку.
 - При открытии профиля ставить `characters.selectedId` (для синхронизации правой панели) — опционально, решается на Этапе 5.
 
 ### 2.2 Хранение и раздача аватаров
@@ -166,24 +166,32 @@
 
 ### Этап 3 — Единый `CharacterProfileModal` (реализация ТЗ §7–§8, §28–§30)
 
-- `components/settings/CharacterProfileModal.vue` — редизайн:
-  - верхняя зона: слева большой `Avatar` (xl) + кнопка смены/удаления аватара (§14); справа — редактируемое имя (крупно), компактно локация + badge «Игрок» (§9), поле «Внешность» (многострочное) рядом с аватаром;
-  - ниже: Личность → Черты → Предыстория → Стиль речи → Примеры реплик (сохранить семантику `---`) → Границы роли (§8 порядок);
-  - технические параметры внизу, визуально не конкурируют (§29): temperature (slider 0–2 + показать значение), order_index (числовой input);
-  - кнопки «Отмена» / «Сохранить»; модалка закрывается только после успешного сохранения (§23); сохранение через `characters.update`, аватар — отдельно если изменён;
-  - responsive: на узких экранах верхняя часть в одну колонку (§30).
-- `CharacterFormFields.vue`: убрать UI-задел-подпись про внешность; `appearance` станет реальным полем (оставить в create-форме). Разметку полей можно вынести/переиспользовать между profile и create, НЕ делая giant-компонент (§32).
-- Перенести монтирование `CharacterProfileModal` из `SettingsModal.vue` в `ChatView.vue` (п.2.1).
+> **Статус: ✅ ВЫПОЛНЕН** (`npm run build` — vue-tsc strict + vite — проходит).
+
+- ✅ `components/settings/CharacterProfileModal.vue` — редизайн:
+  - верхняя зона (§7, §14): слева большой `Avatar` (`size="xl"`, placeholder живёт по имени из формы) + кнопки «Сменить»/«Удалить» аватара (скрытый `<input type="file" accept="image/png,image/jpeg,image/webp">`; upload/delete сразу через `characters.uploadAvatar/removeAvatar`, затем `form.avatar_url = updated.avatar_url` — не перезатирая несохранённый текст формы); справа — крупный редактируемый input имени, badge «Игрок» (§9), компактный input «Локация», textarea «Внешность» (многострочная);
+  - ниже: `<CharacterFormFields mode="profile">` — Личность → Черты → Предыстория → Стиль речи → Примеры реплик (семантика `---` сохранена, в поле добавлен hint про разделитель) → Границы роли (§8), затем подзаголовок «Отношения» (вторичный стиль) с полем «Описание отношений» — оставлено осознанно, чтобы не потерять редактирование (отдельная система `CharacterRelationship` — в будущем отдельной задачей);
+  - технические параметры внизу, визуально не конкурируют (§29): блок «Технические параметры» (панель), temperature — slider 0–2, step 0.05 + показано значение, `order_index` — числовой input (только profile);
+  - кнопки «Отмена» (discard) / «Сохранить»; модалка закрывается только после успешного сохранения (§23) — при ошибке остаётся открытой + error-toast; сохранение через `characters.update`, аватар — отдельно (если изменён);
+  - responsive (§30): `@media (max-width: 640px)` — верхняя зона в одну колонку.
+- ✅ `CharacterFormFields.vue` — рефакторинг без giant-компонента (§32): добавлен проп `mode: 'create' | 'profile'`; убран проп `showAppearance` и подпись-задел «UI-задел: пока не сохраняется…» (`appearance` реально сохраняется с Этапа 1); `appearance` стала многострочным полем в create-форме; средний §8-блок и технический блок общие для обоих режимов; в create temperature тоже slider (единообразие UI). `order_index` — только в profile.
+- ✅ Монтирование перенесено из `SettingsModal.vue` в `ChatView.vue` (п.2.1); в `SettingsModal.vue` остались `CharacterCreateModal` и `CharacterDeleteConfirm`.
+- ✅ Синхронизация «API → store → form/UI»: `characters.uploadAvatar/removeAvatar` уже заменяют объект в массиве store (списки/панель обновляются), модалка синхронизирует только `form.avatar_url` из возвращённого объекта.
+- Точка входа Settings → Персонажи открывает тот же единый модал (теперь поверх настроек). Точки входа «сообщение» и «правая панель» — Этап 4.
 
 ### Этап 4 — Три точки входа
 
-- **Сообщение** (`components/chat/MessageItem.vue`):
-  - для NPC: avatar и имя кликабельны → `ui.openCharacterProfile(character.id)`; передать `avatar_url`; для user-сообщений использовать player-персонажа из `characters.player` (avatar_url + имя), клик тоже открывает его профиль (§11);
-  - «Alice · Classroom» остаётся, локация — вторичный стиль, при отсутствии не показывается (§22).
-- **Правая панель** (`components/characters/CharacterList.vue`, `components/layout/RightPanel.vue`):
-  - клик по строке (или явно по avatar/имени) → `ui.openCharacterProfile(character.id)` — единый профиль;
-  - существующий inline `CharacterDetails` (память, локация, отношения) сохранить как вторичный слой: внутри модалки кнопка «Отношения» (уже есть RelationshipModal) и/или сохранение `RelationshipView` для выбранного персонажа. Решение по финальному UX на Этапе 5 (не плодить отдельную версию «профиля»).
-- **Settings → Персонажи**: уже открывает единый модал — после переноса в `ChatView` проверить, что модалка корректно рендерится поверх Settings.
+> **Статус: ✅ ВЫПОЛНЕН** (`npm run build` — vue-tsc strict + vite — проходит).
+
+- ✅ **Сообщение** (`components/chat/MessageItem.vue`):
+  - NPC (role=`character`): `<Avatar>` обёрнут в `<button class="message-item__avatar-btn">`, имя — в `<button class="message-item__author">`; оба кликабельны → `ui.openCharacterProfile(character.id)` (при `character == null` — неактивные `span`/простой `Avatar`). Кнопки: reset браузерного стиля, `:hover` underline у имени, `:focus-visible` outline.
+  - user-сообщения: аватар использует player-персонажа из `characters.player` (avatar_url + имя для инициалов-заглушки), клик → профиль игрока; **имя не выводится** (решение в ходе реализации); при отсутствии player — фоллбэк `<Avatar name="Я">` без клика.
+  - «Alice · Classroom» остаётся: локация — вторичный стиль (`message-item__location`), `v-if="location"` — при отсутствии не показывается (§22).
+- ✅ **Правая панель** (`components/characters/CharacterList.vue`; `RightPanel.vue` — без правок, композиция уже корректна):
+  - клик по строке (и `@keydown.enter`) → `ui.openCharacterProfile(character.id)` — единый профиль;
+  - существующий inline `CharacterDetails` (память, локация, отношения) сохранён как вторичный слой: шеврон стал кнопкой «Подробности» (`@click.stop` → `characters.selectCharacter(id)`, появляется на hover/active/focus); кнопка «Отношения» внутри `CharacterDetails` (→ `RelationshipModal`) и секция `RelationshipView` от `selectedId` работают как раньше;
+  - примечание: `selectedId` при клике по строке больше не ставится → active-подсветка строки обновляется только через «Подробности»; финальный UX — Этап 5.
+- ✅ **Settings → Персонажи**: уже открывает единый модал — после переноса в `ChatView` рендерится корректно поверх Settings.
 
 ### Этап 5 — Player: имя + аватар + внешность (§17)
 
@@ -219,15 +227,15 @@ Frontend: тестовой инфраструктуры нет — провер�
 | Критерий | Покрытие |
 |----------|----------|
 | avatar у персонажа, показ в профиле/сообщениях/списках | ✅ Этап B (backend хранилище/upload) + ✅ Этап 2 (показ аватара/placeholder во всех местах); клики — frontend 4 |
-| avatar можно изменить, отсутствующий → placeholder | ✅ Этап B (upload/delete + замена файла) + frontend 3 |
-| отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); ✅ frontend 1 (типы/API/store/mocks), UI-редактирование — frontend 3 |
+| avatar можно изменить, отсутствующий → placeholder | ✅ Этап B (upload/delete + замена файла) + ✅ Этап 3 (UI смены/удаления в профиле, кнопки «Сменить»/«Удалить», placeholder при пустом) |
+| отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); ✅ frontend 1 (типы/API/store/mocks); ✅ Этап 3 (UI-редактирование: профиль — textarea во внешности, create — многострочное поле) |
 | `appearance` игрока поддерживается | frontend 5 |
 | `appearance` попадает в Character Context | ✅ Этап C (самостоятельно + co-present в scene-блоке) |
 | `appearance` не нарушает изоляцию | ✅ Этап C (тест) |
-| клик по avatar/имени в сообщении → профиль | frontend 4 |
-| клик в Right Panel → профиль | frontend 4 |
-| клик в Settings → тот же профиль | frontend 3–4 |
-| один `CharacterProfileModal`, синхронизация без reload | frontend 3–4 + store |
+| клик по avatar/имени в сообщении → профиль | ✅ Этап 4 (NPC — avatar+имя, user — аватар игрока) |
+| клик в Right Panel → профиль | ✅ Этап 4 (клик по строке; детализация — через «Подробности»/шеврон) |
+| клик в Settings → тот же профиль | ✅ Этап 3 (единый модал поверх настроек) |
+| один `CharacterProfileModal`, синхронизация без reload | ✅ Этап 3 (единый модал, монтирование в `ChatView`, обновление через store без reload); точки входа сообщение/панель — frontend 4 |
 | старый frontend работает | нет правок в `app/static/` |
 | TS build проходит, backend tests проходят, нет giant-компонентов | frontend 6 + §5 |
 
@@ -238,12 +246,12 @@ Frontend: тестовой инфраструктуры нет — провер�
 | Риск | Оценка | Решение |
 |------|--------|---------|
 | Раздача `/static` в dev (порт 3000) | низкий | proxy `/static → :8000` в `vite.config.ts` |
-| Nested модалки (профиль поверх Settings) | низкий | z-index вложенных модалок, перенос в `ChatView` |
+| Nested модалки (профиль поверх Settings) | низкий | ✅ Этап 3 — обе модалки на `--z-modal: 100`, порядок в DOM (`ChatView`): профиль после настроек; Escape-стек закрывает только верхнюю |
 | Изоляция знаний при добавлении appearance | средний | ✅ Appearance только в character card (self) и в scene-блок для same-location; тест изоляции; witness-логика не менялась |
 | Внешность в scene-state extraction для всех персонажей | низкий | ✅ Осознанное решение: в `format_character_descriptor` appearance НЕ включать (п.2.4) |
 | Большие/невалидные файлы | средний | magic-byte валидация, лимит размера, ресайз через Pillow |
 | Расхождение с макетом | средний | Ручная сверка на Этапах 3 и 6 (PNG из docs/) |
-| Инерция кликов в правой панели (была детализация) | средний | UX-решение на Этапе 5: клик → единый профиль, отношения/память доступны изнутри модалки и/или вторичного inline-слоя |
+| Инерция кликов в правой панели (была детализация) | средний | ✅ Этап 4 — клик по строке → единый профиль; inline-детализация сохранена через кнопку «Подробности» (шеврон); финальный UX (selectedId/активная подсветка, отношения изнутри модалки) — Этап 5 |
 
 ---
 
@@ -254,7 +262,7 @@ Frontend: тестовой инфраструктуры нет — провер�
 3. ✅ **Backend C** (appearance в контекст, изоляция) → тесты `test_prompt_builder.py` / `test_context_builder.py`.
 4. ✅ **Frontend 1** (типы/api/store/mocks) → `npm run build` (vue-tsc strict) проходит.
 5. ✅ **Frontend 2** (Avatar component: xl/circle/avatar_url + vite-прокси `/static`) → `npm run build` (vue-tsc strict) проходит.
-6. **Frontend 3** (CharacterProfileModal редизайн + перенос монтирования).
-7. **Frontend 4** (три точки входа).
+6. ✅ **Frontend 3** (CharacterProfileModal редизайн + перенос монтирования) → `npm run build` (vue-tsc strict) проходит.
+7. ✅ **Frontend 4** (три точки входа) → `npm run build` (vue-tsc strict) проходит.
 8. **Frontend 5** (Player).
 9. **Frontend 6** (polish + визуальная проверка) → финальный `npm run build` + `pytest`.

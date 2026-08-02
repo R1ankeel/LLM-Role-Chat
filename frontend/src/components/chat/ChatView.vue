@@ -12,6 +12,7 @@ import MessageList from '@/components/chat/MessageList.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RelationshipModal from '@/components/characters/RelationshipModal.vue'
 import SettingsModal from '@/components/settings/SettingsModal.vue'
+import CharacterProfileModal from '@/components/settings/CharacterProfileModal.vue'
 import { useUiStore } from '@/stores/ui'
 
 const route = useRoute()
@@ -64,6 +65,7 @@ onBeforeUnmount(() => {
     <Composer />
     <RelationshipModal />
     <SettingsModal />
+    <CharacterProfileModal />
   </div>
 </template>
 

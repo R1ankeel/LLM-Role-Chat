@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
+import { useUiStore } from '@/stores/ui'
 import { accentForName } from '@/utils/color'
 import Avatar from '@/components/common/Avatar.vue'
 import Badge from '@/components/common/Badge.vue'
@@ -9,6 +10,7 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
 
 const characters = useCharactersStore()
+const ui = useUiStore()
 
 const sorted = computed(() =>
   [...characters.characters].sort((a, b) => a.order_index - b.order_index),
@@ -18,7 +20,11 @@ function accent(name: string) {
   return accentForName(name)
 }
 
-function select(id: number) {
+function openProfile(id: number) {
+  ui.openCharacterProfile(id)
+}
+
+function showDetails(id: number) {
   void characters.selectCharacter(id)
 }
 </script>
@@ -54,8 +60,9 @@ function select(id: number) {
         :style="{ animationDelay: `${Math.min(index, 10) * 24}ms` }"
         role="button"
         tabindex="0"
-        @click="select(character.id)"
-        @keydown.enter="select(character.id)"
+        title="Открыть профиль"
+        @click="openProfile(character.id)"
+        @keydown.enter="openProfile(character.id)"
       >
         <Avatar
           :name="character.name"
@@ -72,16 +79,23 @@ function select(id: number) {
           </div>
           <span class="character-row__status">{{ character.location || '—' }}</span>
         </div>
-        <svg
-          class="character-row__chevron"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
+        <button
+          class="character-row__details"
+          title="Подробности (память, локация, отношения)"
+          aria-label="Открыть подробности персонажа"
+          @click.stop="showDetails(character.id)"
         >
-          <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+          <svg
+            class="character-row__chevron"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
       </li>
     </ul>
   </template>
@@ -170,15 +184,39 @@ function select(id: number) {
   gap: 6px;
 }
 
-.character-row__chevron {
+.character-row__details {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  padding: 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
   color: var(--text-muted);
+  cursor: pointer;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
 }
 
-.character-row:hover .character-row__chevron,
-.character-row--active .character-row__chevron {
+.character-row:hover .character-row__details,
+.character-row--active .character-row__details,
+.character-row__details:focus-visible {
   opacity: 1;
+}
+
+.character-row__details:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.character-row__details:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.character-row__chevron {
+  flex-shrink: 0;
+  color: currentColor;
 }
 </style>

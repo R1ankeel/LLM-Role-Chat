@@ -7,7 +7,6 @@ import PlayerSettings from '@/components/settings/PlayerSettings.vue'
 import CharacterSettings from '@/components/settings/CharacterSettings.vue'
 import LocationSettings from '@/components/settings/LocationSettings.vue'
 import CharacterCreateModal from '@/components/settings/CharacterCreateModal.vue'
-import CharacterProfileModal from '@/components/settings/CharacterProfileModal.vue'
 import CharacterDeleteConfirm from '@/components/settings/CharacterDeleteConfirm.vue'
 
 const ui = useUiStore()
@@ -27,7 +26,6 @@ const ui = useUiStore()
   </Modal>
 
   <CharacterCreateModal />
-  <CharacterProfileModal />
   <CharacterDeleteConfirm />
 </template>
 

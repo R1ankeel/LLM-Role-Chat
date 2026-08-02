@@ -5,6 +5,7 @@ import type { Character } from '@/types/character'
 import { accentForName } from '@/utils/color'
 import Avatar from '@/components/common/Avatar.vue'
 import { useMessagesStore } from '@/stores/messages'
+import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 
 const props = withDefaults(
@@ -19,12 +20,18 @@ const props = withDefaults(
 )
 
 const messages = useMessagesStore()
+const characters = useCharactersStore()
 const ui = useUiStore()
 
 const authorName = computed(() => props.character?.name ?? 'Неизвестный')
 const authorAccent = computed(() => accentForName(authorName.value))
 const location = computed(() => props.message.location?.trim() || '')
 const timeLabel = computed(() => formatTime(props.message.timestamp))
+
+function openAuthorProfile(characterId: number | null | undefined) {
+  if (characterId == null) return
+  ui.openCharacterProfile(characterId)
+}
 
 function formatTime(ts: string) {
   const date = new Date(ts)
@@ -48,16 +55,40 @@ function onDelete() {
     :class="[`message-item--${message.role}`, { 'is-streaming': isStreaming }]"
   >
     <template v-if="message.role === 'character'">
+      <button
+        v-if="props.character"
+        class="message-item__avatar-btn"
+        title="Открыть профиль"
+        aria-label="Открыть профиль персонажа"
+        @click="openAuthorProfile(props.character.id)"
+      >
+        <Avatar
+          :name="authorName"
+          :image-url="props.character.avatar_url"
+          size="sm"
+          shape="circle"
+          class="message-item__avatar"
+        />
+      </button>
       <Avatar
+        v-else
         :name="authorName"
-        :image-url="props.character?.avatar_url"
         size="sm"
         shape="circle"
         class="message-item__avatar"
       />
       <div class="message-item__body">
         <div class="message-item__meta">
-          <span class="message-item__author" :style="{ color: authorAccent }">
+          <button
+            v-if="props.character"
+            class="message-item__author"
+            :style="{ color: authorAccent }"
+            title="Открыть профиль"
+            @click="openAuthorProfile(props.character.id)"
+          >
+            {{ authorName }}
+          </button>
+          <span v-else class="message-item__author" :style="{ color: authorAccent }">
             {{ authorName }}
           </span>
           <span v-if="location" class="message-item__location" :title="location">
@@ -106,9 +137,24 @@ function onDelete() {
           <p class="message-item__text">{{ message.content }}</p>
         </div>
       </div>
+      <button
+        v-if="characters.player"
+        class="message-item__avatar-btn"
+        title="Открыть профиль игрока"
+        aria-label="Открыть профиль игрока"
+        @click="openAuthorProfile(characters.player.id)"
+      >
+        <Avatar
+          :name="characters.player.name"
+          :image-url="characters.player.avatar_url"
+          size="sm"
+          shape="circle"
+          class="message-item__avatar"
+        />
+      </button>
       <Avatar
+        v-else
         name="Я"
-        :image-url="props.character?.avatar_url"
         size="sm"
         shape="circle"
         class="message-item__avatar"
@@ -145,6 +191,21 @@ function onDelete() {
   margin-top: 2px;
 }
 
+.message-item__avatar-btn {
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  line-height: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.message-item__avatar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .message-item__body {
   min-width: 0;
 }
@@ -166,6 +227,24 @@ function onDelete() {
 .message-item__author {
   font-size: var(--text-sm);
   font-weight: 600;
+}
+
+button.message-item__author {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.message-item__author:hover {
+  text-decoration: underline;
+}
+
+button.message-item__author:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .message-item__time {
