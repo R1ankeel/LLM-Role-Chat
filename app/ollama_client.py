@@ -161,7 +161,7 @@ SCENE_STATE_JSON_SCHEMA = {
         "character_locations": {
             "type": "object",
             "additionalProperties": {"type": "string"},
-            "description": "Map of character name -> current location. Include EVERY character. Empty string if unknown."
+            "description": "Карта имён персонажей -> текущая локация. Укажи КАЖДОГО персонажа. Пустая строка, если неизвестно."
         }
     },
     "required": ["time_of_day", "character_locations"]

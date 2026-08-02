@@ -7,11 +7,16 @@ creation (files are loaded only through the upload endpoint — Этап B).
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
+
 from httpx import ASGITransport, AsyncClient
 from fastapi import FastAPI
+from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import crud, schemas
+from app import avatar_service, crud, schemas
+from app.config import settings
 from app.database import get_async_db
 from app.routers.characters import router as characters_router
 
@@ -129,3 +134,144 @@ class TestCharacterProfileFields:
             )
             assert resp.status_code == 200
             assert resp.json()["temperature"] == 1.35
+
+
+def _make_image_bytes(size=(120, 80), color=(200, 30, 30), fmt="PNG") -> bytes:
+    """Render a tiny real image into memory (used as upload payload)."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def _avatar_files(tmp_path: Path, character_id: int) -> list[Path]:
+    return sorted(tmp_path.glob(f"{character_id}-*"))
+
+
+class TestCharacterAvatar:
+    """Avatar upload/delete endpoints (Этап B, docs/Profile.docx §27)."""
+
+    async def test_upload_avatar_success(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+
+        async with await _make_client(session_factory) as client:
+            resp = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("avatar.png", _make_image_bytes(), "image/png")},
+            )
+            assert resp.status_code == 200, resp.text
+            avatar_url = resp.json()["avatar_url"]
+            assert avatar_url.startswith("/static/avatars/")
+
+            files = _avatar_files(tmp_path, char_id)
+            assert len(files) == 1
+            # Saved file is a valid WebP (converted + EXIF stripped).
+            with Image.open(files[0]) as img:
+                assert img.format == "WEBP"
+            assert avatar_url == f"/static/avatars/{files[0].name}"
+
+        async with session_factory() as db:
+            fresh = await crud.get_character(db, char_id)
+            assert fresh.avatar_url == avatar_url
+
+    async def test_upload_avatar_unknown_character_404(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        async with await _make_client(session_factory) as client:
+            resp = await client.post(
+                "/characters/999999/avatar",
+                files={"file": ("a.png", _make_image_bytes(), "image/png")},
+            )
+            assert resp.status_code == 404
+
+    async def test_upload_avatar_invalid_type_400(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+
+        async with await _make_client(session_factory) as client:
+            resp = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("a.txt", b"definitely not an image", "text/plain")},
+            )
+            assert resp.status_code == 400
+            assert _avatar_files(tmp_path, char_id) == []
+
+    async def test_upload_avatar_too_large_400(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+
+        # Valid PNG magic, but payload exceeds the 5 MB limit.
+        oversized = _make_image_bytes() + b"\x00" * (settings.avatar_max_size_mb * 1024 * 1024)
+        async with await _make_client(session_factory) as client:
+            resp = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("big.png", oversized, "image/png")},
+            )
+            assert resp.status_code == 400
+            assert _avatar_files(tmp_path, char_id) == []
+
+    async def test_replace_avatar_deletes_old_file(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+
+        async with await _make_client(session_factory) as client:
+            first = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("one.png", _make_image_bytes(), "image/png")},
+            )
+            assert first.status_code == 200
+            first_file = _avatar_files(tmp_path, char_id)[0]
+
+            second = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("two.png", _make_image_bytes(), "image/png")},
+            )
+            assert second.status_code == 200
+            assert second.json()["avatar_url"] != first.json()["avatar_url"]
+
+            files = _avatar_files(tmp_path, char_id)
+            assert len(files) == 1
+            assert files[0].name != first_file.name
+
+    async def test_delete_avatar_removes_file_and_url(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+
+        async with await _make_client(session_factory) as client:
+            uploaded = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("a.png", _make_image_bytes(), "image/png")},
+            )
+            assert uploaded.status_code == 200
+            assert _avatar_files(tmp_path, char_id)
+
+            resp = await client.delete(f"/characters/{char_id}/avatar")
+            assert resp.status_code == 200
+            assert resp.json()["avatar_url"] == ""
+            assert _avatar_files(tmp_path, char_id) == []
+
+    async def test_delete_avatar_unknown_character_404(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        async with await _make_client(session_factory) as client:
+            resp = await client.delete("/characters/999999/avatar")
+            assert resp.status_code == 404

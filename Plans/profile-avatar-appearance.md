@@ -1,6 +1,6 @@
 # План внедрения: Character Profile, аватарки и внешность (docs/Profile.docx)
 
-> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). Этапы B, C и все frontend-этапы 1–6 — ещё не начаты.
+> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). Этап C и все frontend-этапы 1–6 — ещё не начаты.
 > **Источник ТЗ:** `docs/Profile.docx` (34 пункта, 6 этапов, критерии готовности в §34).
 > **Ограничения ТЗ:** не переписывать frontend целиком, расширять существующую архитектуру, старый frontend (`app/static/`) не трогать, один `CharacterProfileModal`, единый источник истины (`CharacterStore`).
 
@@ -23,8 +23,8 @@
 
 | Требование ТЗ | Статус |
 |---------------|--------|
-| Поля `appearance` и `avatar_url` в `Character` | ✅ Этап A — колонки, схема, миграция добавлены (`app/models.py:77-78`, `app/schemas.py`, `app/database.py`); хранение/раздача файлов — Этап B |
-| Хранение и загрузка аватара (upload/validate/обработка) | Нет — нет Pillow в `requirements.txt`, нет upload endpoint, нет каталога хранения |
+| Поля `appearance` и `avatar_url` в `Character` | ✅ Этап A — колонки, схема, миграция добавлены (`app/models.py:77-78`, `app/schemas.py`, `app/database.py`) |
+| Хранение и загрузка аватара (upload/validate/обработка) | ✅ Этап B — `app/avatar_service.py` (magic-bytes, лимит размера, ресайз/конвертация в WebP, безопасные имена), `POST/DELETE /characters/{id}/avatar`; каталог `app/static/avatars/` создаётся при старте |
 | Единый профиль из трёх точек входа (сообщение, правая панель, Settings) | Частично — из Settings да; из сообщения и правой панели нет |
 | Кликабельные avatar+имя в сообщениях | Нет — `MessageItem.vue:51/54` не кликабельны; у сообщений игрока `<Avatar name="Я">` (не аватар player-персонажа) |
 | Кликабельные avatar+имя в правой панели | Нет — `CharacterList.vue:21` клик открывает inline `CharacterDetails`, а не единый профиль |
@@ -100,12 +100,14 @@
 
 ### Этап B — Avatar: хранилище, upload, валидация
 
-- `requirements.txt`: `Pillow>=10.0.0`.
-- `app/config.py`: `avatar_dir` (default `app/static/avatars`), `avatar_max_size_mb` (5), `avatar_max_dimension` (512), `avatar_allowed_types` (png/jpeg/webp).
-- `app/avatar_service.py`: `validate_and_save(file, character_id) -> avatar_url`, `remove_avatar(character_id)`, magic-byte проверка, ресайз/конвертация, безопасное имя файла (только id-stamp.ext), удаление старого файла при замене.
-- `app/routers/characters.py`: `POST /characters/{id}/avatar` (проверки §27), `DELETE /characters/{id}/avatar`.
-- `app/main.py`: гарантировать создание `app/static/avatars/` при старте (или в avatar_service); `/static` уже смонтирован.
-- Тесты: `tests/test_character_profile.py` (см. §5).
+> **Статус: ✅ ВЫПОЛНЕН.**
+
+- `requirements.txt`: `Pillow>=10.0.0`, `python-multipart>=0.0.9` (multipart-парсинг FastAPI для `UploadFile`).
+- `app/config.py`: `avatar_dir` (default `app/static/avatars`), `avatar_max_size_mb` (5), `avatar_max_dimension` (512), `avatar_allowed_types` (png/jpeg/webp) — задано на Этапе A, используется на Этапе B.
+- `app/avatar_service.py`: `validate_and_save(file, character_id) -> avatar_url`, `remove_avatar(character_id)`, `detect_image_format` (magic-byte PNG/JPEG/WebP), лимит размера, ресайз до `avatar_max_dimension` + конвертация в WebP (EXIF отбрасывается), безопасное имя файла только `{id}-{stamp}.webp`, удаление старого файла при замене; `ensure_avatar_dir()`/`avatar_dir_path()` (относительный `AVATAR_DIR` резолвится от корня проекта).
+- `app/routers/characters.py`: `POST /characters/{id}/avatar` (проверки §27: 404/тип/размер/обработка), `DELETE /characters/{id}/avatar`; оба возвращают актуальный `CharacterRead`; при `DELETE /characters/{id}` файлы аватара также удаляются.
+- `app/main.py`: в `lifespan` вызывается `avatar_service.ensure_avatar_dir()`; `/static` уже смонтирован.
+- ✅ Тесты: `tests/test_character_profile.py` — класс `TestCharacterAvatar` (см. §5).
 
 ### Этап C — Appearance в контекст
 
@@ -177,10 +179,10 @@
 ## 5. Тесты
 
 Backend (pytest, существующая структура `tests/`):
-- `tests/test_character_profile.py` (✅ Этап A-часть реализована; upload/delete-часть — с Этапом B):
+- `tests/test_character_profile.py` (✅ Этап A-часть и Этап B-часть реализованы):
   - `PUT /characters/{id}` с `appearance` и `temperature` вне диапазона (422);
   - `avatar_url` попадает в `CharacterRead`;
-  - upload: несуществующий персонаж → 404; недопустимый тип (магик-байты) → 400; слишком большой файл → 400; успешный upload → `avatar_url` начинается с `/static/avatars/`, файл существует;
+  - upload: несуществующий персонаж → 404; недопустимый тип (магик-байты) → 400; слишком большой файл → 400; успешный upload → `avatar_url` начинается с `/static/avatars/`, файл существует и является валидным WebP;
   - delete avatar → `avatar_url == ""`, файл удалён;
   - замена аватара удаляет старый файл.
 - `tests/test_prompt_builder.py`: `<appearance>` присутствует в character card (self); scene-блок содержит внешность только для персонажей той же локации, НЕ содержит для других локаций (изоляция).
@@ -194,8 +196,8 @@ Frontend: тестовой инфраструктуры нет — провер�
 
 | Критерий | Покрытие |
 |----------|----------|
-| avatar у персонажа, показ в профиле/сообщениях/списках | Этап B + frontend 2–4 |
-| avatar можно изменить, отсутствующий → placeholder | Этап B + frontend 3 |
+| avatar у персонажа, показ в профиле/сообщениях/списках | ✅ Этап B (backend хранилище/upload) + frontend 2–4 |
+| avatar можно изменить, отсутствующий → placeholder | ✅ Этап B (upload/delete + замена файла) + frontend 3 |
 | отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); UI-часть — frontend 1/3 |
 | `appearance` игрока поддерживается | frontend 5 |
 | `appearance` попадает в Character Context | Этап C |
@@ -226,7 +228,7 @@ Frontend: тестовой инфраструктуры нет — провер�
 ## 8. Порядок работ (сводно)
 
 1. ✅ **Backend A** (модель/схема/миграция) → тесты `test_character_profile.py` (A-часть).
-2. **Backend B** (avatar storage + endpoints + Pillow) → тесты.
+2. ✅ **Backend B** (avatar storage + endpoints + Pillow) → тесты.
 3. **Backend C** (appearance в контекст, изоляция) → тесты.
 4. **Frontend 1** (типы/api/store/mocks) → build.
 5. **Frontend 2** (Avatar component: xl/circle/avatar_url).

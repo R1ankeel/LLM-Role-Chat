@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from . import memory_service
 from . import models  # noqa: F401 — регистрирует ORM-модели в Base.metadata
 from . import task_queue
+from . import avatar_service
 from .config import settings
 from .database import async_engine, Base, ensure_schema, init_db
 from .routers import characters, chat_engine, chats, jobs, relationships
@@ -134,6 +135,10 @@ async def lifespan(app: FastAPI):
     # Initialize database (create tables + run migrations)
     await init_db()
     logger.info("Таблицы БД созданы и миграции применены.")
+
+    # Гарантировать каталог аватаров (раздаётся на /static)
+    avatar_service.ensure_avatar_dir()
+    logger.info("Каталог аватаров готов: %s", avatar_service.avatar_dir_path())
 
     async with httpx.AsyncClient(
         base_url=settings.ollama_base_url, timeout=settings.generate_timeout

@@ -1,8 +1,9 @@
 """Endpoints for managing characters and their memories."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import avatar_service
 from .. import crud
 from .. import schemas
 from ..database import get_async_db
@@ -83,6 +84,52 @@ async def delete_character(character_id: int, db: AsyncSession = Depends(get_asy
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
+    avatar_service.remove_avatar(character_id)
+
+
+@router.post(
+    "/characters/{character_id}/avatar", response_model=schemas.CharacterRead
+)
+async def upload_character_avatar(
+    character_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Upload/replace a character's avatar (PNG/JPEG/WebP, magic-byte checked).
+
+    The file is validated (size, magic bytes), resized/re-encoded to WebP and
+    saved to ``/static/avatars/{id}-{stamp}.webp``; ``avatar_url`` is updated.
+    """
+    if await crud.get_character(db, character_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Персонаж не найден"
+        )
+    try:
+        avatar_url = await avatar_service.validate_and_save(file, character_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    return await crud.update_character(
+        db, character_id, schemas.CharacterUpdate(avatar_url=avatar_url)
+    )
+
+
+@router.delete(
+    "/characters/{character_id}/avatar", response_model=schemas.CharacterRead
+)
+async def delete_character_avatar(
+    character_id: int, db: AsyncSession = Depends(get_async_db)
+):
+    """Remove a character's avatar file and reset ``avatar_url``."""
+    if await crud.get_character(db, character_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Персонаж не найден"
+        )
+    avatar_service.remove_avatar(character_id)
+    return await crud.update_character(
+        db, character_id, schemas.CharacterUpdate(avatar_url="")
+    )
 
 
 @router.put("/chats/{chat_id}/player", response_model=schemas.CharacterRead)
