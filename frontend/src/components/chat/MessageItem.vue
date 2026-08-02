@@ -23,7 +23,7 @@ const ui = useUiStore()
 
 const authorName = computed(() => props.character?.name ?? 'Неизвестный')
 const authorAccent = computed(() => accentForName(authorName.value))
-
+const location = computed(() => props.message.location?.trim() || '')
 const timeLabel = computed(() => formatTime(props.message.timestamp))
 
 function formatTime(ts: string) {
@@ -53,6 +53,9 @@ function onDelete() {
         <div class="message-item__meta">
           <span class="message-item__author" :style="{ color: authorAccent }">
             {{ authorName }}
+          </span>
+          <span v-if="location" class="message-item__location" :title="location">
+            {{ location }}
           </span>
           <span class="message-item__time">{{ timeLabel }}</span>
         </div>
@@ -156,6 +159,20 @@ function onDelete() {
 .message-item__time {
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+.message-item__location {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--bg-panel);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+  font-variant-numeric: tabular-nums;
 }
 
 .message-item__bubble {

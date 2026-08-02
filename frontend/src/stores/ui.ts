@@ -5,6 +5,8 @@ export type Viewport = 'desktop' | 'tablet' | 'mobile'
 
 export type ToastType = 'success' | 'info' | 'error' | 'warning'
 
+export type SettingsTab = 'general' | 'player' | 'characters' | 'locations'
+
 export interface Toast {
   id: number
   type: ToastType
@@ -47,6 +49,13 @@ export const useUiStore = defineStore('ui', () => {
   const viewport = ref<Viewport>('desktop')
 
   const relationshipsModalOpen = ref(false)
+
+  const settingsOpen = ref(false)
+  const settingsTab = ref<SettingsTab>('general')
+  const characterCreateOpen = ref(false)
+  const characterProfileId = ref<number | null>(null)
+  const characterDeleteTarget = ref<number | null>(null)
+  const worldEditOpen = ref(false)
 
   const toasts = ref<Toast[]>([])
 
@@ -113,6 +122,47 @@ export const useUiStore = defineStore('ui', () => {
     relationshipsModalOpen.value = false
   }
 
+  function openSettings(tab: SettingsTab = 'general') {
+    settingsTab.value = tab
+    settingsOpen.value = true
+  }
+
+  function closeSettings() {
+    settingsOpen.value = false
+  }
+
+  function openCharacterCreate() {
+    characterCreateOpen.value = true
+  }
+
+  function closeCharacterCreate() {
+    characterCreateOpen.value = false
+  }
+
+  function openCharacterProfile(characterId: number) {
+    characterProfileId.value = characterId
+  }
+
+  function closeCharacterProfile() {
+    characterProfileId.value = null
+  }
+
+  function requestCharacterDelete(characterId: number) {
+    characterDeleteTarget.value = characterId
+  }
+
+  function cancelCharacterDelete() {
+    characterDeleteTarget.value = null
+  }
+
+  function openWorldEdit() {
+    worldEditOpen.value = true
+  }
+
+  function closeWorldEdit() {
+    worldEditOpen.value = false
+  }
+
   function closeAllOverlays() {
     sidebarDrawerOpen.value = false
     rightPanelDrawerOpen.value = false
@@ -126,6 +176,12 @@ export const useUiStore = defineStore('ui', () => {
     rightPanelDrawerOpen,
     viewport,
     relationshipsModalOpen,
+    settingsOpen,
+    settingsTab,
+    characterCreateOpen,
+    characterProfileId,
+    characterDeleteTarget,
+    worldEditOpen,
     toasts,
     pushToast,
     dismissToast,
@@ -139,6 +195,16 @@ export const useUiStore = defineStore('ui', () => {
     setViewport,
     openRelationshipsModal,
     closeRelationshipsModal,
+    openSettings,
+    closeSettings,
+    openCharacterCreate,
+    closeCharacterCreate,
+    openCharacterProfile,
+    closeCharacterProfile,
+    requestCharacterDelete,
+    cancelCharacterDelete,
+    openWorldEdit,
+    closeWorldEdit,
     closeAllOverlays,
   }
 })

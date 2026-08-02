@@ -66,7 +66,13 @@ class ChatBase(BaseModel):
 
 
 class ChatCreate(ChatBase):
-    pass
+    """Имя игрока-персонажа создаётся при создании чата (player character).
+
+    ``player_name`` не является колонкой Chat и не возвращается в ``ChatRead``;
+    используется только для именования автоматически создаваемого player-персонажа.
+    """
+
+    player_name: Optional[str] = None
 
 
 class ChatUpdate(BaseModel):

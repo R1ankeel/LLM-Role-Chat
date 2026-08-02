@@ -1,5 +1,5 @@
 import { request, ApiError } from '@/api/client'
-import type { CreateChatInput, ChatDetail } from '@/api/types'
+import type { ChatUpdateInput, CreateChatInput, ChatDetail } from '@/api/types'
 import type { Chat, ChatListItem } from '@/types/chat'
 
 function chatToListItem(chat: Chat): ChatListItem {
@@ -30,6 +30,10 @@ export async function fetchChatDetail(chatId: number): Promise<ChatDetail | null
 
 export async function createChat(input: CreateChatInput): Promise<Chat> {
   return request<Chat>('/chats', { method: 'POST', body: input })
+}
+
+export async function updateChat(chatId: number, patch: ChatUpdateInput): Promise<Chat> {
+  return request<Chat>(`/chats/${chatId}`, { method: 'PUT', body: patch })
 }
 
 export async function renameChat(chatId: number, name: string): Promise<void> {

@@ -34,6 +34,7 @@ const newName = ref('')
 const newPrompt = ref('')
 const newModel = ref('')
 const newThinking = ref(true)
+const newPlayerName = ref('')
 
 onMounted(() => {
   void chats.loadModels()
@@ -70,6 +71,7 @@ function openNewChat() {
   newPrompt.value = ''
   newModel.value = chats.models[0] ?? ''
   newThinking.value = true
+  newPlayerName.value = ''
   showNewChat.value = true
 }
 
@@ -82,6 +84,7 @@ async function createChat() {
       general_prompt: newPrompt.value.trim(),
       model_name: newModel.value,
       thinking_mode: newThinking.value,
+      player_name: newPlayerName.value.trim() || undefined,
     })
     showNewChat.value = false
     ui.toast(`Сцена «${chat.name}» создана`, 'success')
@@ -312,6 +315,16 @@ function formatSidebarTime(ts: string | null) {
             rows="3"
             placeholder="Краткое описание мира и завязки…"
           ></textarea>
+        </label>
+        <label class="field">
+          <span class="field__label">Имя игрока</span>
+          <input
+            v-model="newPlayerName"
+            class="field__input"
+            type="text"
+            placeholder="Имя игрового персонажа"
+            @keydown.enter.prevent="createChat"
+          />
         </label>
         <div class="new-chat-form__row">
           <label class="field">

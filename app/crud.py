@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 # ------------------------------ Chat ------------------------------
 async def create_chat(db: AsyncSession, chat: schemas.ChatCreate) -> models.Chat:
-    db_chat = models.Chat(**chat.model_dump())
+    # player_name не является колонкой Chat — он уходит на именование
+    # автоматически создаваемого player-персонажа (см. routers/chats.py).
+    db_chat = models.Chat(**chat.model_dump(exclude={"player_name"}))
     db.add(db_chat)
     await db.commit()
     await db.refresh(db_chat)

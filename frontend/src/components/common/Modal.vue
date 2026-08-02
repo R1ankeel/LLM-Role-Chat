@@ -14,12 +14,29 @@ withDefaults(
 
 const emit = defineEmits<{ close: [] }>()
 
+// Стекинг модалок: Escape закрывает только верхнюю модалку на стеке,
+// чтобы при открытом диалоге поверх настроек не закрывались оба сразу.
+const stack: number[] = []
+let seq = 0
+
+const id = ++seq
+
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
+  if (e.key !== 'Escape') return
+  if (stack[stack.length - 1] !== id) return
+  emit('close')
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onMounted(() => {
+  stack.push(id)
+  window.addEventListener('keydown', onKeydown)
+})
+
+onBeforeUnmount(() => {
+  const index = stack.indexOf(id)
+  if (index !== -1) stack.splice(index, 1)
+  window.removeEventListener('keydown', onKeydown)
+})
 
 function onBackdrop(e: MouseEvent) {
   if (e.target === e.currentTarget) emit('close')

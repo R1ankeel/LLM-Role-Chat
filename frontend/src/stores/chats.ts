@@ -2,12 +2,14 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '@/api'
 import type { Chat, ChatListItem } from '@/types/chat'
+import type { ChatUpdateInput } from '@/api/types'
 
 export interface CreateChatInput {
   name: string
   general_prompt: string
   model_name: string
   thinking_mode: boolean
+  player_name?: string
 }
 
 const LAST_CHAT_KEY = 'rolellm_last_chat'
@@ -110,6 +112,15 @@ export const useChatsStore = defineStore('chats', () => {
     await loadChats()
   }
 
+  async function updateChat(id: number, patch: ChatUpdateInput) {
+    const updated = await api.updateChat(id, patch)
+    if (currentChat.value?.id === id) {
+      currentChat.value = updated
+    }
+    await loadChats()
+    return updated
+  }
+
   function clearChat() {
     currentChatId.value = null
     currentChat.value = null
@@ -135,6 +146,7 @@ export const useChatsStore = defineStore('chats', () => {
     createChat,
     deleteChat,
     renameChat,
+    updateChat,
     clearChat,
     findChat,
   }

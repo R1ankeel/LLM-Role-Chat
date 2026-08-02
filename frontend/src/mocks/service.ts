@@ -14,11 +14,15 @@ import type { ApiError } from '@/api/client'
 import type {
   Api,
   ChatDetail,
+  ChatUpdateInput,
+  CharacterCreateInput,
+  CharacterUpdateInput,
   CreateChatInput,
   MessagesPage,
   ModelsResponse,
   RelationshipIssueState,
   RelationshipUpdateInput,
+  SceneStateUpdateInput,
   TimelinePage,
 } from '@/api/types'
 import {
@@ -156,6 +160,67 @@ export const mockApi: Api = {
     return delay(clone(mockCharacters[chatId] ?? []))
   },
 
+  createCharacter(chatId: number, input: CharacterCreateInput): Promise<Character> {
+    const list = (mockCharacters[chatId] ??= [])
+    const character: Character = {
+      id: nextId(),
+      chat_id: chatId,
+      name: input.name,
+      personality: input.personality ?? '',
+      traits: input.traits ?? '',
+      speech_style: input.speech_style ?? '',
+      example_messages: input.example_messages ?? '',
+      boundaries: input.boundaries ?? '',
+      background: input.background ?? '',
+      relationships: input.relationships ?? '',
+      location: input.location ?? '',
+      temperature: input.temperature ?? 0.8,
+      order_index: input.order_index ?? list.length,
+      is_player: false,
+      created_at: nowIso(),
+    }
+    list.push(character)
+    return delay(clone(character))
+  },
+
+  updateCharacter(characterId: number, patch: CharacterUpdateInput): Promise<Character> {
+    for (const list of Object.values(mockCharacters)) {
+      const char = list.find((c) => c.id === characterId)
+      if (!char) continue
+      if (patch.name != null) char.name = patch.name
+      if (patch.personality != null) char.personality = patch.personality
+      if (patch.traits != null) char.traits = patch.traits
+      if (patch.speech_style != null) char.speech_style = patch.speech_style
+      if (patch.example_messages != null) char.example_messages = patch.example_messages
+      if (patch.boundaries != null) char.boundaries = patch.boundaries
+      if (patch.background != null) char.background = patch.background
+      if (patch.relationships != null) char.relationships = patch.relationships
+      if (patch.location != null) char.location = patch.location
+      if (patch.temperature != null) char.temperature = patch.temperature
+      if (patch.order_index != null) char.order_index = patch.order_index
+      return delay(clone(char))
+    }
+    throw new Error('Персонаж не найден')
+  },
+
+  deleteCharacter(characterId: number): Promise<void> {
+    for (const list of Object.values(mockCharacters)) {
+      const index = list.findIndex((c) => c.id === characterId)
+      if (index !== -1) {
+        list.splice(index, 1)
+        return delay(undefined)
+      }
+    }
+    throw new Error('Персонаж не найден')
+  },
+
+  updatePlayerName(chatId: number, name: string): Promise<Character> {
+    const player = (mockCharacters[chatId] ?? []).find((c) => c.is_player)
+    if (!player) throw new Error('Игрок не найден')
+    player.name = name
+    return delay(clone(player))
+  },
+
   fetchMemories(characterId: number): Promise<Memory[]> {
     return delay(clone(mockMemories[characterId] ?? []))
   },
@@ -193,6 +258,20 @@ export const mockApi: Api = {
     return delay(clone(mockScene[chatId] ?? null))
   },
 
+  updateScene(chatId: number, patch: SceneStateUpdateInput): Promise<SceneState> {
+    const scene = mockScene[chatId]
+    if (!scene) throw new Error('Сцена не найдена')
+    if (patch.time_of_day != null) scene.time_of_day = patch.time_of_day
+    if (patch.character_locations != null) {
+      scene.character_locations = { ...scene.character_locations, ...patch.character_locations }
+    }
+    if (patch.custom_state) {
+      scene.custom_state = { ...scene.custom_state, ...patch.custom_state }
+    }
+    scene.updated_at = nowIso()
+    return delay(clone(scene))
+  },
+
   fetchWorldEvents(chatId: number): Promise<WorldEvent[]> {
     return delay(clone(mockWorldEvents[chatId] ?? []))
   },
@@ -214,7 +293,7 @@ export const mockApi: Api = {
       {
         id: nextId(),
         chat_id: chat.id,
-        name: 'Игрок',
+        name: input.player_name || 'Игрок',
         personality: '',
         traits: '',
         speech_style: '',
@@ -251,6 +330,19 @@ export const mockApi: Api = {
       player_location: '—',
       updated_at: chat.created_at,
     }
+    return delay(clone(chat))
+  },
+
+  updateChat(chatId: number, patch: ChatUpdateInput): Promise<Chat> {
+    const chat = mockChats.find((c) => c.id === chatId)
+    if (!chat) throw new Error('Чат не найден')
+    if (patch.name != null) chat.name = patch.name
+    if (patch.general_prompt != null) chat.general_prompt = patch.general_prompt
+    if (patch.model_name != null) chat.model_name = patch.model_name
+    if (patch.max_history_length != null) chat.max_history_length = patch.max_history_length
+    if (patch.thinking_mode != null) chat.thinking_mode = patch.thinking_mode
+    if (patch.player_location != null) chat.player_location = patch.player_location
+    if (patch.locations != null) chat.locations = patch.locations
     return delay(clone(chat))
   },
 

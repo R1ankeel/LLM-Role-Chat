@@ -20,9 +20,9 @@
 
 ### POST `/api/chats` — создать чат
 
-Тело: `ChatCreate` (`name`; `general_prompt`, `model_name`, `max_history_length`, `thinking_mode`, `player_location`, `locations` — опционально).
+Тело: `ChatCreate` (`name`; `general_prompt`, `model_name`, `max_history_length`, `thinking_mode`, `player_location`, `locations`, `player_name` — опционально).
 
-Создаёт чат, автоматически создаёт player-персонажа («Игрок») и сбрасывает динамический `num_ctx` (`ctx_state.reset`). Ответ — 201 с объектом `ChatRead`.
+Создаёт чат, автоматически создаёт player-персонажа (имя из `player_name`, по умолчанию «Игрок») и сбрасывает динамический `num_ctx` (`ctx_state.reset`). Ответ — 201 с объектом `ChatRead`.
 
 ### GET `/api/chats` — список чатов
 

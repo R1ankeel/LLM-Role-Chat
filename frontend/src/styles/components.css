@@ -140,3 +140,104 @@
   justify-content: space-between;
   gap: var(--space-2);
 }
+
+/* ── Form fields ────────────────────────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.field__input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field__input--area {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.field__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.field__error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
+/* ── Toggle switch ──────────────────────────────────────── */
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle__track {
+  width: 34px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
+  position: relative;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.toggle input:checked + .toggle__track {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.toggle input:checked + .toggle__track .toggle__thumb {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+.toggle__label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}

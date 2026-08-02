@@ -6,6 +6,7 @@ import { useUiStore } from '@/stores/ui'
 import ProgressBar from '@/components/common/ProgressBar.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
+import WorldEditModal from '@/components/scene/WorldEditModal.vue'
 
 const scene = useSceneStore()
 const chats = useChatsStore()
@@ -70,6 +71,18 @@ async function saveLocation() {
     />
 
     <template v-else>
+      <div class="world-state__toolbar">
+        <button
+          class="button button--secondary button--block"
+          @click="ui.openWorldEdit"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 20h4L19.5 8.5a2.1 2.1 0 00-3-3L5 17v3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+          </svg>
+          Редактировать мир
+        </button>
+      </div>
+
       <dl class="world-state">
       <div class="world-state__row">
         <dt>Время</dt>
@@ -127,6 +140,8 @@ async function saveLocation() {
     </div>
     </template>
   </div>
+
+  <WorldEditModal />
 </template>
 
 <style scoped>
@@ -134,6 +149,10 @@ async function saveLocation() {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.world-state__toolbar {
+  display: flex;
 }
 
 .world-state__skeleton {

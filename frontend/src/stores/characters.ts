@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from '@/api'
 import type { Character, CharacterSummary } from '@/types/character'
+import type { CharacterCreateInput, CharacterUpdateInput } from '@/api/types'
 import type { Memory } from '@/types/memory'
 
 export const useCharactersStore = defineStore('characters', () => {
@@ -15,6 +16,7 @@ export const useCharactersStore = defineStore('characters', () => {
   const detailsLoading = ref(false)
   const detailsError = ref<string | null>(null)
   const locationSaving = ref(false)
+  const mutating = ref(false)
 
   const byId = computed(() => new Map(characters.value.map((c) => [c.id, c])))
   const player = computed(() => characters.value.find((c) => c.is_player) ?? null)
@@ -75,6 +77,67 @@ export const useCharactersStore = defineStore('characters', () => {
     }
   }
 
+  async function create(input: CharacterCreateInput) {
+    mutating.value = true
+    try {
+      const chatId = characters.value[0]?.chat_id
+      if (chatId == null) throw new Error('Чат не загружен')
+      const created = await api.createCharacter(chatId, {
+        ...input,
+        order_index: input.order_index ?? characters.value.length,
+      })
+      characters.value.push(created)
+      return created
+    } finally {
+      mutating.value = false
+    }
+  }
+
+  async function update(characterId: number, patch: CharacterUpdateInput) {
+    mutating.value = true
+    try {
+      const updated = await api.updateCharacter(characterId, patch)
+      const index = characters.value.findIndex((c) => c.id === characterId)
+      if (index !== -1) characters.value[index] = updated
+      if (selectedId.value === characterId) {
+        summary.value = null
+        memories.value = []
+      }
+      return updated
+    } finally {
+      mutating.value = false
+    }
+  }
+
+  async function remove(characterId: number) {
+    mutating.value = true
+    try {
+      await api.deleteCharacter(characterId)
+      characters.value = characters.value.filter((c) => c.id !== characterId)
+      if (selectedId.value === characterId) {
+        selectedId.value = null
+        memories.value = []
+        summary.value = null
+      }
+    } finally {
+      mutating.value = false
+    }
+  }
+
+  async function updatePlayerName(name: string) {
+    mutating.value = true
+    try {
+      const target = player.value
+      if (!target) throw new Error('Игрок не найден')
+      const updated = await api.updatePlayerName(target.chat_id, name)
+      const index = characters.value.findIndex((c) => c.id === updated.id)
+      if (index !== -1) characters.value[index] = updated
+      return updated
+    } finally {
+      mutating.value = false
+    }
+  }
+
   function reset() {
     characters.value = []
     selectedId.value = null
@@ -94,6 +157,7 @@ export const useCharactersStore = defineStore('characters', () => {
     detailsLoading,
     detailsError,
     locationSaving,
+    mutating,
     byId,
     player,
     npcs,
@@ -102,6 +166,10 @@ export const useCharactersStore = defineStore('characters', () => {
     getById,
     selectCharacter,
     updateLocation,
+    create,
+    update,
+    remove,
+    updatePlayerName,
     reset,
   }
 })

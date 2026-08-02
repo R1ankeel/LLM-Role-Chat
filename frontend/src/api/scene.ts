@@ -1,5 +1,6 @@
 import { request, ApiError } from '@/api/client'
 import type { SceneState } from '@/types/scene'
+import type { SceneStateUpdateInput } from '@/api/types'
 import type { WorldEvent } from '@/types/message'
 
 export async function fetchScene(chatId: number): Promise<SceneState | null> {
@@ -13,7 +14,7 @@ export async function fetchScene(chatId: number): Promise<SceneState | null> {
 
 export async function updateScene(
   chatId: number,
-  patch: Record<string, unknown>,
+  patch: SceneStateUpdateInput,
 ): Promise<SceneState> {
   return request<SceneState>(`/chats/${chatId}/scene`, { method: 'PATCH', body: patch })
 }

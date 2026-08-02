@@ -15,7 +15,7 @@ router = APIRouter(prefix="/chats", tags=["chats"])
 async def create_chat(chat: schemas.ChatCreate, db: AsyncSession = Depends(get_async_db)):
     """Create a new chat with player character."""
     db_chat = await crud.create_chat(db, chat)
-    await crud.create_player_character(db, db_chat.id)
+    await crud.create_player_character(db, db_chat.id, name=chat.player_name or "Игрок")
     ctx_state.reset(db_chat.id)
     return db_chat
 

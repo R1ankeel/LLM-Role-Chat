@@ -61,8 +61,7 @@ function toggleRightPanel() {
         class="icon-button"
         title="Настройки"
         aria-label="Настройки чата"
-        aria-disabled="true"
-        tabindex="-1"
+        @click="ui.openSettings()"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path
@@ -141,10 +140,5 @@ function toggleRightPanel() {
   align-items: center;
   gap: var(--space-1);
   flex-shrink: 0;
-}
-
-.chat-header__tools .icon-button[aria-disabled='true'] {
-  opacity: 0.4;
-  cursor: default;
 }
 </style>
