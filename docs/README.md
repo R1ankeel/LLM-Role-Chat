@@ -14,6 +14,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [configuration.md](configuration.md) | Все настройки через `.env` (значения по умолчанию) |
 | [relations.md](relations.md) | Система отношений между персонажами (анализатор, интерпретатор, issues, epistemic mask) |
 | [intervention.md](intervention.md) | Одноразовое «Вмешательство» игрока: жизнь инструкции, API, промпт |
+| [locations.md](locations.md) | «Локации 2.0»: модель Location, миграция, CRUD API, синхронизация ссылок |
 
 ## Краткий обзор
 
@@ -23,6 +24,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 - **Ядро**: каждый раунд игры — одно сообщение пользователя, на которое по очереди отвечают все NPC-персонажи.
 - **Ключевые системы**:
   - *Perception / Witness* — персонаж видит в контексте только те события мира, которые способен воспринять (локация + visibility + каналы связи).
+  - *Locations 2.0* — локации как самостоятельная сущность (таблица `locations`): CRUD API + UI, `chats.locations` остаётся кэшем названий для движка (см. `locations.md`).
   - *Memory* — извлечение фактов после каждого раунда, BM25/векторный поиск, саммари, консолидация, фоновые задачи.
   - *Relationships* — направленные отношения персонаж→персонаж, LLM-анализатор дельт, open issues, детерминированная интерпретация.
   - *Role isolation* — защита от «разговоров за других персонажей», repetition detector, anti-mimicry.
@@ -63,7 +65,7 @@ ai-roleplay-chat/
 │   ├── ratelimit.py         # throttle 1 сообщение / 5 сек на чат
 │   ├── generation_tracker.py# трекинг активной генерации на чат
 │   ├── prompts/ru.json      # все шаблоны промптов
-│   ├── routers/             # API-роутеры (chats, characters, chat_engine, jobs, relationships)
+│   ├── routers/             # API-роутеры (chats, characters, locations, chat_engine, jobs, relationships)
 │   └── static/              # SPA: index.html, app.js, style.css
 ├── frontend/                # НОВЫЙ frontend: Vue 3 + TS + Vite (см. ниже)
 ├── scripts/                 # CLI-скрипты (backfill_embeddings)

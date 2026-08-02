@@ -53,6 +53,38 @@ class Chat(Base):
     scene_state: Mapped[Optional["SceneState"]] = relationship(
         back_populates="chat", cascade="all, delete-orphan", uselist=False
     )
+    # Локации 2.0: самостоятельная сущность (источник истины для CRUD и
+    # описаний). `chats.locations` остаётся кэшем названий для движка.
+    location_records: Mapped[list["Location"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
+
+
+class Location(Base):
+    """Локация чата как самостоятельная сущность (Локации 2.0).
+
+    Источник истины для CRUD и описаний локаций. ``chats.locations``
+    остаётся кэшем названий для движка и синхронизируется при CRUD-операциях.
+    """
+
+    __tablename__ = "locations"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "name", name="uq_location_chat_name"),
+        Index("ix_locations_chat_id", "chat_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    chat: Mapped["Chat"] = relationship(back_populates="location_records")
 
 
 class Character(Base):

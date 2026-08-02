@@ -195,6 +195,62 @@ class CharacterRead(CharacterBase):
     created_at: datetime
 
 
+# ----------------------------- Location -----------------------------
+def _strip_location_name(value: object) -> object:
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+class LocationBase(BaseModel):
+    name: str = Field(min_length=1)
+    description: str = ""
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _name(cls, value: object) -> object:
+        return _strip_location_name(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _desc(cls, value: object) -> object:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+
+class LocationCreate(LocationBase):
+    """Локация создаётся внутри чата (chat_id берётся из пути)."""
+
+
+class LocationUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1)
+    description: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _name(cls, value: object) -> object:
+        if value is None:
+            return None
+        return _strip_location_name(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _desc(cls, value: object) -> object:
+        if value is None:
+            return None
+        return str(value).strip()
+
+
+class LocationRead(LocationBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    chat_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 # ----------------------------- Message -----------------------------
 class MessageBase(BaseModel):
     role: Role

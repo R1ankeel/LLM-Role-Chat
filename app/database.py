@@ -1,6 +1,7 @@
 """Подключение к базе данных SQLite (sync + async)."""
 
 import hashlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -317,6 +318,66 @@ def ensure_schema(db_engine) -> None:
                 )
             )
             logger.info("Added channel column to messages")
+
+        # ----- Locations table (Локации 2.0) -----
+        # Источник истины для CRUD и описаний локаций; `chats.locations`
+        # остаётся кэшем названий для движка.
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_location_chat_name UNIQUE (chat_id, name)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_locations_chat_id "
+                "ON locations (chat_id)"
+            )
+        )
+
+        # Backfill: из существующих chats.locations (JSON-массив названий)
+        # создаём строки locations (description = ""). Идемпотентно —
+        # дубликаты игнорируются уникальным ограничением (chat_id, name).
+        chat_rows = conn.execute(
+            text("SELECT id, locations FROM chats")
+        ).fetchall()
+        backfilled_locations = 0
+        for chat_id, locations_json in chat_rows:
+            try:
+                loc_list = (
+                    json.loads(locations_json)
+                    if locations_json and locations_json != "[]"
+                    else []
+                )
+            except (json.JSONDecodeError, TypeError):
+                loc_list = []
+            if not isinstance(loc_list, list):
+                continue
+            for loc_name in loc_list:
+                if not isinstance(loc_name, str) or not loc_name.strip():
+                    continue
+                conn.execute(
+                    text(
+                        "INSERT OR IGNORE INTO locations "
+                        "(chat_id, name, description, created_at, updated_at) "
+                        "VALUES (:cid, :name, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                    ),
+                    {"cid": chat_id, "name": loc_name.strip()},
+                )
+                backfilled_locations += 1
+        if backfilled_locations:
+            logger.info(
+                "Backfilled %d locations from chats.locations", backfilled_locations
+            )
 
         # ----- Relationship tables -----
         conn.execute(

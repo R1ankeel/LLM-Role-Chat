@@ -1,11 +1,13 @@
 """CRUD-функции для работы с базой данных (Async)."""
 
+import json
 import logging
 import random
 from datetime import datetime
 from typing import Literal, Optional, Tuple
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1040,6 +1042,195 @@ async def update_character_locations_batch(
                 changed = True
     if changed:
         await db.commit()
+
+
+# ----------------------------- Location -----------------------------
+async def get_chat_locations(
+    db: AsyncSession, chat_id: int
+) -> list[models.Location]:
+    """Get all locations for a chat (source of truth for CRUD/descriptions)."""
+    stmt = (
+        select(models.Location)
+        .where(models.Location.chat_id == chat_id)
+        .order_by(models.Location.name, models.Location.id)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_location(db: AsyncSession, location_id: int) -> models.Location | None:
+    return await db.get(models.Location, location_id)
+
+
+async def _sync_chat_locations_cache(db: AsyncSession, chat_id: int) -> None:
+    """Keep `chats.locations` (JSON array of names) in sync with the locations table.
+
+    Таблица `locations` — источник истины; `chats.locations` остаётся кэшем
+    названий для движка (§14).
+    """
+    chat = await get_chat(db, chat_id)
+    if chat is None:
+        return
+    locs = await get_chat_locations(db, chat_id)
+    chat.locations = json.dumps([l.name for l in locs], ensure_ascii=False)
+    await db.commit()
+
+
+def _location_name_conflict(
+    existing: list[models.Location], new_name: str, exclude_id: int | None = None
+) -> models.Location | None:
+    """Case-insensitive duplicate check (совпадает с locations_match/normalize)."""
+    for loc in existing:
+        if exclude_id is not None and loc.id == exclude_id:
+            continue
+        if perception.locations_match(loc.name, new_name):
+            return loc
+    return None
+
+
+async def create_location(
+    db: AsyncSession, chat_id: int, location: schemas.LocationCreate
+) -> models.Location:
+    """Create a location; raises ValueError on duplicate name (→ 409)."""
+    if await get_chat(db, chat_id) is None:
+        raise ValueError("Чат не найден")
+    name = (location.name or "").strip()
+    if not name:
+        raise ValueError("Название локации не может быть пустым")
+    existing = await get_chat_locations(db, chat_id)
+    conflict = _location_name_conflict(existing, name)
+    if conflict is not None:
+        raise ValueError(f"Локация «{conflict.name}» уже существует")
+    db_location = models.Location(
+        chat_id=chat_id,
+        name=name,
+        description=(location.description or ""),
+    )
+    db.add(db_location)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ValueError(f"Локация «{name}» уже существует") from exc
+    await db.refresh(db_location)
+    await _sync_chat_locations_cache(db, chat_id)
+    return db_location
+
+
+async def update_location(
+    db: AsyncSession, location_id: int, location_update: schemas.LocationUpdate
+) -> models.Location | None:
+    """Update a location; on rename syncs string references. ValueError → 409."""
+    db_location = await get_location(db, location_id)
+    if db_location is None:
+        return None
+    update_data = location_update.model_dump(exclude_unset=True)
+    old_name = db_location.name
+    new_name: str | None = None
+    if update_data.get("name") is not None:
+        new_name = (update_data["name"] or "").strip()
+        if not new_name:
+            raise ValueError("Название локации не может быть пустым")
+        update_data["name"] = new_name
+        if not perception.locations_match(old_name, new_name):
+            existing = await get_chat_locations(db, db_location.chat_id)
+            conflict = _location_name_conflict(existing, new_name, exclude_id=db_location.id)
+            if conflict is not None:
+                raise ValueError(f"Локация «{conflict.name}» уже существует")
+    for field, value in update_data.items():
+        setattr(db_location, field, value)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ValueError(f"Локация «{new_name}» уже существует") from exc
+    await db.refresh(db_location)
+
+    if new_name is not None and not perception.locations_match(old_name, new_name):
+        await _rename_location_references(db, db_location.chat_id, old_name, new_name)
+    await _sync_chat_locations_cache(db, db_location.chat_id)
+    return db_location
+
+
+async def _rename_location_references(
+    db: AsyncSession, chat_id: int, old_name: str, new_name: str
+) -> None:
+    """Синхронно обновить строковые ссылки при переименовании (§14)."""
+    changed = False
+
+    # characters.location (включая игрока)
+    char_rows = await db.execute(
+        select(models.Character.id, models.Character.location).where(
+            models.Character.chat_id == chat_id
+        )
+    )
+    char_updates: list[int] = []
+    for char_id, loc in char_rows.all():
+        if perception.locations_match(loc or "", old_name):
+            char_updates.append(char_id)
+    if char_updates:
+        await db.execute(
+            update(models.Character)
+            .where(models.Character.id.in_(char_updates))
+            .values(location=new_name)
+        )
+        changed = True
+
+    # messages.location
+    msg_rows = await db.execute(
+        select(models.Message.id, models.Message.location).where(
+            models.Message.chat_id == chat_id
+        )
+    )
+    msg_updates: list[int] = []
+    for msg_id, loc in msg_rows.all():
+        if perception.locations_match(loc or "", old_name):
+            msg_updates.append(msg_id)
+    if msg_updates:
+        await db.execute(
+            update(models.Message)
+            .where(models.Message.id.in_(msg_updates))
+            .values(location=new_name)
+        )
+        changed = True
+
+    # scene_states.character_locations (JSON dict: {id|name: location}) — только значения
+    scene = await get_scene_state(db, chat_id)
+    if scene is not None and scene.character_locations:
+        raw = json.loads(scene.character_locations) if scene.character_locations else {}
+        updated = {
+            k: (new_name if perception.locations_match(str(v), old_name) else v)
+            for k, v in raw.items()
+        }
+        if updated != raw:
+            scene.character_locations = json.dumps(updated, ensure_ascii=False)
+            changed = True
+
+    if changed:
+        await db.commit()
+
+
+async def get_characters_referencing_location(
+    db: AsyncSession, location: models.Location
+) -> list[models.Character]:
+    """Characters whose location matches this location (case-insensitive)."""
+    characters = await get_characters_by_chat(db, location.chat_id, include_player=True)
+    return [
+        c for c in characters
+        if c.location and perception.locations_match(c.location, location.name)
+    ]
+
+
+async def delete_location(db: AsyncSession, location_id: int) -> models.Location | None:
+    """Delete a location and sync the `chats.locations` cache."""
+    db_location = await get_location(db, location_id)
+    if db_location is None:
+        return None
+    chat_id = db_location.chat_id
+    await db.delete(db_location)
+    await db.commit()
+    await _sync_chat_locations_cache(db, chat_id)
+    return db_location
 
 
 # ----------------------------- Scene State -----------------------------
