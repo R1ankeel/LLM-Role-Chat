@@ -354,7 +354,7 @@ class RelationshipEvent(Base):
     )
     kind: Mapped[str] = mapped_column(
         String(20), default="llm", nullable=False
-    )  # "llm" | "decay" | "manual"
+    )  # "llm" | "decay" | "manual" | "archive"
     description: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     delta_affection: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

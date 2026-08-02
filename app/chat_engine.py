@@ -9,6 +9,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import httpx
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
@@ -895,8 +896,8 @@ async def _analyze_and_update_relationships(
     round_snapshots: list[dict],
     character_snapshots: list[dict],
     round_id: str | None = None,
-) -> None:
-    """Background task: analyze relationships for all character pairs and apply deltas.
+) -> dict:
+    """Analyze relationships for all character pairs and apply deltas (Sprint 4).
 
     Only NPCs are analyzed as relationship *sources*. The player is a valid
     *target* (bots -> player) but never a source (player -> bots is not tracked).
@@ -912,7 +913,27 @@ async def _analyze_and_update_relationships(
 
     Opens its own DB session instead of borrowing the caller's, so the
     connection is always returned to the pool when the task finishes.
+
+    Single-transaction contract: all deltas/issues/decay/pruning are staged in
+    the session and committed with ONE ``flush()`` + ``commit()`` at the end.
+    Returns an observability summary dict (counts per action); background
+    callers ignore it, the on-demand API endpoint returns it.
     """
+    # Stable round anchor (docs/relations.md §6). Kept for direct calls.
+    if round_id is None:
+        round_id = f"round_{chat_id}_{datetime.utcnow().isoformat()}"
+
+    summary: dict = {
+        "round_id": round_id,
+        "analyzed_pairs": 0,
+        "applied_deltas": 0,
+        "created_issues": 0,
+        "resolved_issues": 0,
+        "created_events": 0,
+        "decay_events": 0,
+        "pruned_events": 0,
+    }
+    affected_relationship_ids: set[int] = set()
     try:
         async with AsyncSessionLocal() as db:
             player = await crud.get_player_character(db, chat_id)
@@ -938,10 +959,6 @@ async def _analyze_and_update_relationships(
 
             # Only NPCs are sources; targets include the player
             sources = [c for c in all_chars if not getattr(c, "is_player", False)]
-
-            # Stable round anchor (docs/relations.md §6). Kept for direct calls.
-            if round_id is None:
-                round_id = f"round_{chat_id}_{datetime.utcnow().isoformat()}"
 
             # Issues mentioned this round: those passed to the analyzer for an
             # analyzed pair, plus those selected into each source's
@@ -1154,16 +1171,20 @@ async def _analyze_and_update_relationships(
                     )
                     deltas = None
 
+                summary["analyzed_pairs"] = len(pairs)
+
                 if deltas is None:
                     if settings.relationship_batch_fallback:
                         logger.info(
                             "[chat_id=%d] Falling back to per-pair analysis",
                             chat_id,
                         )
-                        await _run_per_pair_analysis(
+                        applied, affected = await _run_per_pair_analysis(
                             db, chat_id, client, model_name, pairs,
                             round_id=round_id,
                         )
+                        summary["applied_deltas"] = applied
+                        affected_relationship_ids.update(affected)
                     else:
                         logger.warning(
                             "[chat_id=%d] Batch failed and fallback disabled; "
@@ -1178,9 +1199,15 @@ async def _analyze_and_update_relationships(
                         )
                         if p is None:
                             continue
-                        await relationship_service.apply_issue_deltas(
+                        affected_relationship_ids.add(p["rel"].id)
+                        applied_issues = await relationship_service.apply_issue_deltas(
                             db, [issue], rel=p["rel"], round_id=round_id,
                         )
+                        for applied_issue in applied_issues:
+                            if applied_issue.state == "open":
+                                summary["created_issues"] += 1
+                            elif applied_issue.state == "resolved":
+                                summary["resolved_issues"] += 1
                     # Evidence-gated metric deltas (§8.3).
                     for delta in deltas:
                         p = pair_by_key.get(
@@ -1191,14 +1218,18 @@ async def _analyze_and_update_relationships(
                         gated = _constrain_pair_delta(delta, p["rel"], p["pair_ctx"])
                         if gated is None:
                             continue
+                        affected_relationship_ids.add(p["rel"].id)
                         await relationship_service.apply_delta(
                             db, gated, chat_id, round_id=round_id,
                         )
+                        summary["applied_deltas"] += 1
             else:
-                await _run_per_pair_analysis(
+                applied, affected = await _run_per_pair_analysis(
                     db, chat_id, client, model_name, pairs,
                     round_id=round_id,
                 )
+                summary["applied_deltas"] = applied
+                affected_relationship_ids.update(affected)
 
             # Deterministic salience tick: advance counters for unmentioned
             # open issues, reset mentioned ones (§7.4, Sprint 1 п.7).
@@ -1217,6 +1248,7 @@ async def _analyze_and_update_relationships(
                 decay_events = await relationship_service.apply_decay(
                     db, chat_id, round_id=round_id,
                 )
+                summary["decay_events"] = len(decay_events)
                 if decay_events:
                     logger.debug(
                         "[chat_id=%d] Created %d decay events",
@@ -1227,11 +1259,51 @@ async def _analyze_and_update_relationships(
                     "[chat_id=%d] Decay application failed: %s", chat_id, exc
                 )
 
-            # Persist orphan-issue flushes that have no metric delta to commit.
+            # Event pruning (Sprint 4 item 3): fold old events of every pair
+            # that changed this round into a single archive entry.
+            for rel_id in affected_relationship_ids:
+                try:
+                    archive = await relationship_service.prune_relationship_events(
+                        db, rel_id,
+                    )
+                    if archive is not None:
+                        summary["pruned_events"] += 1
+                except Exception as exc:
+                    logger.warning(
+                        "[chat_id=%d] Pruning failed for rel %d: %s",
+                        chat_id, rel_id, exc,
+                    )
+
+            # Count LLM events created this round (visible only after flush).
+            try:
+                await db.flush()
+                count_stmt = (
+                    select(func.count())
+                    .select_from(models.RelationshipEvent)
+                    .where(
+                        models.RelationshipEvent.round_id == round_id,
+                        models.RelationshipEvent.kind == "llm",
+                    )
+                )
+                summary["created_events"] = (
+                    (await db.execute(count_stmt)).scalar() or 0
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[chat_id=%d] Failed to flush/count events: %s", chat_id, exc
+                )
+
+            # Single flush + commit for the whole round (Sprint 4 item 2).
             await db.commit()
-            logger.info("[chat_id=%d] Relationship analysis complete", chat_id)
+            logger.info(
+                "relationship_analysis_complete",
+                extra={"chat_id": chat_id, **summary},
+            )
+            return summary
     except Exception:
         logger.exception("[chat_id=%d] Relationship analysis failed", chat_id)
+        summary["error"] = "relationship analysis failed"
+        return summary
 
 
 async def _run_per_pair_analysis(
@@ -1242,12 +1314,15 @@ async def _run_per_pair_analysis(
     pairs: list[dict],
     *,
     round_id: str,
-) -> None:
+) -> tuple[int, set[int]]:
     """Per-pair relationship analysis (docs/relations.md §8.4 fallback path).
 
     Applies the same deterministic evidence gating (§8.3) as the batch path —
-    the fallback never disables gating.
+    the fallback never disables gating. Returns ``(applied_delta_count,
+    affected_relationship_ids)`` for the caller's observability summary.
     """
+    applied = 0
+    affected: set[int] = set()
     for p in pairs:
         deltas = await relationship_analyzer.analyze_relationships(
             client=client,
@@ -1276,9 +1351,12 @@ async def _run_per_pair_analysis(
             gated = _constrain_pair_delta(delta, p["rel"], p["pair_ctx"])
             if gated is None:
                 continue
+            affected.add(p["rel"].id)
             await relationship_service.apply_delta(
                 db, gated, chat_id, round_id=round_id,
             )
+            applied += 1
+    return applied, affected
 
 
 def _text_mentions_name(content: str, name: str) -> bool:

@@ -1139,3 +1139,82 @@ async def get_scene_state_with_presence(
         present_character_ids=present_ids,
         player_location=player_location,
     )
+
+
+# ------------------------ Relationship round lookup (Sprint 4) ------------------------
+def parse_round_id(round_id: str) -> Optional[Tuple[int, int]]:
+    """Parse ``r{chat_id}-m{user_message_id}`` → ``(chat_id, user_message_id)``.
+
+    Returns ``None`` for any malformed round id.
+    """
+    if not round_id or not round_id.startswith("r") or "-m" not in round_id:
+        return None
+    parts = round_id.split("-m")
+    if len(parts) != 2:
+        return None
+    try:
+        chat_id = int(parts[0][1:])
+        user_message_id = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    return chat_id, user_message_id
+
+
+async def get_latest_round_id(
+    db: AsyncSession, chat_id: int
+) -> Optional[str]:
+    """Most recent non-null ``round_id`` seen for any relationship in the chat.
+
+    Used by the on-demand analyze endpoint when no explicit round is given.
+    """
+    stmt = (
+        select(models.RelationshipEvent.round_id)
+        .join(
+            models.CharacterRelationship,
+            models.CharacterRelationship.id == models.RelationshipEvent.relationship_id,
+        )
+        .where(
+            models.CharacterRelationship.chat_id == chat_id,
+            models.RelationshipEvent.round_id.isnot(None),
+        )
+        .order_by(models.RelationshipEvent.id.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_round_messages_by_round_id(
+    db: AsyncSession, round_id: str
+) -> list[models.Message]:
+    """Resolve ``r{chat_id}-m{user_msg_id}`` to the messages of that round.
+
+    Returns the user message that started the round followed by every later
+    message up to (but not including) the next ``role="user"`` message.
+    Returns ``[]`` for a malformed or unknown round id.
+    """
+    parsed = parse_round_id(round_id)
+    if parsed is None:
+        return []
+    chat_id, user_message_id = parsed
+
+    user_msg = await db.get(models.Message, user_message_id)
+    if user_msg is None or user_msg.chat_id != chat_id or user_msg.role != "user":
+        return []
+
+    stmt = (
+        select(models.Message)
+        .where(
+            models.Message.chat_id == chat_id,
+            models.Message.id >= user_message_id,
+        )
+        .options(selectinload(models.Message.character))
+        .order_by(models.Message.timestamp, models.Message.id)
+    )
+    result = await db.execute(stmt)
+    round_messages: list[models.Message] = []
+    for message in result.scalars().all():
+        if message.role == "user" and message.id != user_message_id:
+            break
+        round_messages.append(message)
+    return round_messages

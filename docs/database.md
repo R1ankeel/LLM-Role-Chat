@@ -157,9 +157,13 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 |---|---|---|
 | `id` | INTEGER PK | |
 | `relationship_id` | FK ON DELETE CASCADE | |
+| `kind` | TEXT(20) | `llm` \| `decay` \| `manual` \| `archive` (Sprint 4: свёрнутые старые события) |
 | `description`, `reason` | TEXT | |
 | `delta_affection`, `delta_trust`, `delta_attraction`, `delta_resentment`, `delta_jealousy` | INTEGER | |
-| `importance` | INTEGER | |
+| `affection_after` … `jealousy_after` | INTEGER | снапшот состояния после события |
+| `importance` | INTEGER | `0` для архивных строк |
+| `source_message_ids` | TEXT JSON | привязка к сообщениям |
+| `round_id` | TEXT(64) | привязка к раунду |
 | `source_round_id` | TEXT(64) | привязка к раунду |
 | `timestamp` | DATETIME | |
 

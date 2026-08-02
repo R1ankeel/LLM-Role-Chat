@@ -201,6 +201,7 @@
 | `RELATIONSHIP_REFLECTION_DELTA_CAP` | `5` | потолок дельты рефлексии |
 | `RELATIONSHIP_TYPE_CHANGE_REQUIRES_INTERACTION` | `true` | смена типа только при взаимодействии |
 | `RELATIONSHIP_MAX_PAIR_CONTEXT_LINES` | `20` | строк контекста пары |
+| `RELATIONSHIP_EVENTS_MAX_PER_PAIR` | `100` | макс. сырых событий пары; старые сворачиваются в `kind="archive"` (Sprint 4 п.21) |
 
 Валидные типы отношений (фиксированный список) и разрешённые переходы (`relationship_transition_rules`) — см. `config.py:165-194`.
 

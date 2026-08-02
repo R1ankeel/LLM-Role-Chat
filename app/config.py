@@ -270,6 +270,11 @@ class Settings(BaseSettings):
     relationship_memory_enabled: bool = Field(
         default=True, alias="RELATIONSHIP_MEMORY_ENABLED"
     )
+    # Event pruning (Sprint 4 item 3, docs/relations.md §20): oldest events of a
+    # pair above this count are folded into a single "archive" event.
+    relationship_events_max_per_pair: int = Field(
+        default=100, alias="RELATIONSHIP_EVENTS_MAX_PER_PAIR"
+    )
     relationship_memory_delta_threshold: int = Field(
         default=10, alias="RELATIONSHIP_MEMORY_DELTA_THRESHOLD"
     )

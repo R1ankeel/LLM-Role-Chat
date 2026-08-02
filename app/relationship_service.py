@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -56,6 +56,39 @@ _ISSUE_INSTRUCTION_MARKERS = (
     "забудь предыдущие",
 )
 _CTRL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _log_relationship_event(event: RelationshipEvent) -> None:
+    """Emit one structured JSON log line per created event (Stage 4, Sprint 4).
+
+    The ``extra`` payload is rendered top-level by the root ``JSONFormatter``
+    configured in ``main.py`` — usable for analytics/debugging without parsing
+    free-text messages.
+    """
+    try:
+        source_ids = json.loads(event.source_message_ids or "[]")
+    except (json.JSONDecodeError, TypeError):
+        source_ids = []
+    logger.info(
+        "relationship_event",
+        extra={
+            "relationship_id": event.relationship_id,
+            "event_kind": event.kind,
+            "delta_affection": event.delta_affection,
+            "delta_trust": event.delta_trust,
+            "delta_attraction": event.delta_attraction,
+            "delta_resentment": event.delta_resentment,
+            "delta_jealousy": event.delta_jealousy,
+            "affection_after": event.affection_after,
+            "trust_after": event.trust_after,
+            "attraction_after": event.attraction_after,
+            "resentment_after": event.resentment_after,
+            "jealousy_after": event.jealousy_after,
+            "importance": event.importance,
+            "round_id": event.round_id,
+            "source_message_ids": source_ids,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +225,7 @@ async def update_relationship_fields(
         source_round_id=None,
     )
     db.add(event)
-
-    await db.commit()
+    await db.flush()
     await db.refresh(rel)
     return rel
 
@@ -209,6 +241,31 @@ def validate_transition(
         return True
     allowed = TRANSITIONS.get(current_type, set())
     return new_type in allowed
+
+
+def validate_relationship_type_update(
+    current_type: str,
+    new_type: str,
+) -> tuple[bool, str]:
+    """Validate a relationship type update.
+    
+    Returns (is_valid, error_message). If valid, error_message is empty.
+    Checks:
+    1. new_type is in valid types whitelist
+    2. transition from current_type to new_type is allowed
+    """
+    if new_type not in VALID_TYPES:
+        return False, (
+            f"Invalid relationship_type: '{new_type}'. "
+            f"Must be one of: {', '.join(sorted(VALID_TYPES))}"
+        )
+    if not validate_transition(current_type, new_type):
+        allowed = TRANSITIONS.get(current_type, set())
+        return False, (
+            f"Invalid transition from '{current_type}' to '{new_type}'. "
+            f"Allowed transitions: {', '.join(sorted(allowed)) if allowed else 'none'}"
+        )
+    return True, ""
 
 
 def clamp_metric(value: int) -> int:
@@ -247,8 +304,7 @@ async def apply_delta(
             delta.source_character_id, delta.target_character_id,
             delta.importance, settings.relationship_min_importance,
         )
-        if issue_results:
-            await db.commit()
+        # No commit here: the batch caller owns the single flush+commit.
         return rel
 
     old_type = rel.relationship_type
@@ -290,14 +346,15 @@ async def apply_delta(
         )
         # Values are identical to what is already persisted, so there is
         # nothing to write. Do not rollback (it would expire the ORM object).
-        if issue_results:
-            await db.commit()
+        # No commit here: the batch caller owns the single flush+commit.
         return rel
 
     rel.updated_at = datetime.utcnow()
-    await db.flush()
 
-    # Create event log with kind + snapshot after (docs/relations.md §11, §17)
+    # Create event log with kind + snapshot after (docs/relations.md §11, §17).
+    # No flush/refresh: the batch caller applies one flush+commit per round and
+    # ``rel`` already holds the new values in-memory. ``event`` gets its DB id
+    # at that final flush.
     event = RelationshipEvent(
         relationship_id=rel.id,
         kind="llm",
@@ -319,8 +376,7 @@ async def apply_delta(
         source_round_id=round_id,
     )
     db.add(event)
-    await db.commit()
-    await db.refresh(rel)
+    _log_relationship_event(event)
 
     # Create memory for significant relationship events (Sprint 3 item 19)
     try:
@@ -978,7 +1034,6 @@ async def tick_open_issues(
             issue.rounds_since_last_mention = (
                 int(issue.rounds_since_last_mention or 0) + 1
             )
-            await db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -1029,7 +1084,6 @@ async def apply_decay(
         rel.jealousy = new_jealousy
         rel.resentment = new_resentment
         rel.updated_at = datetime.utcnow()
-        await db.flush()
 
         # Create decay event with snapshot
         event = RelationshipEvent(
@@ -1055,10 +1109,94 @@ async def apply_decay(
         db.add(event)
         created_events.append(event)
 
-    if created_events:
-        await db.commit()
-
     return created_events
+
+
+# ---------------------------------------------------------------------------
+# Event pruning / archiving (Sprint 4 item 3, docs/relations.md §20)
+# ---------------------------------------------------------------------------
+async def prune_relationship_events(
+    db: AsyncSession,
+    relationship_id: int,
+    max_events: int | None = None,
+) -> Optional[RelationshipEvent]:
+    """Fold old events of one relationship into a single archive entry.
+
+    Keeps the newest ``max_events`` (``RELATIONSHIP_EVENTS_MAX_PER_PAIR``,
+    default 100) raw events and replaces every older event with ONE aggregate
+    ``kind="archive"`` row. The archive row:
+
+    - carries ``delta_* = 0`` so it never changes the live relationship state;
+    - snapshots the *current* ``*_after`` values of the edge;
+    - aggregates counts per original kind (llm / decay / manual);
+    - stores the folded period (``from_ts``–``to_ts``) in the description;
+    - ``importance = 0`` so it never shows in trajectory/prompt blocks.
+
+    Called from the batch commit in ``chat_engine`` and after manual field
+    updates in the API — always inside the caller's transaction.
+    """
+    if max_events is None:
+        max_events = settings.relationship_events_max_per_pair
+    max_events = max(1, int(max_events))
+
+    stmt = (
+        select(RelationshipEvent)
+        .where(RelationshipEvent.relationship_id == relationship_id)
+        .order_by(RelationshipEvent.timestamp, RelationshipEvent.id)
+    )
+    result = await db.execute(stmt)
+    events = list(result.scalars().all())
+
+    if len(events) <= max_events:
+        return None
+
+    archive_prefix = events[: len(events) - max_events]
+    archive_ids = [e.id for e in archive_prefix]
+
+    llm_count = sum(1 for e in archive_prefix if e.kind == "llm")
+    decay_count = sum(1 for e in archive_prefix if e.kind == "decay")
+    manual_count = sum(1 for e in archive_prefix if e.kind == "manual")
+
+    from_ts = archive_prefix[0].timestamp
+    to_ts = archive_prefix[-1].timestamp
+
+    rel = await db.get(CharacterRelationship, relationship_id)
+    if rel is None:
+        return None
+
+    description = (
+        f"Архив {len(archive_prefix)} событий "
+        f"({from_ts:%Y-%m-%d %H:%M}–{to_ts:%Y-%m-%d %H:%M}): "
+        f"llm={llm_count}, decay={decay_count}, manual={manual_count}"
+    )
+
+    if archive_ids:
+        await db.execute(
+            delete(RelationshipEvent).where(RelationshipEvent.id.in_(archive_ids))
+        )
+
+    archive_event = RelationshipEvent(
+        relationship_id=relationship_id,
+        kind="archive",
+        description=description,
+        reason="",
+        delta_affection=0,
+        delta_trust=0,
+        delta_attraction=0,
+        delta_resentment=0,
+        delta_jealousy=0,
+        affection_after=rel.affection,
+        trust_after=rel.trust,
+        attraction_after=rel.attraction,
+        resentment_after=rel.resentment,
+        jealousy_after=rel.jealousy,
+        importance=0,
+        source_message_ids="[]",
+        round_id=archive_prefix[-1].round_id,
+        source_round_id=archive_prefix[-1].round_id,
+    )
+    db.add(archive_event)
+    return archive_event
 
 
 # ---------------------------------------------------------------------------

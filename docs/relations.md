@@ -408,7 +408,7 @@ Pipeline: `LLM → proposed deltas/issues → deterministic validation → relat
 `RelationshipEvent` расширен новыми колонками (`models.py:335`):
 
 ```python
-kind                   # "llm" | "decay" | "manual"  (default "llm")
+kind                   # "llm" | "decay" | "manual" | "archive"  (default "llm")
 affection_after        # + trust_after, attraction_after, resentment_after, jealousy_after
 source_message_ids     # Text JSON (как у Memory)
 round_id               # из §6 (заменяет/дополняет source_round_id)
@@ -417,6 +417,7 @@ round_id               # из §6 (заменяет/дополняет source_ro
 - `apply_delta` (llm) пишет `kind="llm"` + snapshot after, `source_message_ids` из дельты, `round_id`.
 - `update_relationship_fields` (manual, `relationship_service.py:143`) пишет `kind="manual"` + snapshot.
 - Decay (будущее) будет писать `kind="decay"` + snapshot (при пересечении порога).
+- `prune_relationship_events` (Sprint 4 п.21) сворачивает старые события в одну строку `kind="archive"`.
 - Trajectory строится по фактическим состояниям после LLM-событий:
   `SELECT * FROM relationship_events WHERE relationship_id=? AND kind='llm'
    ORDER BY id DESC LIMIT RELATIONSHIP_TRAJECTORY_WINDOW` → развернуть серии `*_after`.
@@ -530,7 +531,7 @@ if valence(teller → target) == hostile: effective_cap *= 0.7   # «сплет�
 `RelationshipEvent` расширяется:
 
 ```python
-kind                # "llm" | "decay" | "manual"  (default "llm")
+kind                # "llm" | "decay" | "manual" | "archive"  (default "llm")
 affection_after     # + trust_after, attraction_after, resentment_after, jealousy_after
 source_message_ids  # Text JSON (как у Memory)
 round_id            # из §6 (заменяет/дополняет source_round_id)
@@ -539,6 +540,7 @@ round_id            # из §6 (заменяет/дополняет source_round
 - `apply_delta` (llm) пишет kind=llm + snapshot.
 - `update_relationship_fields` (manual, `relationship_service.py:106`) пишет kind=manual + snapshot.
 - decay пишет kind=decay + snapshot (только при пересечении порога).
+- `prune_relationship_events` (Sprint 4 п.21) пишет kind=archive — свёрнутые старые события, `delta_*=0`, `importance=0` (не участвует в trajectory/prompt).
 - Открытый issue хранит `created_round_id` (+ через round → message) — source attribution
   для issues. Drill-down «почему trust стал 42»:
 
@@ -632,10 +634,10 @@ LLM CHARACTER GENERATION
 19. Memory integration.
 
 ### Sprint 4 — инфраструктура
-20. Validation/hygiene.
-21. Event pruning/архивирование.
-22. Commit batching.
-23. Debugging/observability.
+20. Validation/hygiene. ✅ `relationship_service.validate_relationship_type_update(current, new)` — whitelist по `relationship_valid_types` + граф переходов; вызывается в PUT-эндпоинте до применения (400 при невалидном переходе). PUT больше не коммитит промежуточно: `update_relationship_fields` → prune → один commit.
+21. Event pruning/архивирование. ✅ `relationship_service.prune_relationship_events(db, rel_id, max_events=None)` — при превышении `RELATIONSHIP_EVENTS_MAX_PER_PAIR` (по умолчанию 100) старые события сворачиваются в ОДНУ строку `kind="archive"`: `delta_*=0` (не меняет live-состояние), `*_after` = снапшот текущих значений ребра, `description` с агрегацией `llm=/decay=/manual=` и периодом, `importance=0` (не попадает в trajectory/prompt). Вызывается из batch-коммита для затронутых рёбер и после ручного PUT. Миграция не требуется: `kind` — обычный TEXT без CHECK.
+22. Commit batching. ✅ `_analyze_and_update_relationships` — один `flush()` + `commit()` на раунд; `apply_delta` больше не делает `flush/refresh/commit` (только `db.add(event)`); `_run_per_pair_analysis` возвращает `(applied_count, affected_ids)`; функция возвращает summary-словарь для наблюдаемости.
+23. Debugging/observability. ✅ JSON-логирование через `main.JSONFormatter` (все root-хендлеры); `_log_relationship_event` со структурированным `extra`; `crud.parse_round_id` / `get_latest_round_id` / `get_round_messages_by_round_id`; on-demand `POST /chats/{chat_id}/relationships/analyze` (повторный анализ раунда, `?round_id=` или последний раунд с событиями); таймлайн `GET /chats/{chat_id}/relationships/{source_id}/{target_id}/timeline` (пагинация limit∈[1,500]/offset≥0, events+issues+присоединённые source-сообщения). Тесты: `test_validation.py`, `test_batch_commit.py`, `test_pruning.py`, `test_round_lookup.py`, `test_timeline_pagination.py`.
 
 ### Sprint 5 — UI
 24. Relationship graph.

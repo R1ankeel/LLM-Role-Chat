@@ -1,6 +1,7 @@
 """Точка входа FastAPI-приложения «AI Roleplay Chat»."""
 
 import asyncio
+import json
 import logging
 import structlog
 from contextlib import asynccontextmanager
@@ -19,6 +20,47 @@ from .config import settings
 from .database import async_engine, Base, ensure_schema, init_db
 from .routers import characters, chat_engine, chats, jobs, relationships
 
+
+class JSONFormatter(logging.Formatter):
+    """Render standard-library log records as single-line JSON (Sprint 4 item 4).
+
+    Regular ``logger.info("msg")`` calls become
+    ``{"timestamp", "level", "logger", "message", ...extra}``. Records produced
+    by structlog's ``JSONRenderer`` (message already a JSON string) are merged,
+    so structlog fields appear top-level instead of being double-wrapped.
+    """
+
+    _STANDARD_ATTRS = frozenset({
+        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+        "created", "msecs", "relativeCreated", "thread", "threadName",
+        "processName", "process", "taskName", "message", "asctime",
+    })
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for key, value in record.__dict__.items():
+            if key not in self._STANDARD_ATTRS:
+                payload[key] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        message = payload.get("message")
+        if isinstance(message, str):
+            try:
+                parsed = json.loads(message)
+                if isinstance(parsed, dict):
+                    payload.update(parsed)
+                    payload.pop("message", None)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+
 # Configure structured logging
 structlog.configure(
     processors=[
@@ -32,6 +74,10 @@ structlog.configure(
 )
 
 logging.basicConfig(level=logging.INFO)
+# Route ALL loggers (including stdlib modules like relationship_service) through
+# the JSON formatter; structlog's own output is merged, not double-wrapped.
+for _handler in logging.getLogger().handlers:
+    _handler.setFormatter(JSONFormatter())
 logger = structlog.get_logger(__name__)
 
 

@@ -526,6 +526,19 @@ class CharacterRelationshipUpdate(BaseModel):
     jealousy: Optional[int] = None
     description: Optional[str] = None
 
+    @field_validator("relationship_type", mode="before")
+    @classmethod
+    def _validate_relationship_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        from .config import settings
+        if value not in settings.relationship_valid_types:
+            raise ValueError(
+                f"Invalid relationship_type: '{value}'. "
+                f"Must be one of: {', '.join(settings.relationship_valid_types)}"
+            )
+        return value
+
 
 class RelationshipEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)

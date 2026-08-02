@@ -184,6 +184,44 @@ Query-параметр `days` (1–365, default 30). Удаляет заверш
 
 Ручное обновление: `CharacterRelationshipUpdate` — `relationship_type`, `affection`, `trust`, `attraction`, `resentment`, `jealousy`, `description`. Создаёт отношение, если его нет. Метрики клампаются в 0–100.
 
+Валидация: `relationship_type` проверяется по whitelist `relationship_valid_types` и графу переходов — 400 при недопустимом значении или недопустимом переходе (Sprint 4 п.20). После применения старые события сворачиваются в архив (`kind="archive"`, Sprint 4 п.21).
+
+### POST `/api/chats/{chat_id}/relationships/analyze`
+
+On-demand повторный анализ отношений за один раунд (Sprint 4 п.23). Query-параметр `round_id` — опционально; по умолчанию берётся последний раунд, для которого уже создавались события отношений. 404 — раунд/чат не найден, 400 — нет существующих раундов. Ответ — summary батча:
+
+```json
+{
+  "round_id": "r1-m7",
+  "analyzed_pairs": 6,
+  "applied_deltas": 3,
+  "created_issues": 1,
+  "resolved_issues": 0,
+  "created_events": 3,
+  "decay_events": 0,
+  "pruned_events": 0
+}
+```
+
+### GET `/api/chats/{chat_id}/relationships/{source_id}/{target_id}/timeline`
+
+Пагинированная лента отношения (Sprint 4 п.23): события + issues + присоединённые source-сообщения. Query-параметры: `limit` (1–500, default 100), `offset` (>= 0). Ответ:
+
+```json
+{
+  "events": [{"id": 1, "kind": "llm", "description": "...", "reason": "",
+              "delta_affection": 5, "delta_trust": 0, "delta_attraction": 0,
+              "delta_resentment": 0, "delta_jealousy": 0,
+              "affection_after": 55, "trust_after": 50, "attraction_after": 0,
+              "resentment_after": 0, "jealousy_after": 0,
+              "importance": 6, "round_id": "r1-m7", "timestamp": "...",
+              "source_messages": [{"id": 7, "role": "user", "content": "...", "timestamp": "..."}]}],
+  "issues": ["RelationshipIssueRead"],
+  "messages": ["MessageRead"],
+  "pagination": {"limit": 100, "offset": 0, "total_events": 15, "total_issues": 2, "total": 17}
+}
+```
+
 ### GET `/api/relationships/{relationship_id}/events`
 
 Последние события отношения (до 20), `RelationshipEventRead`.
