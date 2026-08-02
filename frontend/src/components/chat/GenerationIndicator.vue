@@ -4,12 +4,24 @@ import type { GenerationStatus } from '@/stores/messages'
 defineProps<{
   status: GenerationStatus
   name: string | null
+  restoring?: boolean
 }>()
 </script>
 
 <template>
-  <div class="generation-indicator" :class="{ 'is-active': status !== 'idle' }">
-    <span v-if="status !== 'idle'" class="generation-indicator__inner">
+  <div
+    class="generation-indicator"
+    :class="{ 'is-active': status !== 'idle' || restoring }"
+  >
+    <span v-if="restoring" class="generation-indicator__inner">
+      <span class="generation-indicator__dots" aria-hidden="true">
+        <i /><i /><i />
+      </span>
+      <span class="generation-indicator__text">
+        Генерация продолжается…
+      </span>
+    </span>
+    <span v-else-if="status !== 'idle'" class="generation-indicator__inner">
       <span class="generation-indicator__dots" aria-hidden="true">
         <i /><i /><i />
       </span>

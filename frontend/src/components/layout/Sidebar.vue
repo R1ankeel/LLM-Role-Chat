@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useChatsStore } from '@/stores/chats'
-import { MOCK_MODELS as mockModels } from '@/mocks/data'
+import { toNumber } from '@/router'
 import Avatar from '@/components/common/Avatar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Modal from '@/components/common/Modal.vue'
@@ -24,14 +24,18 @@ const router = useRouter()
 
 const query = ref('')
 const showNewChat = ref(false)
-const editingId = ref<string | null>(null)
+const editingId = ref<number | null>(null)
 const editName = ref('')
 const creating = ref(false)
 
 const newName = ref('')
 const newPrompt = ref('')
-const newModel = ref(mockModels[0])
+const newModel = ref('')
 const newThinking = ref(true)
+
+onMounted(() => {
+  void chats.loadModels()
+})
 
 const filteredChats = computed(() => {
   const q = query.value.trim().toLowerCase()
@@ -39,14 +43,17 @@ const filteredChats = computed(() => {
   return chats.chats.filter((c) => c.name.toLowerCase().includes(q))
 })
 
-const activeChatId = computed(() =>
-  typeof route.params.chatId === 'string' ? route.params.chatId : null,
-)
+const activeChatId = computed(() => toNumber(route.params.chatId))
 
 const canSubmitNew = computed(() => newName.value.trim().length > 0 && !creating.value)
 
-function openChat(id: string) {
-  if (route.params.chatId === id) return
+const modelOptions = computed(() => {
+  if (chats.models.length) return chats.models
+  return ['—']
+})
+
+function openChat(id: number) {
+  if (toNumber(route.params.chatId) === id) return
   router.push({ name: 'chat', params: { chatId: id } })
   if (ui.viewport === 'mobile') ui.closeSidebarDrawer()
 }
@@ -59,7 +66,7 @@ function goHome() {
 function openNewChat() {
   newName.value = ''
   newPrompt.value = ''
-  newModel.value = mockModels[0]
+  newModel.value = chats.models[0] ?? ''
   newThinking.value = true
   showNewChat.value = true
 }
@@ -82,12 +89,12 @@ async function createChat() {
   }
 }
 
-async function deleteChat(id: string) {
+async function deleteChat(id: number) {
   await chats.deleteChat(id)
   if (activeChatId.value === id) router.replace({ name: 'home' })
 }
 
-function startRename(id: string, name: string) {
+function startRename(id: number, name: string) {
   editingId.value = id
   editName.value = name
 }
@@ -277,8 +284,15 @@ function formatSidebarTime(ts: string | null) {
         <div class="new-chat-form__row">
           <label class="field">
             <span class="field__label">Модель</span>
-            <select v-model="newModel" class="field__input">
-              <option v-for="m in mockModels" :key="m" :value="m">{{ m }}</option>
+            <select v-model="newModel" class="field__input" :disabled="!chats.models.length">
+              <option
+                v-for="m in modelOptions"
+                :key="m"
+                :value="m"
+                :disabled="m === '—'"
+              >
+                {{ m === '—' ? 'Загрузка…' : m }}
+              </option>
             </select>
           </label>
           <label class="toggle">
@@ -287,6 +301,9 @@ function formatSidebarTime(ts: string | null) {
             <span class="toggle__label">Thinking</span>
           </label>
         </div>
+        <p v-if="chats.modelsError" class="new-chat-form__warning">
+          Не удалось загрузить модели: {{ chats.modelsError }}
+        </p>
       </div>
       <template #footer>
         <button class="button button--ghost" @click="showNewChat = false">Отмена</button>
@@ -586,6 +603,11 @@ function formatSidebarTime(ts: string | null) {
 .field__input--area {
   resize: vertical;
   min-height: 60px;
+}
+
+.new-chat-form__warning {
+  font-size: var(--text-xs);
+  color: var(--danger);
 }
 
 .toggle {

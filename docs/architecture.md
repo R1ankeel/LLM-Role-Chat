@@ -51,23 +51,32 @@
 
 Слои (разделение ответственности):
 
-1. **`types/`** — TS-интерфейсы 1:1 со схемами API (`chat`, `character`, `message`, `scene`).
-2. **`mocks/`** — mock-данные и mock-сервис (`data.ts`, `service.ts`). На Этапе 3 store'ы вызывают
-   сервис напрямую; в Этапе 4 появится `api/`-слой с тем же интерфейсом, и переключение
-   «mock / реальный API» будет управляться `VITE_USE_MOCKS`.
-3. **`stores/`** — Pinia: `chats`, `messages` (в т.ч. состояние генерации и streaming-буфер),
-   `characters`, `scene`, `ui`. Гигантских store нет.
-4. **`router/`** — `/` (home-placeholder) и `/chat/:chatId` (вложенный RouterView внутри AppLayout).
-5. **`components/`** — презентационные компоненты: `layout/` (AppLayout, Sidebar, MainPanel, RightPanel),
+1. **`types/`** — TS-интерфейсы 1:1 со схемами API (`chat`, `character`, `message`, `scene`, `sse`, `relationship`).
+2. **`api/`** — единственный слой сетевых запросов (создан на Этапе 4): `client.ts` (`ApiError`,
+   `request` с `query`, `parseRateLimitSeconds`), `sse.ts` (интерфейс `MessageStream` +
+   `SseMessageStream`: `onToken/onMessage/onDone/onError/abort` через `fetch` + `getReader()`),
+   домены `chats/characters/messages/scene/relationships`, фасад `index.ts` с переключателем
+   `useMocks` (`VITE_USE_MOCKS`). Компоненты и store'ы вызывают только `api`.
+3. **`mocks/`** — mock-данные и mock-сервис (`data.ts`, `service.ts`) с интерфейсом `Api` 1:1;
+   mock-стрим имитирует токены через `setTimeout`. Включаются только через `VITE_USE_MOCKS=true`.
+4. **`stores/`** — Pinia: `chats` (числовой `currentChatId`, «последний чат» в localStorage, модели),
+   `messages` (реальный SSE-стрим, отрицательные temp-id, ошибки `rate-limit|conflict|generic`,
+   восстановление генерации поллингом `generation-status`), `characters`, `scene`, `ui`.
+   Гигантских store нет.
+5. **`router/`** — `/` (redirect на последний чат из localStorage) и `/chat/:chatId`
+   (валидация числового id, при 404 — редирект на `/`).
+6. **`components/`** — презентационные компоненты: `layout/` (AppLayout, Sidebar, MainPanel, RightPanel),
    `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView),
    `common/` (Avatar, Badge, Modal, EmptyState).
-6. **`styles/`** — дизайн-токены (CSS-переменные), base, компонентные классы.
+7. **`styles/`** — дизайн-токены (CSS-переменные), base, компонентные классы.
 
 Ключевые решения:
 
-- **Имитация генерации (Этап 3):** в `stores/messages.ts` состояния `idle → sending → waiting →
-  streaming → done|stopped`, потоковая дозапись слов по таймерам, optimistic-сообщение пользователя,
-  `stop()` финализирует частичный ответ. В Этапе 4 будет заменена на реальный SSE-клиент (§1.4 плана).
+- **Реальный SSE (Этап 4):** `stores/messages.ts` состояния `idle → sending → streaming → idle`,
+  `sendMessage`/`regenerateMessage` возвращают `MessageStream`; токены дозаписываются в streaming-сообщение
+  с отрицательным temp-id (точечное обновление в ленте), на финальный `message`-event placeholder
+  заменяется реальным; `stop()` = `abort()` + POST `/stop-generation`; 429 → отсчёт в Composer,
+  409 → блокировка с объяснением, пагинация `GET /messages` — fetch-all страницами по 500 (backend не менялся).
 - **Типы сообщений:** `character` (Avatar + accent + имя), `user` (свой стиль/выравнивание),
   `system` (центрированный блок — перемещения/смена сцены), `WorldEvent` (карточка с иконкой 🌍,
   не похожа на реплику). Лента `MessageList` объединяет сообщения и world-события по времени.

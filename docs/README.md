@@ -88,8 +88,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | Новый frontend (dev) | `http://localhost:3000` |
 
 - Dev-прокси Vite: `'/api' → 'http://localhost:8000'` (пути API остаются чистыми, CORS не мешает).
-- Mock-режим: `VITE_USE_MOCKS=true` в `.env.development`. Пока `api/`-слой не создан (Этап 4),
-  store'ы берут данные из `src/mocks/`; данные не смешаны с production-путём.
+- Mock-режим: `VITE_USE_MOCKS=true` в `.env.development` — `api/`-слой делегирует в `src/mocks/`
+  (тот же интерфейс `Api`, mock-стрим имитирует токены). По умолчанию `false` — реальный backend.
 - Производственная сборка: `vite build` → `frontend/dist/`, отдаётся статик-сервером (нужен SPA-fallback на `/chat/:id`).
 
 Запуск:
@@ -105,9 +105,13 @@ npm run preview      # локальный просмотр production-сборк
 Структура `frontend/src/` (по этапам плана `Plans/frontend-app.md`):
 
 - `types/` — TS-интерфейсы, повторяющие Pydantic-схемы;
-- `mocks/` — mock-данные и mock-сервис (`data.ts`, `service.ts`);
-- `stores/` — Pinia: `chats`, `messages` (имитация генерации/streaming на Этапе 3), `characters`, `scene`, `ui`;
-- `router/` — маршруты: `/` (home-placeholder) и `/chat/:chatId`;
+- `api/` — единственный слой сетевых запросов: `client.ts` (ApiError, `request` с `query`), `sse.ts`
+  (`MessageStream`: `onToken/onMessage/onDone/onError/abort`), домены `chats/characters/messages/scene/relationships`, фасад `index.ts` с переключателем `useMocks`;
+- `mocks/` — mock-данные и mock-сервис (`data.ts`, `service.ts`), интерфейс 1:1 с `api/`;
+- `stores/` — Pinia: `chats` (числовой `currentChatId`, «последний чат» в localStorage), `messages`
+  (реальный SSE-стрим, отрицательные temp-id, ошибки rate-limit/conflict, восстановление генерации),
+  `characters`, `scene`, `ui`;
+- `router/` — маршруты: `/` (redirect на последний чат) и `/chat/:chatId` (валидация числового id);
 - `components/` — `layout/` (AppLayout, Sidebar, MainPanel, RightPanel), `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView), `common/` (Avatar, Badge, Modal, EmptyState);
 - `composables/` — `useViewport.ts` (desktop/tablet/mobile);
 - `utils/color.ts` — детерминированные accent-цвета персонажей;

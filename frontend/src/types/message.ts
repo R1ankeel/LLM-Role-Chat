@@ -8,14 +8,14 @@ export type MessageVisibility =
   | 'global'
 
 export interface Message {
-  id: string
-  chat_id: string
-  character_id: string | null
+  id: number
+  chat_id: number
+  character_id: number | null
   role: MessageRole
   content: string
   visibility: MessageVisibility
   location: string | null
-  target_character_ids: string[]
+  target_character_ids: number[]
   channel: string | null
   timestamp: string
 }
@@ -23,8 +23,8 @@ export interface Message {
 export type WorldEventKind = 'world' | 'reaction' | 'idle'
 
 export interface WorldEvent {
-  id: string
-  chat_id: string
+  id: number
+  chat_id: number
   kind: WorldEventKind
   title: string
   content: string

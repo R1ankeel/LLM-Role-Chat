@@ -35,7 +35,7 @@ function onRegenerate() {
 }
 
 function onDelete() {
-  messages.removeMessage(props.message.id)
+  void messages.deleteMessage(props.message.id)
 }
 </script>
 
@@ -60,13 +60,25 @@ function onDelete() {
           </p>
         </div>
         <div v-if="!isStreaming" class="message-item__actions">
-          <button class="icon-button icon-button--xs" title="Перегенерировать" aria-label="Перегенерировать ответ" @click="onRegenerate">
+          <button
+            class="icon-button icon-button--xs"
+            title="Перегенерировать"
+            aria-label="Перегенерировать ответ"
+            :disabled="messages.isGenerating"
+            @click="onRegenerate"
+          >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M4 10a8 8 0 0114.7-2M20 14a8 8 0 01-14.7 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
               <path d="M19 4v4h-4M5 20v-4h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
-          <button class="icon-button icon-button--xs" title="Удалить" aria-label="Удалить сообщение" @click="onDelete">
+          <button
+            class="icon-button icon-button--xs"
+            title="Удалить"
+            aria-label="Удалить сообщение"
+            :disabled="messages.isGenerating"
+            @click="onDelete"
+          >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>

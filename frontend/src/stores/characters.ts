@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { mockApi } from '@/mocks/service'
+import { api } from '@/api'
 import type { Character } from '@/types/character'
 
 export const useCharactersStore = defineStore('characters', () => {
@@ -13,16 +13,16 @@ export const useCharactersStore = defineStore('characters', () => {
     characters.value.filter((c) => !c.is_player).sort((a, b) => a.order_index - b.order_index),
   )
 
-  async function loadForChat(chatId: string) {
+  async function loadForChat(chatId: number) {
     loading.value = true
     try {
-      characters.value = await mockApi.fetchCharacters(chatId)
+      characters.value = await api.fetchCharacters(chatId, true)
     } finally {
       loading.value = false
     }
   }
 
-  function getById(id: string | null) {
+  function getById(id: number | null) {
     if (!id) return null
     return byId.value.get(id) ?? null
   }

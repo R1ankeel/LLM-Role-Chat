@@ -2,6 +2,15 @@ import type { Chat, ChatListItem } from '@/types/chat'
 import type { Character } from '@/types/character'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
+import type { MessageStream } from '@/api/sse'
+import type { ApiError } from '@/api/client'
+import type {
+  Api,
+  ChatDetail,
+  CreateChatInput,
+  MessagesPage,
+  ModelsResponse,
+} from '@/api/types'
 import {
   MOCK_MODELS as mockModels,
   chatToListItem,
@@ -11,87 +20,159 @@ import {
   mockScene,
   mockWorldEvents,
 } from '@/mocks/data'
+
 const LATENCY_MS = 250
 
 let seq = 1000
 
-function nextId(prefix: string) {
+function nextId(): number {
   seq += 1
-  return `${prefix}${seq}`
+  return seq
 }
 
 function delay<T>(value: T, ms = LATENCY_MS): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms))
 }
 
-export interface ChatDetail {
-  chat: Chat
-  characters: Character[]
-  messages: Message[]
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value))
 }
 
-export const mockApi = {
-  fetchModels(): Promise<string[]> {
-    return delay([...mockModels])
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+export class MockMessageStream {
+  private tokenCbs: ((text: string, characterId: number) => void)[] = []
+  private messageCbs: ((message: Message) => void)[] = []
+  private doneCbs: (() => void)[] = []
+  private errorCbs: ((error: ApiError) => void)[] = []
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private stopped = false
+
+  readonly signal: AbortSignal = new AbortController().signal
+  get aborted(): boolean {
+    return this.stopped
+  }
+
+  onToken(cb: (text: string, characterId: number) => void): this {
+    this.tokenCbs.push(cb)
+    return this
+  }
+
+  onMessage(cb: (message: Message) => void): this {
+    this.messageCbs.push(cb)
+    return this
+  }
+
+  onDone(cb: () => void): this {
+    this.doneCbs.push(cb)
+    return this
+  }
+
+  onError(cb: (error: ApiError) => void): this {
+    this.errorCbs.push(cb)
+    return this
+  }
+
+  abort(): void {
+    this.stopped = true
+    if (this.timer) clearTimeout(this.timer)
+  }
+
+  private schedule(cb: () => void, ms: number): void {
+    if (this.stopped) return
+    this.timer = setTimeout(() => {
+      if (!this.stopped) cb()
+    }, ms)
+  }
+
+  run(_chatId: number, content: string, streamMessage: Message | null): void {
+    let tick = 0
+    const contentForCbs = streamMessage ? streamMessage.content : content
+    const emit = (): void => {
+      tick += 1
+      const step = Math.ceil(contentForCbs.length / 12)
+      const chunk = contentForCbs.slice((tick - 1) * step, tick * step)
+      if (!chunk) return
+      for (const cb of this.tokenCbs) cb(chunk, streamMessage?.character_id ?? 0)
+      if (tick * step < contentForCbs.length) {
+        this.schedule(emit, 90)
+      } else if (streamMessage) {
+        for (const cb of this.messageCbs) cb(clone(streamMessage))
+        this.schedule(() => {
+          for (const cb of this.doneCbs) cb()
+        }, 60)
+      } else {
+        this.schedule(() => {
+          for (const cb of this.doneCbs) cb()
+        }, 60)
+      }
+    }
+    this.schedule(emit, 150)
+  }
+}
+
+export const mockApi: Api = {
+  fetchModels(): Promise<ModelsResponse> {
+    return delay({ models: [...mockModels], error: null })
   },
 
   fetchChats(): Promise<ChatListItem[]> {
     return delay(mockChats.map(chatToListItem))
   },
 
-  fetchChatDetail(chatId: string): Promise<ChatDetail | null> {
+  fetchChatDetail(chatId: number): Promise<ChatDetail | null> {
     const chat = mockChats.find((c) => c.id === chatId)
     if (!chat) return delay(null)
     return delay({
-      chat,
-      characters: mockCharacters[chatId] ?? [],
-      messages: mockMessages[chatId] ?? [],
+      chat: clone(chat),
+      characters: clone(mockCharacters[chatId] ?? []),
+      messages: clone(mockMessages[chatId] ?? []),
     })
   },
 
-  fetchCharacters(chatId: string): Promise<Character[]> {
-    return delay(mockCharacters[chatId] ?? [])
+  fetchCharacters(chatId: number, _includePlayer?: boolean): Promise<Character[]> {
+    return delay(clone(mockCharacters[chatId] ?? []))
   },
 
-  fetchMessages(chatId: string): Promise<Message[]> {
-    return delay(mockMessages[chatId] ?? [])
+  fetchMessages(chatId: number, page?: MessagesPage): Promise<Message[]> {
+    const all = mockMessages[chatId] ?? []
+    const offset = page?.offset ?? 0
+    const limit = page?.limit ?? all.length
+    return delay(clone(all.slice(offset, offset + limit)))
   },
 
-  fetchScene(chatId: string): Promise<SceneState | null> {
-    return delay(mockScene[chatId] ?? null)
+  fetchScene(chatId: number): Promise<SceneState | null> {
+    return delay(clone(mockScene[chatId] ?? null))
   },
 
-  fetchWorldEvents(chatId: string): Promise<WorldEvent[]> {
-    return delay(mockWorldEvents[chatId] ?? [])
+  fetchWorldEvents(chatId: number): Promise<WorldEvent[]> {
+    return delay(clone(mockWorldEvents[chatId] ?? []))
   },
 
-  createChat(input: {
-    name: string
-    general_prompt: string
-    model_name: string
-    thinking_mode: boolean
-  }): Promise<Chat> {
+  createChat(input: CreateChatInput): Promise<Chat> {
     const chat: Chat = {
-      id: nextId('ch'),
+      id: nextId(),
       name: input.name,
       general_prompt: input.general_prompt,
       model_name: input.model_name,
       max_history_length: 40,
       thinking_mode: input.thinking_mode,
       player_location: '—',
-      locations: [],
-      created_at: new Date().toISOString(),
+      locations: '[]',
+      created_at: nowIso(),
     }
     mockChats.unshift(chat)
     mockCharacters[chat.id] = [
       {
-        id: `${chat.id}-player`,
+        id: nextId(),
         chat_id: chat.id,
         name: 'Игрок',
         personality: '',
-        traits: [],
+        traits: '',
         speech_style: '',
-        example_messages: [],
+        example_messages: '',
         boundaries: '',
         background: '',
         relationships: '',
@@ -106,41 +187,111 @@ export const mockApi = {
     mockScene[chat.id] = {
       chat_id: chat.id,
       time_of_day: '—',
-      location: '—',
-      weather: '—',
-      mood: '—',
-      tension: 0,
-      active_goal: '',
+      character_locations: {},
+      custom_state: {
+        weather: '—',
+        mood: '—',
+        tension: 0,
+        plot_flags: [],
+        active_goal: '',
+        important_objects: [],
+        active_events: [],
+        time_progression: '',
+        stagnation_rounds: 0,
+        round_count: 0,
+        active_goals: {},
+      },
       present_character_ids: [],
       player_location: '—',
       updated_at: chat.created_at,
     }
-    return delay(chat)
+    return delay(clone(chat))
   },
 
-  addMessage(chatId: string, message: Message): Promise<boolean> {
-    ;(mockMessages[chatId] ??= []).push(message)
-    return delay(true)
-  },
-
-  addEvent(chatId: string, event: WorldEvent): Promise<boolean> {
-    ;(mockWorldEvents[chatId] ??= []).unshift(event)
-    return delay(true)
-  },
-
-  renameChat(chatId: string, name: string): Promise<boolean> {
+  renameChat(chatId: number, name: string): Promise<void> {
     const chat = mockChats.find((c) => c.id === chatId)
     if (chat) chat.name = name
-    return delay(true)
+    return delay(undefined)
   },
 
-  deleteChat(chatId: string): Promise<boolean> {
+  deleteChat(chatId: number): Promise<void> {
     const index = mockChats.findIndex((c) => c.id === chatId)
     if (index !== -1) mockChats.splice(index, 1)
     delete mockCharacters[chatId]
     delete mockMessages[chatId]
     delete mockWorldEvents[chatId]
     delete mockScene[chatId]
-    return delay(true)
+    return delay(undefined)
+  },
+
+  sendMessage(chatId: number, content: string): MessageStream {
+    const stream = new MockMessageStream()
+    const playerMessage: Message = {
+      id: nextId(),
+      chat_id: chatId,
+      character_id: null,
+      role: 'user',
+      content,
+      visibility: 'public',
+      location: mockScene[chatId]?.player_location ?? null,
+      target_character_ids: [],
+      channel: null,
+      timestamp: nowIso(),
+    }
+    ;(mockMessages[chatId] ??= []).push(playerMessage)
+    const reply: Message = {
+      id: nextId(),
+      chat_id: chatId,
+      character_id: mockCharacters[chatId]?.find((c) => !c.is_player)?.id ?? null,
+      role: 'character',
+      content:
+        '«Мок-ответ: это имитация генерации. Включите реальный backend, выставив VITE_USE_MOCKS=false».',
+      visibility: 'public',
+      location: mockScene[chatId]?.player_location ?? null,
+      target_character_ids: [],
+      channel: 'direct',
+      timestamp: nowIso(),
+    }
+    ;(mockMessages[chatId] ??= []).push(reply)
+    stream.run(chatId, content, reply)
+    return stream
+  },
+
+  regenerateMessage(chatId: number, messageId: number): MessageStream {
+    const stream = new MockMessageStream()
+    const list = mockMessages[chatId] ?? []
+    const old = list.find((m) => m.id === messageId)
+    if (old) {
+      old.content = '«Мок-ответ (перегенерирован): имитация нового варианта ответа».'
+      old.timestamp = nowIso()
+    }
+    stream.run(chatId, old?.content ?? '', old ?? null)
+    return stream
+  },
+
+  stopGeneration(_chatId: number): Promise<void> {
+    return delay(undefined)
+  },
+
+  getGenerationStatus(_chatId: number): Promise<boolean> {
+    return delay(false)
+  },
+
+  deleteMessage(chatId: number, messageId: number): Promise<void> {
+    const list = mockMessages[chatId] ?? []
+    const index = list.findIndex((m) => m.id === messageId)
+    if (index !== -1) list.splice(index, 1)
+    return delay(undefined)
+  },
+
+  fetchRelationshipGraph(_chatId: number): Promise<import('@/types/relationship').RelationshipGraph> {
+    return delay({ characters: [], edges: [] })
+  },
+
+  fetchRelationshipIssues(
+    _chatId: number,
+    _state?: 'open' | 'resolved' | 'all',
+  ): Promise<import('@/types/relationship').RelationshipIssue[]> {
+    return delay([])
   },
 }

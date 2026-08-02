@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useChatsStore } from '@/stores/chats'
+import { useChatsStore, clearLastChat } from '@/stores/chats'
 import { useMessagesStore } from '@/stores/messages'
 import { useCharactersStore } from '@/stores/characters'
 import { useSceneStore } from '@/stores/scene'
+import { toNumber } from '@/router'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import Composer from '@/components/chat/Composer.vue'
@@ -18,9 +19,10 @@ const messages = useMessagesStore()
 const characters = useCharactersStore()
 const scene = useSceneStore()
 
-async function openChat(id: string) {
-  await chats.openChat(id)
-  if (!chats.currentChatId) {
+async function openChat(id: number) {
+  const detail = await chats.openChat(id)
+  if (!detail) {
+    clearLastChat()
     router.replace({ name: 'home' })
     return
   }
@@ -33,8 +35,9 @@ async function openChat(id: string) {
 
 watch(
   () => route.params.chatId,
-  (id) => {
-    if (typeof id === 'string') void openChat(id)
+  (raw) => {
+    const id = toNumber(raw)
+    if (id !== null) void openChat(id)
   },
   { immediate: true },
 )

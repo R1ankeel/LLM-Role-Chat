@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { mockApi } from '@/mocks/service'
+import { api } from '@/api'
 import type { WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
 
@@ -9,19 +9,18 @@ export const useSceneStore = defineStore('scene', () => {
   const worldEvents = ref<WorldEvent[]>([])
   const loading = ref(false)
 
-  async function loadForChat(chatId: string) {
+  async function loadForChat(chatId: number) {
     loading.value = true
     try {
-      scene.value = await mockApi.fetchScene(chatId)
-      worldEvents.value = await mockApi.fetchWorldEvents(chatId)
+      scene.value = await api.fetchScene(chatId)
+      worldEvents.value = await api.fetchWorldEvents(chatId)
     } finally {
       loading.value = false
     }
   }
 
-  async function injectEvent(chatId: string, event: WorldEvent) {
+  function injectEvent(event: WorldEvent) {
     worldEvents.value.unshift(event)
-    await mockApi.addEvent(chatId, event)
   }
 
   function reset() {

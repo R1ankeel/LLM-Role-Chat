@@ -15,7 +15,14 @@ const characters = useCharactersStore()
 const scene = useSceneStore()
 
 const hasChat = computed(() => Boolean(chats.currentChat))
-const tension = computed(() => Math.max(0, Math.min(100, scene.scene?.tension ?? 0)))
+const tension = computed(() =>
+  Math.max(0, Math.min(100, scene.scene?.custom_state?.tension ?? 0)),
+)
+
+const weather = computed(() => scene.scene?.custom_state?.weather || '—')
+const mood = computed(() => scene.scene?.custom_state?.mood || '—')
+const activeGoal = computed(() => scene.scene?.custom_state?.active_goal || '')
+const playerLocation = computed(() => scene.scene?.player_location || '—')
 
 const sortedCharacters = computed(() =>
   [...characters.characters].sort((a, b) => a.order_index - b.order_index),
@@ -81,15 +88,15 @@ function closePanel() {
             </div>
             <div class="world-state__row">
               <dt>Локация</dt>
-              <dd>{{ scene.scene?.location || '—' }}</dd>
+              <dd>{{ playerLocation }}</dd>
             </div>
             <div class="world-state__row">
               <dt>Погода</dt>
-              <dd>{{ scene.scene?.weather || '—' }}</dd>
+              <dd>{{ weather }}</dd>
             </div>
             <div class="world-state__row">
               <dt>Настроение</dt>
-              <dd>{{ scene.scene?.mood || '—' }}</dd>
+              <dd>{{ mood }}</dd>
             </div>
             <div class="world-state__row world-state__row--bar">
               <dt>Напряжение</dt>
@@ -99,9 +106,9 @@ function closePanel() {
                 </span>
               </dd>
             </div>
-            <div v-if="scene.scene?.active_goal" class="world-state__row">
+            <div v-if="activeGoal" class="world-state__row">
               <dt>Цель</dt>
-              <dd>{{ scene.scene.active_goal }}</dd>
+              <dd>{{ activeGoal }}</dd>
             </div>
           </dl>
         </section>

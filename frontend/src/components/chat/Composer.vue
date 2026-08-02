@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useChatsStore } from '@/stores/chats'
 import { useMessagesStore } from '@/stores/messages'
 
@@ -8,15 +8,49 @@ const messages = useMessagesStore()
 
 const text = ref('')
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
+const countdown = ref<number | null>(null)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 const hasChat = computed(() => Boolean(chats.currentChat))
 const generating = computed(() => messages.isGenerating)
+const error = computed(() => messages.generationError)
+const blocked = computed(() => countdown.value !== null || error.value?.kind === 'conflict')
+
+function startCountdown(seconds: number) {
+  stopCountdown()
+  countdown.value = seconds
+  countdownTimer = setInterval(() => {
+    countdown.value = countdown.value === null ? null : countdown.value - 1
+    if (countdown.value !== null && countdown.value <= 0) stopCountdown()
+  }, 1000)
+}
+
+function stopCountdown() {
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  countdown.value = null
+}
+
+watch(
+  () => messages.generationError,
+  (err) => {
+    if (err?.kind === 'rate-limit' && err.rateLimitSeconds) {
+      startCountdown(err.rateLimitSeconds)
+    } else {
+      stopCountdown()
+    }
+  },
+)
+
+onBeforeUnmount(stopCountdown)
 
 function autoResize() {
   const el = textareaEl.value
   if (!el) return
   el.style.height = '0px'
-  el.style.height = `${el.scrollHeight}px`
+  el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.4)}px`
 }
 
 function onInput() {
@@ -25,10 +59,14 @@ function onInput() {
 
 function onSubmit() {
   const value = text.value.trim()
-  if (!value || !hasChat.value) return
+  if (!value || !hasChat.value || blocked.value) return
   messages.sendMessage(value)
   text.value = ''
   nextTick(autoResize)
+}
+
+function onRetry() {
+  void messages.retryLast()
 }
 
 function onStop() {
@@ -45,6 +83,37 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <footer class="composer-wrap">
+    <transition name="fade">
+      <div v-if="error" class="composer-error" :class="`composer-error--${error.kind}`">
+        <span class="composer-error__text">
+          <template v-if="error.kind === 'rate-limit'">
+            Слишком часто! Подождите {{ countdown ?? '…' }} сек.
+          </template>
+          <template v-else-if="error.kind === 'conflict'">
+            Генерация уже запущена — дождитесь завершения.
+          </template>
+          <template v-else>{{ error.message }}</template>
+        </span>
+        <button
+          v-if="error.kind === 'generic'"
+          class="composer-error__retry"
+          @click="onRetry"
+        >
+          Повторить
+        </button>
+        <button
+          class="icon-button icon-button--xs composer-error__close"
+          title="Закрыть"
+          aria-label="Закрыть сообщение об ошибке"
+          @click="messages.dismissError"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+    </transition>
+
     <div
       class="composer"
       :class="{ 'composer--disabled': !hasChat, 'composer--generating': generating }"
@@ -72,10 +141,10 @@ function onKeydown(e: KeyboardEvent) {
           <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
         </svg>
       </button>
-      <button
+        <button
         v-else
         class="composer__action composer__send"
-        :disabled="!hasChat || !text.trim()"
+        :disabled="!hasChat || !text.trim() || blocked"
         title="Отправить (Enter)"
         aria-label="Отправить сообщение"
         @click="onSubmit"
@@ -97,6 +166,59 @@ function onKeydown(e: KeyboardEvent) {
   padding: var(--space-2) var(--space-5) var(--space-3);
   border-top: 1px solid var(--border);
   background: var(--bg-primary);
+}
+
+.composer-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
+
+.composer-error--rate-limit,
+.composer-error--conflict {
+  background: var(--danger-soft, rgba(224, 77, 82, 0.1));
+  border: 1px solid rgba(224, 77, 82, 0.3);
+  color: #e0484e;
+}
+
+.composer-error--generic {
+  background: var(--accent-soft);
+  border: 1px solid rgba(108, 140, 255, 0.3);
+  color: var(--accent);
+}
+
+.composer-error__text {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.composer-error__retry {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer-error__close {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--transition-fast);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 
 .composer {
@@ -133,7 +255,7 @@ function onKeydown(e: KeyboardEvent) {
   font-size: var(--text-base);
   line-height: 1.5;
   min-height: 24px;
-  max-height: var(--composer-max-height);
+  max-height: 40vh;
   padding: 2px var(--space-1);
   overflow-y: auto;
 }

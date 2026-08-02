@@ -1,51 +1,42 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { mockApi } from '@/mocks/service'
-import { useCharactersStore } from '@/stores/characters'
+import { api } from '@/api'
+import { fetchAllMessages as fetchAll } from '@/api/messages'
+import { parseRateLimitSeconds } from '@/api/client'
+import type { ApiError } from '@/api/client'
+import type { MessageStream } from '@/api/sse'
+import type { Message } from '@/types/message'
 import { useChatsStore } from '@/stores/chats'
+import { useCharactersStore } from '@/stores/characters'
 import { useSceneStore } from '@/stores/scene'
-import type { Character } from '@/types/character'
-import type { Message, WorldEvent } from '@/types/message'
 
 export type GenerationStatus = 'idle' | 'sending' | 'waiting' | 'streaming'
 
-interface StreamingState {
-  tempId: string
-  character: Character
-  words: string[]
-  wordIndex: number
+export type GenerationErrorKind = 'rate-limit' | 'conflict' | 'generic'
+
+export interface GenerationError {
+  kind: GenerationErrorKind
+  message: string
+  rateLimitSeconds?: number
 }
 
-const REPLY_TEMPLATES = [
-  'Хм, интересно. Дай подумать… Ладно, пожалуй, я соглашусь. Только сначала расскажи, что ты задумал — я хочу понимать, во что ввязываюсь.',
-  'Я слышал об этом месте. Говорят, там опасно, но и награда достойная. Если идём вместе — я за, но без глупостей. Договорились?',
-  'Ты прав, но у нас мало времени. Соберёмся и решим это быстро. Я за себя отвечаю, ты — за свои слова. Мне такой расклад по душе.',
-  'Неожиданное предложение. Мне нужно немного времени, чтобы обдумать детали… Но, честно говоря, меня уже подкупила сама идея. Считай, что я согласен.',
-]
-
-const EVENT_TEMPLATES = [
-  { title: 'Событие мира', content: 'За окнами что-то негромко грохнуло — ветер усиливается.' },
-  { title: 'Реакция мира', content: 'Прохожий на мгновение задерживается у окна, прислушиваясь к разговору.' },
-]
-
-let seq = 0
-function nextLocalId(prefix: string) {
-  seq += 1
-  return `${prefix}-${seq}`
-}
-
-function buildReply(index: number): string {
-  return REPLY_TEMPLATES[index % REPLY_TEMPLATES.length]
+let localSeq = 0
+function nextTempId(): number {
+  localSeq += 1
+  return -localSeq
 }
 
 export const useMessagesStore = defineStore('messages', () => {
   const messages = ref<Message[]>([])
   const status = ref<GenerationStatus>('idle')
-  const generatingCharacterId = ref<string | null>(null)
+  const generatingCharacterId = ref<number | null>(null)
   const loading = ref(false)
+  const generationError = ref<GenerationError | null>(null)
+  const restoringGeneration = ref(false)
+  const lastUserContent = ref('')
 
-  const streaming = ref<StreamingState | null>(null)
-  const handles: number[] = []
+  const currentStream = ref<MessageStream | null>(null)
+  let restoreTimer: ReturnType<typeof setInterval> | null = null
 
   const isGenerating = computed(() => status.value !== 'idle')
 
@@ -56,103 +47,99 @@ export const useMessagesStore = defineStore('messages', () => {
 
   const generatingName = computed(() => generatingCharacter.value?.name ?? null)
 
-  function clearTimers() {
-    for (const h of handles) window.clearTimeout(h)
-    handles.length = 0
-  }
-
-  function schedule(fn: () => void, ms: number) {
-    handles.push(window.setTimeout(fn, ms))
-  }
-
-  function currentChatId() {
+  function chatId(): number | null {
     return useChatsStore().currentChatId
   }
 
-  async function loadForChat(chatId: string) {
-    clearTimers()
-    streaming.value = null
-    status.value = 'idle'
-    generatingCharacterId.value = null
+  function setStatus(next: GenerationStatus) {
+    status.value = next
+    if (next === 'idle') {
+      generatingCharacterId.value = null
+      currentStream.value = null
+    }
+  }
+
+  function clearRestoreTimer() {
+    if (restoreTimer) {
+      clearInterval(restoreTimer)
+      restoreTimer = null
+    }
+  }
+
+  async function loadForChat(id: number) {
+    clearRestoreTimer()
+    setStatus('idle')
+    generationError.value = null
+    restoringGeneration.value = false
     loading.value = true
     try {
-      messages.value = await mockApi.fetchMessages(chatId)
+      messages.value = await fetchAll(id)
     } finally {
       loading.value = false
     }
+    void checkRestoreGeneration(id)
+  }
+
+  async function checkRestoreGeneration(id: number) {
+    let active = false
+    try {
+      active = await api.getGenerationStatus(id)
+    } catch {
+      active = false
+    }
+    if (!active) return
+    restoringGeneration.value = true
+    clearRestoreTimer()
+    restoreTimer = setInterval(async () => {
+      let stillActive = false
+      try {
+        stillActive = await api.getGenerationStatus(id)
+      } catch {
+        stillActive = false
+      }
+      if (stillActive) return
+      clearRestoreTimer()
+      restoringGeneration.value = false
+      if (chatId() === id && status.value === 'idle') {
+        await loadForChat(id)
+      }
+    }, 2000)
   }
 
   function reset() {
-    clearTimers()
+    clearRestoreTimer()
+    setStatus('idle')
     messages.value = []
-    status.value = 'idle'
-    generatingCharacterId.value = null
-    streaming.value = null
+    generationError.value = null
+    restoringGeneration.value = false
   }
 
-  function finalizeStreaming(interrupted = false) {
-    const chatId = currentChatId()
-    const s = streaming.value
-    if (chatId && s) {
-      const partial = s.words.slice(0, s.wordIndex).join(' ')
-      const message = messages.value.find((m) => m.id === s.tempId)
-      if (message) {
-        message.content = partial || '*(ответ прерван)*'
-        message.id = nextLocalId('msg')
-        void mockApi.addMessage(chatId, message)
+  function handleStreamError(error: ApiError) {
+    if (error.status === 429) {
+      generationError.value = {
+        kind: 'rate-limit',
+        message: error.detail,
+        rateLimitSeconds: parseRateLimitSeconds(error.detail) ?? undefined,
       }
-      if (!interrupted) {
-        schedule(() => {
-          const event = EVENT_TEMPLATES[seq % EVENT_TEMPLATES.length]
-          const worldEvent: WorldEvent = {
-            id: nextLocalId('we'),
-            chat_id: chatId,
-            kind: 'reaction',
-            title: event.title,
-            content: event.content,
-            timestamp: new Date().toISOString(),
-          }
-          void useSceneStore().injectEvent(chatId, worldEvent)
-        }, 600)
-      }
+    } else if (error.status === 409) {
+      generationError.value = { kind: 'conflict', message: error.detail }
+    } else {
+      generationError.value = { kind: 'generic', message: error.detail }
     }
-    status.value = 'idle'
-    generatingCharacterId.value = null
-    streaming.value = null
-  }
-
-  function streamStep() {
-    const chatId = currentChatId()
-    const s = streaming.value
-    if (!chatId || !s) return
-    const message = messages.value.find((m) => m.id === s.tempId)
-    if (!message) {
-      finalizeStreaming()
-      return
-    }
-    s.wordIndex += 1
-    message.content = s.words.slice(0, s.wordIndex).join(' ')
-    if (s.wordIndex >= s.words.length) {
-      finalizeStreaming()
-      return
-    }
-    schedule(streamStep, 40)
   }
 
   async function sendMessage(content: string) {
     const chats = useChatsStore()
     const characters = useCharactersStore()
-    const chatId = chats.currentChatId
+    const id = chats.currentChatId
     const trimmed = content.trim()
-    if (!chatId || isGenerating.value || !trimmed) return
+    if (!id || isGenerating.value || !trimmed) return
 
-    clearTimers()
-    status.value = 'sending'
-    generatingCharacterId.value = null
-
-    const userMessage: Message = {
-      id: nextLocalId('user'),
-      chat_id: chatId,
+    generationError.value = null
+    lastUserContent.value = trimmed
+    const tempUser: Message = {
+      id: nextTempId(),
+      chat_id: id,
       character_id: characters.player?.id ?? null,
       role: 'user',
       content: trimmed,
@@ -162,58 +149,146 @@ export const useMessagesStore = defineStore('messages', () => {
       channel: null,
       timestamp: new Date().toISOString(),
     }
-    messages.value.push(userMessage)
-    void mockApi.addMessage(chatId, userMessage)
+    messages.value.push(tempUser)
+    setStatus('sending')
 
-    schedule(() => {
-      status.value = 'waiting'
-    }, 500)
+    const stream = api.sendMessage(id, trimmed)
+    currentStream.value = stream
+    let streamingMessage: Message | null = null
 
-    schedule(() => {
-      const npcs = characters.npcs
-      if (!npcs.length) {
-        status.value = 'idle'
-        return
-      }
-      const character = npcs[seq % npcs.length]
-      const tempId = nextLocalId('stream')
-      const words = buildReply(seq).split(' ')
-      const streamingMessage: Message = {
-        id: tempId,
-        chat_id: chatId,
-        character_id: character.id,
-        role: 'character',
-        content: '',
-        visibility: 'public',
-        location: character.location,
-        target_character_ids: [],
-        channel: 'direct',
-        timestamp: new Date().toISOString(),
-      }
-      messages.value.push(streamingMessage)
-      status.value = 'streaming'
-      generatingCharacterId.value = character.id
-      streaming.value = { tempId, character, words, wordIndex: 0 }
-      schedule(streamStep, 60)
-    }, 1200)
+    stream
+      .onToken((text, characterId) => {
+        if (status.value === 'sending') setStatus('streaming')
+        generatingCharacterId.value = characterId
+        if (!streamingMessage) {
+          streamingMessage = {
+            id: nextTempId(),
+            chat_id: id,
+            character_id: characterId,
+            role: 'character',
+            content: '',
+            visibility: 'public',
+            location: null,
+            target_character_ids: [],
+            channel: 'direct',
+            timestamp: new Date().toISOString(),
+          }
+          messages.value.push(streamingMessage)
+        }
+        streamingMessage.content += text
+      })
+      .onMessage((message) => {
+        if (streamingMessage) {
+          const index = messages.value.indexOf(streamingMessage)
+          if (index !== -1) messages.value[index] = message
+        } else {
+          messages.value.push(message)
+        }
+        streamingMessage = null
+      })
+      .onDone(() => {
+        setStatus('idle')
+        void refreshScene(id)
+      })
+      .onError((error) => {
+        if (stream.aborted) {
+          setStatus('idle')
+          void refreshScene(id)
+          return
+        }
+        if (streamingMessage) {
+          const index = messages.value.indexOf(streamingMessage)
+          if (index !== -1) messages.value.splice(index, 1)
+        }
+        handleStreamError(error)
+        setStatus('idle')
+      })
   }
 
-  function stopGeneration() {
-    if (status.value === 'idle') return
-    clearTimers()
-    finalizeStreaming(true)
+  async function regenerateMessage(messageId: number) {
+    const chats = useChatsStore()
+    const id = chats.currentChatId
+    if (!id || isGenerating.value) return
+    const message = messages.value.find((m) => m.id === messageId)
+    if (!message || message.role !== 'character') return
+
+    generationError.value = null
+    setStatus('sending')
+    message.content = ''
+
+    const stream = api.regenerateMessage(id, messageId)
+    currentStream.value = stream
+    let firstToken = true
+
+    stream
+      .onToken((text, characterId) => {
+        if (firstToken) {
+          firstToken = false
+          setStatus('streaming')
+          generatingCharacterId.value = characterId
+        }
+        message.content += text
+      })
+      .onMessage((replacement) => {
+        const index = messages.value.findIndex((m) => m.id === messageId)
+        if (index !== -1) messages.value[index] = replacement
+        else messages.value.push(replacement)
+      })
+      .onDone(() => {
+        setStatus('idle')
+        void refreshScene(id)
+      })
+      .onError((error) => {
+        if (stream.aborted) {
+          setStatus('idle')
+          void refreshScene(id)
+          return
+        }
+        handleStreamError(error)
+        setStatus('idle')
+      })
   }
 
-  function removeMessage(id: string) {
-    const index = messages.value.findIndex((m) => m.id === id)
+  async function stopGeneration() {
+    const id = chatId()
+    const stream = currentStream.value
+    if (stream) stream.abort()
+    setStatus('idle')
+    if (id) {
+      try {
+        await api.stopGeneration(id)
+      } catch {
+        // Stop is best-effort; state is already reset locally.
+      }
+    }
+  }
+
+  async function deleteMessage(messageId: number) {
+    const id = chatId()
+    if (!id || isGenerating.value) return
+    try {
+      await api.deleteMessage(id, messageId)
+    } catch {
+      return
+    }
+    const index = messages.value.findIndex((m) => m.id === messageId)
     if (index !== -1) messages.value.splice(index, 1)
   }
 
-  function regenerateMessage(id: string) {
-    const message = messages.value.find((m) => m.id === id)
-    if (!message || message.role !== 'character') return
-    seq += 1
-    message.content = buildReply(seq)
+  async function refreshScene(id: number) {
+    await Promise.all([
+      useChatsStore().openChat(id).catch(() => null),
+      useSceneStore().loadForChat(id).catch(() => null),
+    ])
+  }
+
+  async function retryLast() {
+    if (!lastUserContent.value || isGenerating.value) return
+    await sendMessage(lastUserContent.value)
+  }
+
+  function dismissError() {
+    generationError.value = null
   }
 
   return {
@@ -223,13 +298,16 @@ export const useMessagesStore = defineStore('messages', () => {
     generatingCharacter,
     generatingName,
     loading,
+    generationError,
+    restoringGeneration,
     isGenerating,
-    streaming,
     loadForChat,
     reset,
     sendMessage,
-    stopGeneration,
-    removeMessage,
     regenerateMessage,
+    stopGeneration,
+    deleteMessage,
+    retryLast,
+    dismissError,
   }
 })

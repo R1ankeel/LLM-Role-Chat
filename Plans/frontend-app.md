@@ -1,6 +1,6 @@
 # Новый frontend ролевого движка — план реализации
 
-> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этапы 4–6 — в работе.
+> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этап 4 «Подключение backend» выполнен (2026-08-02). Этап 5 — в работе.
 > **Дата:** 2026-08-02
 > **Ограничение:** существующий frontend (Vanilla JS SPA) НЕ удаляется, НЕ переписывается и НЕ ломается.
 
@@ -307,8 +307,8 @@ ai-roleplay-chat/frontend/
 
 ### 4.4 API-слой
 
-- `client.ts`: `request(method, path, body?)` с обработкой `{detail}`; типизированные методы per-module.
-- `messages.ts`: `sendMessage(chatId, content, opts)` возвращает управляемый SSE-стрим — объект с методами `onToken`, `onMessage`, `onDone`, `onError`, `abort()`. Реализуется через `fetch` + `response.body.getReader()` (как в старом фронте, но изолированно и типобезопасно).
+- `client.ts`: `request(method, path, body?)` с обработкой `{detail}`; типизированные методы per-module. `request` поддерживает `query` (для пагинации) и бросает `ApiError` со статусом; `parseRateLimitSeconds()` извлекает «Подождите N сек.» из detail 429.
+- `messages.ts`: `sendMessage(chatId, content, opts)` возвращает управляемый SSE-стрим — объект с методами `onToken`, `onMessage`, `onDone`, `onError`, `abort()`. Реализуется через `fetch` + `response.body.getReader()` (как в старом фронте, но изолированно и типобезопасно). Пагинация `GET /messages?limit&offset` — от начала без счётчика, поэтому `fetchAllMessages` качает все страницы (limit=500) последовательно; backend не менялся (критерий №15).
 - Все «отсутствующие» данные (avatar, world feed) — через `mocks/` и поля `TODO`, НЕ через фейковый API-слой.
 
 ### 4.5 Mock-режим
@@ -316,7 +316,7 @@ ai-roleplay-chat/frontend/
 - `VITE_USE_MOCKS=true` → `api/` модули делегируют в `mocks/` (тот же интерфейс функций). Это позволяет разрабатывать UI (Этап 3) без backend.
 - `VITE_USE_MOCKS=false` (по умолчанию) → реальный API.
 - Переключение только через env-флаг, код не меняется.
-- **Текущее состояние (Этап 3):** `api/`-слой ещё не создан; store'ы напрямую вызывают mock-сервис (`src/mocks/service.ts`, единая точка доступа к данным). В Этапе 4 появится `src/api/`, и импорты в store'ах переедут на него (интерфейс функций уже совпадает 1:1).
+- **Текущее состояние (Этап 4 выполнен):** создан `src/api/` (`client.ts`, `sse.ts`, `chats.ts`, `characters.ts`, `messages.ts`, `scene.ts`, `relationships.ts`, `index.ts` — фасад с переключением `useMocks`). Store'ы импортируют `api` из `@/api`. `.env.development` → `VITE_USE_MOCKS=false` (реальный backend). Mocks (`mocks/data.ts`, `mocks/service.ts`) приводятся к интерфейсу `Api` 1:1, mock-стрим имитирует токены через `setTimeout`.
 
 ---
 
@@ -525,6 +525,14 @@ ai-roleplay-chat/frontend/
 - Реальные: список/создание/детали чатов, сообщения с пагинацией, отправка + streaming + stop, восстановление после перезагрузки, сцена, персонажи.
 - Проверка: полноценный RP-раунд через новый UI против живого backend; rate-limit и 409 отображаются корректно.
 - **Визуальная проверка:** корректный streaming-вывод (плавность, без перерисовки всего списка), индикаторы состояний генерации/ошибок/loading, эргономика composer при длинном вводе.
+
+**Выполнено (2026-08-02):**
+- `api/`: `client.ts` (ApiError, `request` с `query`, `parseRateLimitSeconds`), `sse.ts` (интерфейс `MessageStream` + `SseMessageStream`, SSE-парсер 1:1 со старым `app.js`), `chats.ts`, `characters.ts` (`include_player=true`), `messages.ts` (`fetchAllMessages` — fetch-all limit=500), `scene.ts` (worldEvents — заглушка), `relationships.ts`, `index.ts` (фасад `useMocks`).
+- `types/`: `relationship.ts` добавлен; `chat.ts` `locations` приведён к строке (backend: JSON-строка); числовые id; `traits`/`example_messages` — строки; `SceneStateRead` → `custom_state`/`character_locations`/`present_character_ids`.
+- Store'ы переписаны на `api`: `messages` — реальный стрим с отрицательными temp-id, ошибки `rate-limit|conflict|generic`, stop = abort+POST, поллинг `generation-status` каждые 2 сек при восстановлении, regenerate/delete через API; `chats` — числовой `currentChatId`, localStorage «последний чат», модели из `fetchModels()`; `characters`/`scene` — реальные endpoints.
+- Компоненты: Composer (блокировка 409, отсчёт 429, max-height 40vh), MessageList (обновление только streaming-сообщения по отрицательному id, инлайн-карточка ошибки + «Повторить»), MessageItem (реальные regenerate/delete, disabled во время генерации), GenerationIndicator (режим восстановления), Sidebar (модели из API + предупреждение), RightPanel (mapping `custom_state`), ChatView (redirect на `/` при 404 + очистка last-chat), router (валидация числового `chatId`, редирект на последний чат).
+- `npm run build` (vue-tsc + vite) — без ошибок.
+- **Не проверено вживую (backend не был запущен):** полный RP-раунд, 429/409 в реальном UI.
 
 ### Этап 5 — Character / Relationship UI
 - Правая панель: список персонажей, детали, память, смена локации.
