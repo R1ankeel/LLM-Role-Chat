@@ -106,6 +106,14 @@ class Settings(BaseSettings):
     time_advance_interval: int = Field(default=5, alias="TIME_ADVANCE_INTERVAL")
     scene_twist_retry_bonus: float = Field(default=0.15, alias="SCENE_TWIST_RETRY_BONUS")
 
+    # Character avatars (docs/Profile.docx; upload service is Этап B)
+    avatar_dir: str = Field(default="app/static/avatars", alias="AVATAR_DIR")
+    avatar_max_size_mb: int = Field(default=5, alias="AVATAR_MAX_SIZE_MB")
+    avatar_max_dimension: int = Field(default=512, alias="AVATAR_MAX_DIMENSION")
+    # Допустимые форматы (проверка по magic-байтам). Константа в коде — как
+    # event_visibilities/memory_categories, не читается из env.
+    avatar_allowed_types: tuple[str, ...] = ("png", "jpeg", "webp")
+
     # Context Builder (token-aware context per character)
     context_enabled: bool = Field(default=True, alias="CONTEXT_ENABLED")
     max_context_tokens: int = Field(default=60000, alias="MAX_CONTEXT_TOKENS")

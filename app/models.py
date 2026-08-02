@@ -73,6 +73,8 @@ class Character(Base):
     boundaries: Mapped[str] = mapped_column(Text, default="")
     background: Mapped[str] = mapped_column(Text, default="")
     relationships: Mapped[str] = mapped_column(Text, default="")
+    appearance: Mapped[str] = mapped_column(Text, default="")
+    avatar_url: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
     order_index: Mapped[int] = mapped_column(Integer, default=0)

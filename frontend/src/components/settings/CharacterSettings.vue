@@ -1,19 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { accentForName } from '@/utils/color'
 import Avatar from '@/components/common/Avatar.vue'
-import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
 
 const characters = useCharactersStore()
 const ui = useUiStore()
 
-const sorted = computed(() =>
-  [...characters.characters].sort((a, b) => a.order_index - b.order_index),
-)
+// Вкладка «Персонажи» показывает только NPC — для игрока есть отдельная вкладка «Игрок».
+const npcs = characters.npcs
 
 function accent(name: string) {
   return accentForName(name)
@@ -51,14 +48,14 @@ function remove(characterId: number) {
     </template>
 
     <EmptyState
-      v-else-if="!sorted.length"
+      v-else-if="!npcs.length"
       title="Нет персонажей"
       description="Добавьте персонажей, чтобы населить сцену."
     />
 
     <ul v-else class="character-settings__list">
       <li
-        v-for="(character, index) in sorted"
+        v-for="(character, index) in npcs"
         :key="character.id"
         class="character-settings__row"
         :style="{ animationDelay: `${Math.min(index, 10) * 24}ms` }"
@@ -69,7 +66,6 @@ function remove(characterId: number) {
             <span class="character-settings__name" :style="{ color: accent(character.name) }">
               {{ character.name }}
             </span>
-            <Badge v-if="character.is_player" tone="accent">Игрок</Badge>
           </div>
           <span class="character-settings__meta">
             {{ character.location || '—' }}
@@ -92,7 +88,7 @@ function remove(characterId: number) {
             class="icon-button icon-button--xs icon-button--danger"
             title="Удалить"
             aria-label="Удалить персонажа"
-            :disabled="characters.mutating || character.is_player"
+            :disabled="characters.mutating"
             @click="remove(character.id)"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">

@@ -198,6 +198,8 @@ def ensure_schema(db_engine) -> None:
             ("boundaries", "TEXT NOT NULL DEFAULT ''"),
             ("background", "TEXT NOT NULL DEFAULT ''"),
             ("relationships", "TEXT NOT NULL DEFAULT ''"),
+            ("appearance", "TEXT NOT NULL DEFAULT ''"),
+            ("avatar_url", "TEXT NOT NULL DEFAULT ''"),
             ("temperature", "REAL"),
             ("location", "TEXT NOT NULL DEFAULT ''"),
         ]

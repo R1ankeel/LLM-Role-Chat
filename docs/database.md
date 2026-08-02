@@ -31,7 +31,8 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `id` | INTEGER PK | |
 | `chat_id` | FK → `chats.id` ON DELETE CASCADE | |
 | `name` | TEXT(255) | |
-| `personality`, `traits`, `speech_style`, `example_messages`, `boundaries`, `background`, `relationships` | TEXT | текстовая карточка персонажа |
+| `personality`, `traits`, `speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `appearance` | TEXT | текстовая карточка персонажа (`appearance` — внешность, п.19–21 Profile) |
+| `avatar_url` | TEXT(512) | относительный URL аватара (`/static/avatars/...`); пусто = placeholder |
 | `location` | TEXT(255) | текущая локация |
 | `temperature` | REAL NULL | переопределение температуры |
 | `order_index` | INTEGER | уникален в чате |
@@ -191,7 +192,7 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 `ensure_schema` идемпотентно выполняет при старте:
 
 - **memories**: добавляет `content_hash`, `importance`, `category`, `last_accessed_at`, `source_message_ids`, `embedding`; бэкафиллит хэши и удаляет дубликаты.
-- **characters**: добавляет карточные поля (`speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `temperature`, `location`, `is_player`).
+- **characters**: добавляет карточные поля (`speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `appearance`, `avatar_url`, `temperature`, `location`, `is_player`).
 - **chats**: `thinking_mode`, `player_location`, `locations`.
 - **messages**: `visibility`, `location`, `target_character_ids`, `channel`.
 - **scene_states**: `character_locations` (и legacy-поля `location`, `present_character_ids`).

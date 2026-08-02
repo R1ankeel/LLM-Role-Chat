@@ -102,8 +102,10 @@ class CharacterBase(BaseModel):
     boundaries: str = ""
     background: str = ""
     relationships: str = ""
+    appearance: str = ""
+    avatar_url: str = ""
     location: str = ""
-    temperature: Optional[float] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     order_index: int = 0
     is_player: bool = False
 
@@ -134,8 +136,10 @@ class CharacterUpdate(BaseModel):
     boundaries: Optional[str] = None
     background: Optional[str] = None
     relationships: Optional[str] = None
+    appearance: Optional[str] = None
+    avatar_url: Optional[str] = None
     location: Optional[str] = None
-    temperature: Optional[float] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     order_index: Optional[int] = None
     is_player: Optional[bool] = None
 

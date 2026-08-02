@@ -63,7 +63,7 @@ Query-параметр `scope` (Literal):
 
 ### POST `/api/chats/{chat_id}/characters` — добавить персонажа
 
-Тело: `CharacterCreate` (`name` + `personality`, `traits`, `speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `location`, `temperature`, `order_index`, `is_player`; `initial_relationships` — массив `InitialRelationship`). `chat_id` берётся из пути. `order_index` должен быть уникален в чате (400 иначе). При создании с `initial_relationships` создаются рёбра отношений.
+Тело: `CharacterCreate` (`name` + `personality`, `traits`, `speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `appearance`, `location`, `temperature` (0–2), `order_index`, `is_player`; `initial_relationships` — массив `InitialRelationship`). `chat_id` берётся из пути. `order_index` должен быть уникален в чате (400 иначе). `avatar_url` при создании игнорируется (аватар задаётся только через upload-endpoint, Этап B). При создании с `initial_relationships` создаются рёбра отношений.
 
 ### GET `/api/chats/{chat_id}/characters` — список персонажей
 
@@ -71,7 +71,7 @@ Query-параметр `include_player` (default false). Сортировка п
 
 ### PUT `/api/characters/{character_id}` — обновить персонажа
 
-Тело: `CharacterUpdate` (частичное). Проверка уникальности `order_index`; нельзя менять `is_player` у player-персонажа.
+Тело: `CharacterUpdate` (частичное): `name`, `personality`, `traits`, `speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `appearance`, `avatar_url`, `location`, `temperature` (0–2, иначе 422), `order_index`, `is_player`. Проверка уникальности `order_index`; нельзя менять `is_player` у player-персонажа.
 
 ### DELETE `/api/characters/{character_id}` — удалить персонажа
 

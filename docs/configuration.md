@@ -161,6 +161,16 @@
 |---|---|---|
 | `RATE_LIMIT_SECONDS` | `5` | мин. интервал между раундами |
 
+## Аватар персонажа (Этап A/B плана profile-avatar-appearance)
+
+| ключ | дефолт | описание |
+|---|---|---|
+| `AVATAR_DIR` | `app/static/avatars` | каталог хранения файлов аватаров (отдаётся на `/static`) |
+| `AVATAR_MAX_SIZE_MB` | `5` | лимит размера загружаемого файла |
+| `AVATAR_MAX_DIMENSION` | `512` | сторона ресайза (px) |
+
+Допустимые форматы (`png`, `jpeg`, `webp`) — константа в коде (`config.py: avatar_allowed_types`), проверка по magic-байтам. Используются на Этапе B (upload/validate); на Этапе A ключи только добавлены в конфиг и `.env.example`.
+
 ## Task queue (P3)
 
 | ключ | дефолт | описание |
