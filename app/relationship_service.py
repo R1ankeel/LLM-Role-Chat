@@ -175,6 +175,27 @@ async def list_received_relationships(
     return list(result.scalars().all())
 
 
+async def list_relationships_for_chat(
+    db: AsyncSession,
+    chat_id: int,
+) -> list[CharacterRelationship]:
+    """All tracked edges of a chat (NPC -> NPC / NPC -> player), with endpoints.
+
+    Used by the relationship graph UI (Sprint 4 п.24). Player -> NPC edges are
+    never tracked in the DB, so they cannot appear here.
+    """
+    stmt = (
+        select(CharacterRelationship)
+        .where(CharacterRelationship.chat_id == chat_id)
+        .options(
+            selectinload(CharacterRelationship.source_character),
+            selectinload(CharacterRelationship.target_character),
+        )
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def update_relationship_fields(
     db: AsyncSession,
     rel: CharacterRelationship,
@@ -878,6 +899,39 @@ async def list_open_issues(
     )
     if limit is not None:
         stmt = stmt.limit(max(0, int(limit)))
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_issues_for_chat(
+    db: AsyncSession,
+    chat_id: int,
+    state: str = "open",
+) -> list[RelationshipIssue]:
+    """All issues of a chat, filtered by ``state`` (open/resolved/all).
+
+    Used by the open-issues UI (Sprint 4 п.26). Ordered by importance, then
+    newest first — same deterministic ordering as :func:`list_open_issues`.
+    """
+    stmt = (
+        select(RelationshipIssue)
+        .join(CharacterRelationship, CharacterRelationship.id == RelationshipIssue.relationship_id)
+        .where(CharacterRelationship.chat_id == chat_id)
+    )
+    if state != "all":
+        stmt = stmt.where(RelationshipIssue.state == state)
+    stmt = stmt.order_by(
+        RelationshipIssue.importance.desc(),
+        RelationshipIssue.created_at.desc(),
+        RelationshipIssue.id.desc(),
+    ).options(
+        selectinload(RelationshipIssue.relationship).selectinload(
+            CharacterRelationship.source_character
+        ),
+        selectinload(RelationshipIssue.relationship).selectinload(
+            CharacterRelationship.target_character
+        ),
+    )
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

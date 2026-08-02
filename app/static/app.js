@@ -1906,83 +1906,139 @@ function createMetricSlider(metric, value) {
   </div>`;
 }
 
-async function renderRelationshipsTab() {
-  const container = document.getElementById("relationships-view");
-  if (!AppState.currentChatId) { container.innerHTML = ""; return; }
-  try {
-    const chars = await apiRequest("GET", `/chats/${AppState.currentChatId}/characters?include_player=true`);
-    container.innerHTML = "";
-    for (const source of chars) {
-      if (source.is_player) continue;  // player->NPC relationships are not tracked
-      const rels = await apiRequest("GET", `/chats/${AppState.currentChatId}/characters/${source.id}/relationships`);
-      if (!rels.length) continue;
-      const section = document.createElement("div");
-      section.className = "rel-section";
-      let html = `<h4>${escapeHtml(source.name)} →</h4><div class="rel-list">`;
-      for (const r of rels) {
-        const targetName = chars.find(c => c.id === r.target_character_id)?.name || `ID:${r.target_character_id}`;
-        const isPlayerTarget = chars.find(c => c.id === r.target_character_id)?.is_player;
-        const targetLabel = isPlayerTarget ? `👤 ${targetName}` : targetName;
-        html += `<div class="rel-item rel-editable" data-rel-id="${r.id}"
-          data-source="${source.id}" data-target="${r.target_character_id}">
-          <div class="rel-header">
-            <span class="rel-target">${escapeHtml(targetLabel)}</span>
-            ${createRelTypeDropdown(r.relationship_type)}
-            <button class="btn btn-sm btn-primary rel-save-btn" title="Сохранить">💾</button>
-          </div>
-          <div class="rel-metrics-grid">
-            ${createMetricSlider("affection", r.affection)}
-            ${createMetricSlider("trust", r.trust)}
-            ${createMetricSlider("attraction", r.attraction)}
-            ${createMetricSlider("resentment", r.resentment)}
-            ${createMetricSlider("jealousy", r.jealousy)}
-          </div>
-          ${r.description ? `<div class="rel-desc">${escapeHtml(r.description)}</div>` : ""}
-        </div>`;
+function bindRelSliders(scope) {
+  scope.querySelectorAll(".rel-metric-slider").forEach(slider => {
+    slider.addEventListener("input", () => {
+      const valSpan = slider.closest(".rel-metric-row").querySelector(".rel-metric-value");
+      if (valSpan) valSpan.textContent = slider.value;
+    });
+  });
+}
+
+function bindRelSave(scope) {
+  scope.querySelectorAll(".rel-save-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const item = btn.closest(".rel-editable");
+      const sourceId = parseInt(item.dataset.source);
+      const targetId = parseInt(item.dataset.target);
+      const type = item.querySelector(".rel-type-select").value;
+      const metrics = {};
+      item.querySelectorAll(".rel-metric-slider").forEach(sl => {
+        metrics[sl.dataset.metric] = parseInt(sl.value);
+      });
+      const descEl = item.querySelector(".rel-desc-edit");
+      const description = descEl ? descEl.value.trim() : undefined;
+      try {
+        await apiRequest("PUT", `/chats/${AppState.currentChatId}/relationships/${sourceId}/${targetId}`, {
+          relationship_type: type,
+          affection: metrics.affection,
+          trust: metrics.trust,
+          attraction: metrics.attraction,
+          resentment: metrics.resentment,
+          jealousy: metrics.jealousy,
+          description,
+        });
+        showToast("Отношение обновлено", "success");
+      } catch (e) {
+        showToast("Ошибка: " + e.message);
       }
-      html += `</div>`;
-      section.innerHTML = html;
+    });
+  });
+}
 
-      // Bind slider value updates
-      section.querySelectorAll(".rel-metric-slider").forEach(slider => {
-        slider.addEventListener("input", () => {
-          const valSpan = slider.closest(".rel-metric-row").querySelector(".rel-metric-value");
-          if (valSpan) valSpan.textContent = slider.value;
-        });
-      });
+// Shared "manual overrides" list renderer (used by the settings tab and the
+// relationships modal). Supports metric sliders, type dropdown, editable
+// description, "add relationship" and a link to the pair timeline.
+function renderRelationshipList(container) {
+  if (!AppState.currentChatId) { container.innerHTML = ""; return Promise.resolve(); }
+  container.innerHTML = `<p class="field-hint">Загрузка…</p>`;
+  return (async () => {
+    try {
+      const chars = await apiRequest("GET", `/chats/${AppState.currentChatId}/characters?include_player=true`);
+      const npcs = chars.filter(c => !c.is_player);
+      container.innerHTML = "";
+      if (!npcs.length) {
+        container.innerHTML = `<p class="field-hint">Нет персонажей.</p>`;
+        return;
+      }
 
-      // Bind save buttons
-      section.querySelectorAll(".rel-save-btn").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const item = btn.closest(".rel-editable");
-          const sourceId = parseInt(item.dataset.source);
-          const targetId = parseInt(item.dataset.target);
-          const type = item.querySelector(".rel-type-select").value;
-          const metrics = {};
-          item.querySelectorAll(".rel-metric-slider").forEach(sl => {
-            metrics[sl.dataset.metric] = parseInt(sl.value);
+      // "Add relationship" form
+      const addForm = document.createElement("div");
+      addForm.className = "rel-add-form";
+      addForm.innerHTML = `
+        <span class="field-hint" style="margin:0">Добавить отношение:</span>
+        <select class="rel-add-source">
+          ${npcs.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
+        </select>
+        <span>→</span>
+        <select class="rel-add-target">
+          ${chars.map(c => `<option value="${c.id}">${escapeHtml(c.name)}${c.is_player ? " (игрок)" : ""}</option>`).join("")}
+        </select>
+        <button class="btn btn-sm btn-primary rel-add-btn">Добавить</button>`;
+      addForm.querySelector(".rel-add-btn").addEventListener("click", async () => {
+        const s = parseInt(addForm.querySelector(".rel-add-source").value);
+        const t = parseInt(addForm.querySelector(".rel-add-target").value);
+        if (s === t) { showToast("Нельзя создать отношение персонажа к самому себе"); return; }
+        try {
+          await apiRequest("PUT", `/chats/${AppState.currentChatId}/relationships/${s}/${t}`, {
+            relationship_type: "нейтральное",
+            affection: 50, trust: 50, attraction: 0, resentment: 0, jealousy: 0,
+            description: "",
           });
-          try {
-            await apiRequest("PUT", `/chats/${AppState.currentChatId}/relationships/${sourceId}/${targetId}`, {
-              relationship_type: type,
-              affection: metrics.affection,
-              trust: metrics.trust,
-              attraction: metrics.attraction,
-              resentment: metrics.resentment,
-              jealousy: metrics.jealousy,
-            });
-            showToast("Отношение обновлено", "success");
-          } catch (e) {
-            showToast("Ошибка: " + e.message);
-          }
-        });
+          showToast("Отношение создано", "success");
+          renderRelationshipList(container);
+        } catch (e) { showToast("Ошибка: " + e.message); }
       });
+      container.appendChild(addForm);
 
-      container.appendChild(section);
+      for (const source of npcs) {
+        const rels = await apiRequest("GET", `/chats/${AppState.currentChatId}/characters/${source.id}/relationships`);
+        if (!rels.length) continue;
+        const section = document.createElement("div");
+        section.className = "rel-section";
+        let html = `<h4>${escapeHtml(source.name)} →</h4><div class="rel-list">`;
+        for (const r of rels) {
+          const target = chars.find(c => c.id === r.target_character_id);
+          const targetName = target?.name || `ID:${r.target_character_id}`;
+          const targetLabel = target?.is_player ? `👤 ${targetName}` : targetName;
+          html += `<div class="rel-item rel-editable" data-rel-id="${r.id}"
+            data-source="${source.id}" data-target="${r.target_character_id}">
+            <div class="rel-header">
+              <span class="rel-target">${escapeHtml(targetLabel)}</span>
+              ${createRelTypeDropdown(r.relationship_type)}
+              <button class="btn btn-sm btn-primary rel-save-btn" title="Сохранить">💾</button>
+              <button class="btn btn-sm rel-timeline-btn" title="Таймлайн">🕘</button>
+            </div>
+            <div class="rel-metrics-grid">
+              ${createMetricSlider("affection", r.affection)}
+              ${createMetricSlider("trust", r.trust)}
+              ${createMetricSlider("attraction", r.attraction)}
+              ${createMetricSlider("resentment", r.resentment)}
+              ${createMetricSlider("jealousy", r.jealousy)}
+            </div>
+            <textarea class="rel-desc-edit" placeholder="Описание">${escapeHtml(r.description || "")}</textarea>
+          </div>`;
+        }
+        html += `</div>`;
+        section.innerHTML = html;
+        bindRelSliders(section);
+        bindRelSave(section);
+        section.querySelectorAll(".rel-timeline-btn").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const item = btn.closest(".rel-editable");
+            openRelDetail(parseInt(item.dataset.source), parseInt(item.dataset.target));
+          });
+        });
+        container.appendChild(section);
+      }
+    } catch (e) {
+      container.innerHTML = `<p class="field-hint">Ошибка загрузки отношений: ${escapeHtml(e.message)}</p>`;
     }
-  } catch (e) {
-    container.innerHTML = `<p class="field-hint">Ошибка загрузки отношений: ${escapeHtml(e.message)}</p>`;
-  }
+  })();
+}
+
+function renderRelationshipsTab() {
+  return renderRelationshipList(document.getElementById("relationships-view"));
 }
 document.getElementById("btn-refresh-relationships").addEventListener("click", renderRelationshipsTab);
 
@@ -2016,6 +2072,526 @@ window.addEventListener("beforeunload", () => {
     saveGenerationState(AppState.currentChatId);
   }
 });
+
+// ===== Relationships modal (Sprint 4: graph / timeline / issues / overrides) =====
+
+const ISSUE_TYPE_LABELS = {
+  broken_promise: "Невыполненное обещание",
+  debt: "Долг",
+  unfulfilled_request: "Невыполненная просьба",
+  lie: "Ложь",
+  unresolved_conflict: "Нерешённый конфликт",
+  suspicion: "Подозрение",
+  hidden_secret: "Скрытая тайна",
+  missing_apology: "Нет извинений",
+  unreturned_favor: "Неотвеченная услуга",
+  emotional_grievance: "Обида",
+};
+function issueTypeLabel(t) { return ISSUE_TYPE_LABELS[t] || t; }
+
+const REL_KIND_LABELS = {
+  llm: "LLM",
+  decay: "Затухание",
+  manual: "Вручную",
+  archive: "Архив",
+};
+function relKindLabel(k) { return REL_KIND_LABELS[k] || k; }
+
+const relGraphState = {
+  data: null,          // { characters, edges }
+  selectedEdge: null,
+  selectedChar: null,
+  drag: null,          // { charId }
+};
+
+const relDetailState = {
+  sourceId: null,
+  targetId: null,
+  timelineOffset: 0,
+  timelineTotal: 0,
+};
+
+let relActiveTab = "rel-graph";
+
+function openRelModal() {
+  if (!AppState.currentChatId) { showToast("Выберите чат"); return; }
+  document.getElementById("modal-relationships").classList.remove("hidden");
+  switchRelTab(relActiveTab);
+}
+
+function closeRelModal() {
+  document.getElementById("modal-relationships").classList.add("hidden");
+  closeRelDetail();
+}
+
+function switchRelTab(tabId) {
+  relActiveTab = tabId;
+  document.querySelectorAll("#modal-relationships .rel-tabs .tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.rtab === tabId);
+  });
+  document.querySelectorAll("#modal-relationships .tab-content").forEach(t => t.classList.remove("active"));
+  const target = document.getElementById(`rtab-${tabId}`);
+  if (target) target.classList.add("active");
+  document.getElementById("rel-detail-panel").classList.add("hidden");
+  if (tabId === "rel-graph") { renderRelationshipGraph(); return Promise.resolve(); }
+  if (tabId === "rel-list") return renderRelationshipList(document.getElementById("rel-list-view"));
+  if (tabId === "rel-issues") { renderOpenIssues(); return Promise.resolve(); }
+  return Promise.resolve();
+}
+
+document.getElementById("btn-relationships").addEventListener("click", openRelModal);
+document.getElementById("btn-relationships-close").addEventListener("click", closeRelModal);
+document.querySelectorAll("#modal-relationships .rel-tabs .tab").forEach(tab => {
+  tab.addEventListener("click", () => switchRelTab(tab.dataset.rtab));
+});
+document.getElementById("btn-refresh-rel-graph").addEventListener("click", renderRelationshipGraph);
+document.getElementById("btn-refresh-rel-list").addEventListener("click", () =>
+  renderRelationshipList(document.getElementById("rel-list-view")));
+document.getElementById("btn-refresh-rel-issues").addEventListener("click", renderOpenIssues);
+
+// ---- Edge / metric styling ----
+function relEdgeClass(r) {
+  const neg = (r.resentment + r.jealousy) - (r.affection + r.trust);
+  if (r.attraction >= 60) return "edge-rom";
+  if (neg >= 40) return "edge-neg";
+  if (r.affection + r.trust >= 120) return "edge-pos";
+  return "edge-neu";
+}
+function relMetricClass(r, metric) {
+  if (metric === "resentment" || metric === "jealousy") {
+    return r[metric] >= 50 ? "mb-neg" : (r[metric] >= 25 ? "mb-neu" : "mb-pos");
+  }
+  if (metric === "attraction") return r[metric] >= 50 ? "mb-rom" : "mb-neu";
+  return r[metric] >= 60 ? "mb-pos" : (r[metric] >= 35 ? "mb-neu" : "mb-neg");
+}
+
+// ---- Graph (vanilla SVG) ----
+const REL_NODE_R = 26;
+const REL_GRAPH_W = 720;
+const REL_GRAPH_H = 460;
+
+function relCircularLayout(count) {
+  const cx = REL_GRAPH_W / 2, cy = REL_GRAPH_H / 2;
+  const r = Math.min(REL_GRAPH_W, REL_GRAPH_H) / 2 - 70;
+  const pts = [];
+  for (let i = 0; i < count; i++) {
+    const angle = (2 * Math.PI * i) / count - Math.PI / 2;
+    pts.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+  }
+  return pts;
+}
+
+function relArrow(tip, angle, ux, uy) {
+  const nx = -uy, ny = ux;
+  const p1 = { x: tip.x - ux * 14 + nx * 5, y: tip.y - uy * 14 + ny * 5 };
+  const p2 = { x: tip.x - ux * 14 - nx * 5, y: tip.y - uy * 14 - ny * 5 };
+  return `${tip.x.toFixed(1)},${tip.y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+}
+
+function relStraightGeometry(s, t) {
+  const dx = t.x - s.x, dy = t.y - s.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  return {
+    x1: s.x + ux * REL_NODE_R,
+    y1: s.y + uy * REL_NODE_R,
+    x2: t.x - ux * REL_NODE_R,
+    y2: t.y - uy * REL_NODE_R,
+    tip: { x: t.x - ux * REL_NODE_R, y: t.y - uy * REL_NODE_R },
+    angle: Math.atan2(dy, dx),
+    ux, uy,
+    labelX: (s.x + t.x) / 2 + ux * 10,
+    labelY: (s.y + t.y) / 2 + uy * 10,
+  };
+}
+
+function relQuadPoint(p0, c, p1, t) {
+  const u = 1 - t;
+  return {
+    x: u * u * p0.x + 2 * u * t * c.x + t * t * p1.x,
+    y: u * u * p0.y + 2 * u * t * c.y + t * t * p1.y,
+  };
+}
+
+function relCurvedGeometry(s, t, dir) {
+  const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
+  let nx = -(t.y - s.y), ny = t.x - s.x;
+  const nlen = Math.hypot(nx, ny) || 1;
+  nx /= nlen; ny /= nlen;
+  const off = 26;
+  const c = { x: mx + nx * off * dir, y: my + ny * off * dir };
+  const tip = relQuadPoint(s, c, t, 0.94);
+  const just = relQuadPoint(s, c, t, 0.90);
+  const ux = tip.x - just.x, uy = tip.y - just.y;
+  const ulen = Math.hypot(ux, uy) || 1;
+  return {
+    d: `M ${s.x.toFixed(1)} ${s.y.toFixed(1)} Q ${c.x.toFixed(1)} ${c.y.toFixed(1)} ${t.x.toFixed(1)} ${t.y.toFixed(1)}`,
+    tip,
+    angle: Math.atan2(uy, ux),
+    ux: ux / ulen, uy: uy / ulen,
+    labelX: c.x + nx * 10, labelY: c.y + ny * 10,
+  };
+}
+
+function renderRelationshipGraph() {
+  const container = document.getElementById("rel-graph-view");
+  if (!AppState.currentChatId) { container.innerHTML = ""; return; }
+  container.innerHTML = `<p class="field-hint">Загрузка…</p>`;
+  apiRequest("GET", `/chats/${AppState.currentChatId}/relationships/graph`)
+    .then(data => { relGraphState.data = data; drawRelGraph(container); })
+    .catch(e => { container.innerHTML = `<p class="field-hint">Ошибка: ${escapeHtml(e.message)}</p>`; });
+}
+
+function drawRelGraph(container) {
+  const { characters, edges } = relGraphState.data || { characters: [], edges: [] };
+  if (!characters.length) { container.innerHTML = `<p class="field-hint">Нет персонажей.</p>`; return; }
+  const pos = relCircularLayout(characters.length);
+  const byId = {};
+  characters.forEach((c, i) => { c._pos = c._pos || pos[i]; byId[c.id] = c; });
+
+  let svg = `<svg class="rel-graph-svg" viewBox="0 0 ${REL_GRAPH_W} ${REL_GRAPH_H}" xmlns="http://www.w3.org/2000/svg">`;
+
+  for (const e of edges) {
+    const s = byId[e.source_character_id], t = byId[e.target_character_id];
+    if (!s || !t) continue;
+    const rev = edges.find(x =>
+      x.source_character_id === e.target_character_id &&
+      x.target_character_id === e.source_character_id);
+    const cls = "rel-edge " + relEdgeClass(e) + (relGraphState.selectedEdge === e.id ? " selected" : "");
+    const geo = rev ? relCurvedGeometry(s._pos, t._pos, rev.id < e.id ? 1 : -1) : relStraightGeometry(s._pos, t._pos);
+    const label = escapeHtml(relTypeLabel(e.relationship_type));
+    svg += `<g class="${cls}" data-rel-id="${e.id}">
+      ${geo.d
+        ? `<path d="${geo.d}" fill="none" stroke="currentColor"/>`
+        : `<line x1="${geo.x1}" y1="${geo.y1}" x2="${geo.x2}" y2="${geo.y2}" stroke="currentColor"/>`}
+      <polygon points="${relArrow(geo.tip, geo.angle, geo.ux, geo.uy)}"/>
+      <text class="rel-edge-label" x="${geo.labelX.toFixed(1)}" y="${geo.labelY.toFixed(1)}">${label}${e.open_issue_count ? " ⚠" : ""}</text>
+    </g>`;
+  }
+
+  for (const c of characters) {
+    const cls = `rel-node ${c.is_player ? "rel-node-player" : "rel-node-npc"}` +
+      (relGraphState.selectedChar === c.id ? " selected" : "");
+    const name = escapeHtml(c.name.length > 12 ? c.name.slice(0, 12) + "…" : c.name);
+    svg += `<g class="${cls}" data-char-id="${c.id}" transform="translate(${c._pos.x.toFixed(1)}, ${c._pos.y.toFixed(1)})">
+      <circle r="${REL_NODE_R}"></circle>
+      <text y="4">${name}</text>
+    </g>`;
+  }
+
+  svg += `</svg>`;
+  container.innerHTML = svg;
+
+  // Edge click
+  container.querySelectorAll(".rel-edge").forEach(g => {
+    g.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      relGraphState.selectedEdge = parseInt(g.dataset.relId);
+      relGraphState.selectedChar = null;
+      drawRelGraph(container);
+      const e = relGraphState.data.edges.find(x => x.id === parseInt(g.dataset.relId));
+      if (e) openRelDetail(e.source_character_id, e.target_character_id);
+    });
+  });
+
+  // Node click
+  container.querySelectorAll(".rel-node").forEach(g => {
+    g.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const charId = parseInt(g.dataset.charId);
+      relGraphState.selectedChar = relGraphState.selectedChar === charId ? null : charId;
+      relGraphState.selectedEdge = null;
+      drawRelGraph(container);
+    });
+  });
+
+  // Drag nodes
+  container.addEventListener("mousedown", (ev) => {
+    const g = ev.target.closest(".rel-node");
+    if (!g) return;
+    ev.preventDefault();
+    relGraphState.drag = { charId: parseInt(g.dataset.charId) };
+  });
+  container.addEventListener("mousemove", (ev) => {
+    if (!relGraphState.drag) return;
+    const svgEl = container.querySelector("svg");
+    if (!svgEl) return;
+    const rect = svgEl.getBoundingClientRect();
+    const c = relGraphState.data.characters.find(x => x.id === relGraphState.drag.charId);
+    if (!c) return;
+    const sx = REL_GRAPH_W / rect.width, sy = REL_GRAPH_H / rect.height;
+    c._pos = {
+      x: Math.max(REL_NODE_R, Math.min(REL_GRAPH_W - REL_NODE_R, (ev.clientX - rect.left) * sx)),
+      y: Math.max(REL_NODE_R, Math.min(REL_GRAPH_H - REL_NODE_R, (ev.clientY - rect.top) * sy)),
+    };
+    drawRelGraph(container);
+  });
+  container.addEventListener("mouseup", () => { relGraphState.drag = null; });
+  container.addEventListener("mouseleave", () => { relGraphState.drag = null; });
+}
+
+// ---- Detail panel: edge info + issues + timeline ----
+function openRelDetail(sourceId, targetId) {
+  relDetailState.sourceId = sourceId;
+  relDetailState.targetId = targetId;
+  relDetailState.timelineOffset = 0;
+  relDetailState.timelineTotal = 0;
+  document.querySelectorAll("#modal-relationships .tab-content").forEach(t => t.classList.remove("active"));
+  document.getElementById("rel-detail-panel").classList.remove("hidden");
+  const body = document.getElementById("rel-detail-body");
+  const title = document.getElementById("rel-detail-title");
+  title.textContent = "Загрузка…";
+  body.innerHTML = `<p class="field-hint">Загрузка…</p>`;
+
+  const chatId = AppState.currentChatId;
+  Promise.all([
+    apiRequest("GET", `/chats/${chatId}/relationships/${sourceId}/${targetId}`),
+    apiRequest("GET", `/chats/${chatId}/relationships/${sourceId}/${targetId}/issues?state=all`),
+    apiRequest("GET", `/chats/${chatId}/characters?include_player=true`),
+  ]).then(([edge, issues, chars]) => {
+    const nameOf = id => (chars.find(c => c.id === id)?.name) || `ID:${id}`;
+    title.textContent = `${nameOf(sourceId)} → ${nameOf(targetId)}`;
+    let html = "";
+
+    // Metrics bars
+    html += `<div class="rel-metrics-bars">`;
+    for (const m of ["affection", "trust", "attraction", "resentment", "jealousy"]) {
+      html += `<div class="mb-row">
+        <span class="mb-label">${METRIC_LABELS[m]}</span>
+        <div class="mb-track"><div class="mb-fill ${relMetricClass(edge, m)}" style="width:${edge[m]}%"></div></div>
+        <span class="mb-val">${edge[m]}</span>
+      </div>`;
+    }
+    html += `</div>`;
+    html += `<div><span class="rel-type">${escapeHtml(relTypeLabel(edge.relationship_type))}</span></div>`;
+    if (edge.description) html += `<p class="rel-desc">${escapeHtml(edge.description)}</p>`;
+
+    // Pair issues
+    if (issues.length) {
+      html += `<h5 style="margin-top:10px">Вопросы пары</h5>`;
+      for (const issue of issues) {
+        html += issueCard(issue, sourceId, targetId);
+      }
+    }
+
+    body.innerHTML = html;
+    bindIssueActions(body, sourceId, targetId);
+    renderRelTimeline(body);
+  }).catch(e => {
+    title.textContent = "Ошибка";
+    body.innerHTML = `<p class="field-hint">Ошибка: ${escapeHtml(e.message)}</p>`;
+  });
+}
+
+function renderRelTimeline(body) {
+  const chatId = AppState.currentChatId;
+  const { sourceId, targetId, timelineOffset } = relDetailState;
+  const url = `/chats/${chatId}/relationships/${sourceId}/${targetId}/timeline?limit=50&offset=${timelineOffset}`;
+  apiRequest("GET", url).then(data => {
+    const events = data.events || [];
+    const firstPage = timelineOffset === 0;
+    let html = (firstPage ? `<h5 style="margin-top:12px">Таймлайн</h5>` : "") +
+      `<div class="rel-timeline">`;
+
+    if (!events.length) {
+      html += `<p class="field-hint">Событий пока нет.</p>`;
+    }
+    for (const ev of events) {
+      html += `<div class="rel-tl-event kind-${escapeHtml(ev.kind || "llm")}">
+        <div class="rel-tl-top">
+          <span class="rel-tl-kind">${relKindLabel(ev.kind)}</span>
+          <span class="rel-tl-time">${ev.timestamp ? formatTime(ev.timestamp) : ""}${ev.round_id ? " · " + escapeHtml(ev.round_id) : ""}</span>
+        </div>
+        <div>${escapeHtml(ev.description || ev.reason || "")}</div>`;
+      const deltas = [];
+      for (const m of ["affection", "trust", "attraction", "resentment", "jealousy"]) {
+        const d = ev["delta_" + m];
+        if (d) {
+          deltas.push(`<span class="rel-tl-delta ${d > 0 ? "positive" : "negative"}">${METRIC_LABELS[m]} ${d > 0 ? "+" : ""}${d}</span>`);
+        }
+      }
+      if (deltas.length) html += `<div class="rel-tl-deltas">${deltas.join("")}</div>`;
+      html += `<div class="rel-tl-snapshot">После: ${escapeHtml(
+        ["affection", "trust", "attraction", "resentment", "jealousy"]
+          .map(m => `${METRIC_LABELS[m]} ${ev[m + "_after"]}`).join(" · "))}</div>`;
+      for (const msg of ev.source_messages || []) {
+        html += `<div class="rel-tl-msg"><b>${escapeHtml(msg.role === "user" ? "Игрок" : "Персонаж")}</b>: ${escapeHtml(msg.content)}</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+
+    // Sparklines (only on first page)
+    if (firstPage && events.length >= 2) {
+      html += `<h5 style="margin-top:10px">Динамика метрик</h5>`;
+      for (const m of ["affection", "trust", "attraction", "resentment", "jealousy"]) {
+        html += `<div style="margin-bottom:6px"><span class="mb-label">${METRIC_LABELS[m]}</span>${relSpark(m, events)}</div>`;
+      }
+    }
+
+    relDetailState.timelineTotal = data.pagination?.total || events.length;
+    relDetailState.timelineOffset = timelineOffset + events.length;
+
+    if (relDetailState.timelineOffset < relDetailState.timelineTotal) {
+      html += `<button class="btn btn-secondary btn-sm btn-load-more" id="rel-tl-more">Загрузить ещё</button>`;
+    }
+
+    body.querySelector("#rel-tl-more")?.remove();
+    body.insertAdjacentHTML("beforeend", html);
+    document.getElementById("rel-tl-more")?.addEventListener("click", () => renderRelTimeline(body));
+  }).catch(e => {
+    body.insertAdjacentHTML("beforeend", `<p class="field-hint">Таймлайн: ${escapeHtml(e.message)}</p>`);
+  });
+}
+
+function relSpark(metric, events) {
+  const series = events.map(e => e[metric + "_after"]).filter(v => v != null);
+  if (series.length < 2) return "";
+  const W = 200, H = 46, pad = 3;
+  const min = Math.min(...series), max = Math.max(...series);
+  const span = (max - min) || 1;
+  const pts = series.map((v, i) => {
+    const x = pad + (i * (W - 2 * pad)) / (series.length - 1);
+    const y = H - pad - ((v - min) / span) * (H - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg class="rel-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="var(--accent-blue)" stroke-width="2"/></svg>`;
+}
+
+function issueCard(issue, sourceId, targetId) {
+  const imp = issue.importance || 5;
+  const impCls = imp >= 7 ? "imp-high" : (imp >= 4 ? "imp-med" : "imp-low");
+  const time = issue.created_at ? formatTime(issue.created_at) : "";
+  return `<div class="rel-issue-card ${issue.state === "resolved" ? "resolved" : ""}"
+    data-source-id="${sourceId}" data-target-id="${targetId}">
+    <div class="rel-issue-top">
+      <span class="rel-issue-type">${issueTypeLabel(issue.issue_type)}</span>
+      <span class="rel-issue-importance ${impCls}">важность ${imp}/10</span>
+      <span class="rel-issue-meta">${time}${issue.rounds_since_last_mention ? ` · не упоминалось ${issue.rounds_since_last_mention} раунд(ов)` : ""}</span>
+    </div>
+    <div class="rel-issue-text">${escapeHtml(issue.text)}</div>
+    ${issue.state === "resolved"
+      ? `<div class="rel-issue-meta">Решено${issue.resolved_round_id ? " в " + escapeHtml(issue.resolved_round_id) : ""}</div>`
+      : `<div class="rel-issue-actions"><button class="btn btn-sm rel-issue-resolve-btn" data-issue-id="${issue.id}">Решить</button></div>`}
+  </div>`;
+}
+
+function bindIssueActions(scope, sourceId, targetId) {
+  scope.querySelectorAll(".rel-issue-resolve-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest(".rel-issue-card");
+      const reasonWrap = card.querySelector(".rel-issue-reason");
+      if (reasonWrap) { reasonWrap.classList.remove("hidden"); return; }
+      const wrap = document.createElement("div");
+      wrap.className = "rel-issue-reason";
+      wrap.innerHTML = `<input type="text" placeholder="Причина решения (необязательно)">
+        <button class="btn btn-sm btn-primary">OK</button>
+        <button class="btn btn-sm rel-issue-cancel">Отмена</button>`;
+      card.appendChild(wrap);
+      wrap.querySelector(".btn-primary").addEventListener("click", async () => {
+        const reason = wrap.querySelector("input").value.trim();
+        try {
+          await apiRequest("POST", `/chats/${AppState.currentChatId}/relationships/${sourceId}/${targetId}/issues/${btn.dataset.issueId}/resolve`, { reason });
+          showToast("Вопрос решён", "success");
+          openRelDetail(sourceId, targetId);
+        } catch (e) { showToast("Ошибка: " + e.message); }
+      });
+      wrap.querySelector(".rel-issue-cancel").addEventListener("click", () => wrap.remove());
+    });
+  });
+}
+
+function bindIssueActionsFromCard(scope) {
+  scope.querySelectorAll(".rel-issue-resolve-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest(".rel-issue-card");
+      const sourceId = parseInt(card.dataset.sourceId);
+      const targetId = parseInt(card.dataset.targetId);
+      const reasonWrap = card.querySelector(".rel-issue-reason");
+      if (reasonWrap) { reasonWrap.classList.remove("hidden"); return; }
+      const wrap = document.createElement("div");
+      wrap.className = "rel-issue-reason";
+      wrap.innerHTML = `<input type="text" placeholder="Причина решения (необязательно)">
+        <button class="btn btn-sm btn-primary">OK</button>
+        <button class="btn btn-sm rel-issue-cancel">Отмена</button>`;
+      card.appendChild(wrap);
+      wrap.querySelector(".btn-primary").addEventListener("click", async () => {
+        const reason = wrap.querySelector("input").value.trim();
+        try {
+          await apiRequest("POST", `/chats/${AppState.currentChatId}/relationships/${sourceId}/${targetId}/issues/${btn.dataset.issueId}/resolve`, { reason });
+          showToast("Вопрос решён", "success");
+          renderOpenIssues();
+        } catch (e) { showToast("Ошибка: " + e.message); }
+      });
+      wrap.querySelector(".rel-issue-cancel").addEventListener("click", () => wrap.remove());
+    });
+  });
+}
+
+function closeRelDetail() {
+  document.getElementById("rel-detail-panel").classList.add("hidden");
+  document.querySelectorAll("#modal-relationships .tab-content").forEach(t => t.classList.remove("active"));
+  const active = document.getElementById(`rtab-${relActiveTab}`);
+  if (active) active.classList.add("active");
+}
+document.getElementById("btn-rel-detail-close").addEventListener("click", closeRelDetail);
+document.getElementById("btn-rel-detail-edit").addEventListener("click", () => {
+  if (relDetailState.sourceId == null) return;
+  const { sourceId, targetId } = relDetailState;
+  closeRelDetail();
+  switchRelTab("rel-list").then(() => {
+    const item = document.querySelector(`.rel-editable[data-source="${sourceId}"][data-target="${targetId}"]`);
+    if (item) {
+      item.scrollIntoView({ block: "center" });
+      item.style.outline = "2px solid var(--accent)";
+      setTimeout(() => { item.style.outline = ""; }, 2000);
+    }
+  });
+});
+
+// ---- Open issues view (chat-wide) ----
+function renderOpenIssues() {
+  const container = document.getElementById("rel-issues-view");
+  if (!AppState.currentChatId) { container.innerHTML = ""; return; }
+  container.innerHTML = `<p class="field-hint">Загрузка…</p>`;
+  const chatId = AppState.currentChatId;
+  Promise.all([
+    apiRequest("GET", `/chats/${chatId}/relationships/issues?state=open`),
+    apiRequest("GET", `/chats/${chatId}/relationships/issues?state=resolved`),
+  ]).then(([open, resolved]) => {
+    const groupByPair = issues => {
+      const map = {};
+      for (const issue of issues) {
+        const key = `${issue.source_character_id}:${issue.target_character_id}`;
+        const label = `${issue.source_name || "?"} → ${issue.target_name || "?"}`;
+        (map[key] = map[key] || { label, items: [] }).items.push(issue);
+      }
+      return map;
+    };
+    let html = "";
+    const openGroups = groupByPair(open);
+    if (!open.length) html = `<p class="field-hint">Открытых вопросов нет.</p>`;
+    for (const key of Object.keys(openGroups)) {
+      const g = openGroups[key];
+      html += `<div class="rel-issues-group"><h5>${escapeHtml(g.label)}</h5>`;
+      for (const issue of g.items) {
+        html += issueCard(issue, issue.source_character_id, issue.target_character_id);
+      }
+      html += `</div>`;
+    }
+    if (resolved.length) {
+      html += `<details style="margin-top:8px"><summary>Решённые (${resolved.length})</summary><div style="margin-top:6px">`;
+      for (const issue of resolved) {
+        html += issueCard(issue, issue.source_character_id, issue.target_character_id);
+      }
+      html += `</div></details>`;
+    }
+    container.innerHTML = html;
+    bindIssueActionsFromCard(container);
+  }).catch(e => {
+    container.innerHTML = `<p class="field-hint">Ошибка: ${escapeHtml(e.message)}</p>`;
+  });
+}
 
 // ===== Init =====
 // Show Ollama hint on first visit

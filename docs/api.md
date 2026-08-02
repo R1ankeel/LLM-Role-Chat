@@ -186,6 +186,26 @@ Query-параметр `days` (1–365, default 30). Удаляет заверш
 
 Валидация: `relationship_type` проверяется по whitelist `relationship_valid_types` и графу переходов — 400 при недопустимом значении или недопустимом переходе (Sprint 4 п.20). После применения старые события сворачиваются в архив (`kind="archive"`, Sprint 4 п.21).
 
+### GET `/api/chats/{chat_id}/relationships/graph`
+
+Весь граф отношений чата (Sprint 4 п.24): узлы-персонажи (NPC + игрок) и все направленные рёбра с метриками и количеством открытых вопросов. Ответ:
+
+```json
+{
+  "characters": [{"id": 1, "name": "Аня", "is_player": false, "location": "гостиная"}],
+  "edges": [{
+    "id": 3, "source_character_id": 1, "target_character_id": 2,
+    "relationship_type": "друг", "affection": 70, "trust": 60,
+    "attraction": 0, "resentment": 5, "jealousy": 10,
+    "description": "", "open_issue_count": 1
+  }]
+}
+```
+
+### GET `/api/chats/{chat_id}/relationships/issues`
+
+Все вопросы чата (Sprint 4 п.26). Query-параметр `state`: `open` (default) | `resolved` | `all`. Каждый элемент — `RelationshipIssueRead` + `source_character_id`, `target_character_id`, `source_name`, `target_name`.
+
 ### POST `/api/chats/{chat_id}/relationships/analyze`
 
 On-demand повторный анализ отношений за один раунд (Sprint 4 п.23). Query-параметр `round_id` — опционально; по умолчанию берётся последний раунд, для которого уже создавались события отношений. 404 — раунд/чат не найден, 400 — нет существующих раундов. Ответ — summary батча:

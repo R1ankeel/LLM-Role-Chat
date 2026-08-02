@@ -19,7 +19,9 @@ from ..relationship_service import (
     get_or_create_relationship,
     get_relationship,
     get_recent_events,
+    list_issues_for_chat,
     list_received_relationships,
+    list_relationships_for_chat,
     list_relationships_for_character,
     prune_relationship_events,
     resolve_issue,
@@ -70,6 +72,97 @@ async def list_incoming_relationships(
     if chat is None:
         raise HTTPException(status_code=404, detail="Чат не найден")
     return await list_received_relationships(db, character_id)
+
+
+@router.get("/chats/{chat_id}/relationships/graph")
+async def get_relationship_graph(
+    chat_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Full relationship graph of a chat for the UI (Sprint 4 п.24).
+
+    Returns the character nodes (NPCs + player) and all tracked directed edges
+    (NPC -> NPC / NPC -> player) with metrics and the count of open issues per
+    edge. Player -> NPC edges are never stored, so they are absent by design.
+    """
+    chat = await crud.get_chat(db, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+
+    characters = await crud.get_characters_by_chat(db, chat_id, include_player=True)
+    rels = await list_relationships_for_chat(db, chat_id)
+
+    open_counts: dict[int, int] = {}
+    if rels:
+        rel_ids = [r.id for r in rels]
+        rows = await db.execute(
+            select(
+                models.RelationshipIssue.relationship_id,
+                func.count(),
+            )
+            .where(
+                models.RelationshipIssue.relationship_id.in_(rel_ids),
+                models.RelationshipIssue.state == "open",
+            )
+            .group_by(models.RelationshipIssue.relationship_id)
+        )
+        open_counts = {rel_id: count for rel_id, count in rows.all()}
+
+    return {
+        "characters": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "is_player": bool(getattr(c, "is_player", False)),
+                "location": getattr(c, "location", "") or "",
+            }
+            for c in characters
+        ],
+        "edges": [
+            {
+                "id": r.id,
+                "source_character_id": r.source_character_id,
+                "target_character_id": r.target_character_id,
+                "relationship_type": r.relationship_type,
+                "affection": r.affection,
+                "trust": r.trust,
+                "attraction": r.attraction,
+                "resentment": r.resentment,
+                "jealousy": r.jealousy,
+                "description": r.description,
+                "open_issue_count": open_counts.get(r.id, 0),
+            }
+            for r in rels
+        ],
+    }
+
+
+@router.get("/chats/{chat_id}/relationships/issues")
+async def list_chat_relationship_issues(
+    chat_id: int,
+    state: Literal["open", "resolved", "all"] = "open",
+    db: AsyncSession = Depends(get_async_db),
+):
+    """All relationship issues of a chat, with source/target names (Sprint 4 п.26)."""
+    chat = await crud.get_chat(db, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+
+    issues = await list_issues_for_chat(db, chat_id, state=state)
+    result = []
+    for issue in issues:
+        data = schemas.RelationshipIssueRead.model_validate(issue).model_dump(mode="json")
+        rel = issue.relationship
+        data["source_character_id"] = rel.source_character_id if rel else None
+        data["target_character_id"] = rel.target_character_id if rel else None
+        data["source_name"] = (
+            rel.source_character.name if rel and rel.source_character else None
+        )
+        data["target_name"] = (
+            rel.target_character.name if rel and rel.target_character else None
+        )
+        result.append(data)
+    return result
 
 
 @router.get(

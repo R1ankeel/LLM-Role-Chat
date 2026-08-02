@@ -29,6 +29,7 @@
   </div>
   <div class="header-right">
     <button id="btn-clear-history" class="btn btn-sm" title="Очистить историю">🗑️</button>
+    <button id="btn-relationships" class="btn btn-icon" title="Отношения">🕸️</button>
     <button id="btn-settings" class="btn btn-icon" title="Настройки">⚙️</button>
   </div>
 </header>
@@ -189,6 +190,53 @@
 
       <div class="modal-actions">
         <button id="btn-settings-close" class="btn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Relationships modal (Sprint 4: graph / timeline / issues / manual overrides) -->
+  <div id="modal-relationships" class="modal-overlay hidden">
+    <div class="modal modal-wide modal-rel">
+      <h3>Отношения</h3>
+      <div class="tabs rel-tabs">
+        <button class="tab active" data-rtab="rel-graph">Граф</button>
+        <button class="tab" data-rtab="rel-list">Список</button>
+        <button class="tab" data-rtab="rel-issues">Вопросы</button>
+      </div>
+
+      <!-- Graph view -->
+      <div class="tab-content active" id="rtab-rel-graph">
+        <p class="field-hint">Граф отношений между персонажами. Нажмите на стрелку, чтобы увидеть таймлайн и детали.</p>
+        <div id="rel-graph-view"></div>
+        <button id="btn-refresh-rel-graph" class="btn btn-secondary btn-sm">Обновить</button>
+      </div>
+
+      <!-- List view (manual overrides) -->
+      <div class="tab-content" id="rtab-rel-list">
+        <p class="field-hint">Ручное редактирование отношений. Изменения сохраняются отдельной кнопкой и попадают в таймлайн как события «Вручную».</p>
+        <div id="rel-list-view"></div>
+        <button id="btn-refresh-rel-list" class="btn btn-secondary btn-sm">Обновить</button>
+      </div>
+
+      <!-- Issues view -->
+      <div class="tab-content" id="rtab-rel-issues">
+        <p class="field-hint">Открытые вопросы — активные сюжетные крючки между парами персонажей.</p>
+        <div id="rel-issues-view"></div>
+        <button id="btn-refresh-rel-issues" class="btn btn-secondary btn-sm">Обновить</button>
+      </div>
+
+      <!-- Detail panel (timeline + edge info) -->
+      <div id="rel-detail-panel" class="hidden">
+        <div class="rel-detail-header">
+          <button id="btn-rel-detail-close" class="btn btn-sm">← Назад</button>
+          <span id="rel-detail-title"></span>
+          <button id="btn-rel-detail-edit" class="btn btn-sm btn-primary">Редактировать</button>
+        </div>
+        <div id="rel-detail-body"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="btn-relationships-close" class="btn">Закрыть</button>
       </div>
     </div>
   </div>
