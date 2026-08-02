@@ -178,6 +178,14 @@ export const useMessagesStore = defineStore('messages', () => {
         streamingMessage.content += text
       })
       .onMessage((message) => {
+        if (message.role === 'user') {
+          // Backend echoes the player's own message first (chat_engine.py).
+          // Replace our optimistic copy instead of adding a duplicate.
+          const index = messages.value.findIndex((m) => m.id === tempUser.id)
+          if (index !== -1) messages.value[index] = message
+          else messages.value.push(message)
+          return
+        }
         if (streamingMessage) {
           const index = messages.value.indexOf(streamingMessage)
           if (index !== -1) messages.value[index] = message

@@ -68,7 +68,7 @@ export const useChatsStore = defineStore('chats', () => {
         currentChat.value = null
         return null
       }
-      currentChat.value = detail.chat
+      currentChat.value = detail
       const last = detail.messages.length
         ? detail.messages[detail.messages.length - 1]
         : null

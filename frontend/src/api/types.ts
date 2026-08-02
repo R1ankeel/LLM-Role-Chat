@@ -12,8 +12,7 @@ export interface CreateChatInput {
   thinking_mode: boolean
 }
 
-export interface ChatDetail {
-  chat: Chat
+export interface ChatDetail extends Chat {
   characters: Character[]
   messages: Message[]
 }

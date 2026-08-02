@@ -126,7 +126,7 @@ export const mockApi: Api = {
     const chat = mockChats.find((c) => c.id === chatId)
     if (!chat) return delay(null)
     return delay({
-      chat: clone(chat),
+      ...clone(chat),
       characters: clone(mockCharacters[chatId] ?? []),
       messages: clone(mockMessages[chatId] ?? []),
     })
