@@ -110,6 +110,7 @@ async function save() {
           :image-url="player.avatar_url"
           size="xl"
           class="player-settings__avatar"
+          :class="{ 'is-busy': avatarBusy }"
         />
         <div class="player-settings__avatar-actions">
           <button
@@ -171,6 +172,7 @@ async function save() {
     </div>
 
     <div class="player-settings__footer">
+      <span v-if="changed && !saving" class="player-settings__dirty-hint">Несохранённые изменения</span>
       <button class="button button--primary" :disabled="!canSave" @click="save">
         {{ saving ? 'Сохранение…' : 'Сохранить' }}
       </button>
@@ -215,6 +217,18 @@ async function save() {
 
 .player-settings__file-input {
   display: none;
+}
+
+.player-settings__avatar.is-busy {
+  opacity: 0.55;
+  transition: opacity var(--transition-fast);
+}
+
+.player-settings__dirty-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 .player-settings__info {

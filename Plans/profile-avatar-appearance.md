@@ -1,6 +1,6 @@
 # План внедрения: Character Profile, аватарки и внешность (docs/Profile.docx)
 
-> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 3 (Frontend: единый CharacterProfileModal) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 4 (Frontend: три точки входа) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 5 (Frontend: Player) — ВЫПОЛНЕН** (см. §4). Frontend-этап 6 — ещё не начат.
+> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 3 (Frontend: единый CharacterProfileModal) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 4 (Frontend: три точки входа) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 5 (Frontend: Player) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 6 (Frontend: UI polish) — ВЫПОЛНЕН** (см. §4). Все фронтенд-этапы завершены.
 > **Источник ТЗ:** `docs/Profile.docx` (34 пункта, 6 этапов, критерии готовности в §34).
 > **Ограничения ТЗ:** не переписывать frontend целиком, расширять существующую архитектуру, старый frontend (`app/static/`) не трогать, один `CharacterProfileModal`, единый источник истины (`CharacterStore`).
 
@@ -207,10 +207,20 @@
 
 ### Этап 6 — UI polish (§6, §30, §33 Этап 6)
 
-- Состояния: loading загрузки аватара, ошибки upload (тип/размер) и save, unsaved-changes, hover/focus/click, placeholder аватара, обрезание (`object-fit`).
-- Обновление всех мест после сохранения — через единый store (уже работает).
-- Мелкие экраны: скролл модалки, верхняя часть в одну колонку.
-- `npm run build` (vue-tsc strict) без ошибок; ручная сверка с `docs/Frontend.png` (по возможности) и макетами ТЗ §7/§28.
+> **Статус: ✅ ВЫПОЛНЕН** (`npm run build` — vue-tsc strict + vite — проходит; релевантные backend-тесты `test_character_profile.py` / `test_prompt_builder.py` / `test_context_builder.py` — 48 passed).
+
+- ✅ **Состояния**:
+  - loading загрузки аватара: `avatarBusy` + кнопка «Загрузка…» (уже с Этапа 3/5) + **новый** dim (`opacity: .55`) аватара в `CharacterProfileModal` и `PlayerSettings` при upload/delete;
+  - ошибки upload (тип/размер) и save: через toast, `ApiError.detail` от backend (`api/client.ts`) — уже работало, проверено;
+  - **unsaved-changes**: в `CharacterProfileModal` добавлен `dirty` computed с **нормализованным сравнением** (`undefined/null→''`, temperature через `Number.isFinite`, `order_index` через `?? 0`; база — `characterToForm(target)`, т.е. то же нормализующее представление, что заполняет форму → «открыл → ничего не менял → dirty=false»); подпись «Несохранённые изменения» в футере при `dirty && !saving`; «Сохранить» disabled при `!dirty || !name.trim() || saving || avatarBusy` (аватар применяется сразу, «Сохранить» — только текстовые/числовые поля); аналогичная подпись добавлена в `PlayerSettings` (кнопка уже была disabled при `!changed`);
+  - hover/focus/click: глобальный `:focus-visible` уже есть в `base.css`; локальные стили кликабельных avatar/имени/строк — с Этапов 2–4;
+  - placeholder аватара: инициалы+accent (с Этапа 1/2) + **новый** фоллбэк на placeholder при ошибке загрузки `<img>` (`@error` + сброс по `watch(imageUrl)`) в `Avatar.vue` — реальный edge case (404/удалённый файл);
+  - обрезание: `object-fit: cover` на `.avatar__img` (было).
+- ✅ Обновление всех мест после сохранения — через единый store (уже работает с Этапа 1): после `characters.update`/`uploadAvatar`/`removeAvatar` объект заменяется в массиве → списки/сообщения/панель/карточка обновляются без reload.
+- ✅ Мелкие экраны: скролл модалки (`overflow-y: auto` + **новый** `overscroll-behavior: contain` на `.modal__body` в `Modal.vue` — скролл не чейнится в страницу); верхняя часть профиля и карточка игрока в одну колонку (`@media (max-width: 640px)`, с Этапа 3/5).
+- ✅ `npm run build` (vue-tsc strict) без ошибок.
+- **Сверка с макетами:** `docs/Frontend.png` **отсутствует в репозитории** — ручная сверка по нему невозможна (зафиксировано осознанно, дизайн по памяти не восстанавливаем); визуальный QA переносится на ручную проверку по макетам ТЗ §7/§28.
+- **Открытый TODO (из Этапа 5):** паттерн upload/delete аватара дублируется в 2 местах (`CharacterProfileModal`, `PlayerSettings`) — при появлении ≥3-го места вынести общий `AvatarUploader`-компонент (preview, hidden file input, «Сменить», «Удалить», loading, error, validation). Сейчас осознанно не выносится.
 
 ---
 
@@ -245,7 +255,7 @@ Frontend: тестовой инфраструктуры нет — провер�
 | клик в Settings → тот же профиль | ✅ Этап 3 (единый модал поверх настроек) |
 | один `CharacterProfileModal`, синхронизация без reload | ✅ Этап 3 (единый модал, монтирование в `ChatView`, обновление через store без reload); точки входа сообщение/панель — frontend 4 |
 | старый frontend работает | нет правок в `app/static/` |
-| TS build проходит, backend tests проходят, нет giant-компонентов | frontend 6 + §5 |
+| TS build проходит, backend tests проходят, нет giant-компонентов | ✅ `npm run build` (vue-tsc strict) — проходит; релевантные backend-тесты (`test_character_profile.py`, `test_prompt_builder.py`, `test_context_builder.py`) — 48 passed; giant-компонентов нет (общий `CharacterFormFields` с `mode`) |
 
 ---
 
@@ -273,4 +283,4 @@ Frontend: тестовой инфраструктуры нет — провер�
 6. ✅ **Frontend 3** (CharacterProfileModal редизайн + перенос монтирования) → `npm run build` (vue-tsc strict) проходит.
 7. ✅ **Frontend 4** (три точки входа) → `npm run build` (vue-tsc strict) проходит.
 8. ✅ **Frontend 5** (Player: имя + аватар + внешность; cleanup `updatePlayerName`) → `npm run build` (vue-tsc strict) проходит.
-9. **Frontend 6** (polish + визуальная проверка) → финальный `npm run build` + `pytest`.
+9. ✅ **Frontend 6** (polish + визуальная проверка) → `npm run build` (vue-tsc strict) проходит; релевантные backend-тесты — 48 passed (полный `pytest` в этой среде не завершается: integration-тесты ждут живой backend/ollama — не связано с изменениями, backend не менялся на этапах 2–6).

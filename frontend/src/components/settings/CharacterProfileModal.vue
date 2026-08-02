@@ -47,7 +47,37 @@ watch(
   { immediate: true },
 )
 
-const canSubmit = () => form.name.trim().length > 0
+const dirty = computed(() => {
+  const c = target.value
+  if (!c) return false
+  const base = characterToForm(c)
+  const str = (a: string | null | undefined, b: string | null | undefined) =>
+    (a ?? '') !== (b ?? '')
+  const tempOf = (v: number | null | undefined) =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null
+  return (
+    str(form.name, base.name) ||
+    str(form.personality, base.personality) ||
+    str(form.traits, base.traits) ||
+    str(form.speech_style, base.speech_style) ||
+    str(form.example_messages, base.example_messages) ||
+    str(form.boundaries, base.boundaries) ||
+    str(form.background, base.background) ||
+    str(form.relationships, base.relationships) ||
+    str(form.location, base.location) ||
+    str(form.appearance, base.appearance) ||
+    tempOf(form.temperature) !== tempOf(base.temperature) ||
+    (form.order_index ?? 0) !== (base.order_index ?? 0)
+  )
+})
+
+const canSave = computed(() => {
+  if (!target.value) return false
+  if (form.name.trim().length === 0) return false
+  if (!dirty.value) return false
+  if (saving.value || avatarBusy.value) return false
+  return true
+})
 
 function close() {
   if (saving.value || avatarBusy.value) return
@@ -97,7 +127,7 @@ async function removeAvatar() {
 
 async function submit() {
   const id = ui.characterProfileId
-  if (id == null || !canSubmit() || saving.value) return
+  if (id == null || !canSave.value) return
   saving.value = true
   try {
     await characters.update(id, formToCharacterUpdate(form))
@@ -121,7 +151,13 @@ async function submit() {
     <div class="character-profile">
       <div class="character-profile__top">
         <div class="character-profile__avatar-col">
-          <Avatar :name="form.name" :image-url="form.avatar_url" size="xl" class="character-profile__avatar" />
+          <Avatar
+            :name="form.name"
+            :image-url="form.avatar_url"
+            size="xl"
+            class="character-profile__avatar"
+            :class="{ 'is-busy': avatarBusy }"
+          />
           <div class="character-profile__avatar-actions">
             <button
               class="button button--secondary"
@@ -185,12 +221,9 @@ async function submit() {
     </div>
 
     <template #footer>
+      <span v-if="dirty && !saving" class="character-profile__dirty-hint">Несохранённые изменения</span>
       <button class="button button--ghost" :disabled="saving" @click="close">Отмена</button>
-      <button
-        class="button button--primary"
-        :disabled="saving || avatarBusy || !canSubmit()"
-        @click="submit"
-      >
+      <button class="button button--primary" :disabled="!canSave" @click="submit">
         {{ saving ? 'Сохранение…' : 'Сохранить' }}
       </button>
     </template>
@@ -221,6 +254,18 @@ async function submit() {
 .character-profile__avatar-actions {
   display: flex;
   gap: var(--space-2);
+}
+
+.character-profile__avatar.is-busy {
+  opacity: 0.55;
+  transition: opacity var(--transition-fast);
+}
+
+.character-profile__dirty-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 .character-profile__file-input {

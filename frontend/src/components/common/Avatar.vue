@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { accentForName } from '@/utils/color'
 
 const props = withDefaults(
@@ -18,6 +18,15 @@ const props = withDefaults(
 
 const accent = computed(() => accentForName(props.name))
 
+const imgFailed = ref(false)
+
+watch(
+  () => props.imageUrl,
+  () => {
+    imgFailed.value = false
+  },
+)
+
 const initials = computed(() => {
   const parts = props.name.trim().split(/\s+/).filter(Boolean)
   if (!parts.length) return '?'
@@ -34,7 +43,13 @@ const initials = computed(() => {
     role="img"
     :aria-label="name"
   >
-    <img v-if="imageUrl" class="avatar__img" :src="imageUrl" :alt="name" />
+    <img
+      v-if="imageUrl && !imgFailed"
+      class="avatar__img"
+      :src="imageUrl"
+      :alt="name"
+      @error="imgFailed = true"
+    />
     <span v-else class="avatar__initials">{{ initials }}</span>
   </span>
 </template>
