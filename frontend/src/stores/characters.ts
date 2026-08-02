@@ -124,20 +124,6 @@ export const useCharactersStore = defineStore('characters', () => {
     }
   }
 
-  async function updatePlayerName(name: string) {
-    mutating.value = true
-    try {
-      const target = player.value
-      if (!target) throw new Error('Игрок не найден')
-      const updated = await api.updatePlayerName(target.chat_id, name)
-      const index = characters.value.findIndex((c) => c.id === updated.id)
-      if (index !== -1) characters.value[index] = updated
-      return updated
-    } finally {
-      mutating.value = false
-    }
-  }
-
   async function uploadAvatar(characterId: number, file: File) {
     mutating.value = true
     try {
@@ -193,7 +179,6 @@ export const useCharactersStore = defineStore('characters', () => {
     create,
     update,
     remove,
-    updatePlayerName,
     uploadAvatar,
     removeAvatar,
     reset,

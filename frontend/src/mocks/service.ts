@@ -240,13 +240,6 @@ export const mockApi: Api = {
     throw new Error('Персонаж не найден')
   },
 
-  updatePlayerName(chatId: number, name: string): Promise<Character> {
-    const player = (mockCharacters[chatId] ?? []).find((c) => c.is_player)
-    if (!player) throw new Error('Игрок не найден')
-    player.name = name
-    return delay(clone(player))
-  },
-
   fetchMemories(characterId: number): Promise<Memory[]> {
     return delay(clone(mockMemories[characterId] ?? []))
   },

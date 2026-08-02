@@ -1,6 +1,6 @@
 # План внедрения: Character Profile, аватарки и внешность (docs/Profile.docx)
 
-> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 3 (Frontend: единый CharacterProfileModal) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 4 (Frontend: три точки входа) — ВЫПОЛНЕН** (см. §4). Frontend-этапы 5–6 — ещё не начаты.
+> **Статус:** ✅ **Этап A (Backend: поля модели, схема, миграция) — ВЫПОЛНЕН** (см. §3). ✅ **Этап B (Backend: avatar storage/upload/валидация) — ВЫПОЛНЕН** (см. §3). ✅ **Этап C (Backend: appearance в контекст) — ВЫПОЛНЕН** (см. §3). ✅ **Этап 1 (Frontend: типы/API/store/mock-синхронизация) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 2 (Frontend: Avatar-компонент) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 3 (Frontend: единый CharacterProfileModal) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 4 (Frontend: три точки входа) — ВЫПОЛНЕН** (см. §4). ✅ **Этап 5 (Frontend: Player) — ВЫПОЛНЕН** (см. §4). Frontend-этап 6 — ещё не начат.
 > **Источник ТЗ:** `docs/Profile.docx` (34 пункта, 6 этапов, критерии готовности в §34).
 > **Ограничения ТЗ:** не переписывать frontend целиком, расширять существующую архитектуру, старый frontend (`app/static/`) не трогать, один `CharacterProfileModal`, единый источник истины (`CharacterStore`).
 
@@ -30,7 +30,7 @@
 | Кликабельные avatar+имя в правой панели | ✅ Этап 4 — `CharacterList.vue`: клик по строке → единый профиль; inline `CharacterDetails` сохранён как вторичный слой через кнопку-шеврон «Подробности» |
 | `appearance` в Character Context (self + для присутствующих в той же локации) | ✅ Этап C — `prompt_builder.py` `_CHARACTER_SECTIONS` += `appearance`, `build_scene_block` += `character_appearances` (только co-present), `ru.json` `section_tags.appearance`, `ContextBuilder.build` += `character_appearances`, `chat_engine.py:558/1924` передают map |
 | Диапазон `temperature` в backend-схеме | ✅ Этап A — `ge=0.0, le=2.0` в `CharacterBase`/`CharacterUpdate` (`schemas.py`); фронт использует 0–2 |
-| Player: редактирование имени + аватар + внешность | Частично — `PlayerSettings.vue` редактирует только имя |
+| Player: редактирование имени + аватар + внешность | ✅ Этап 5 — `PlayerSettings.vue` (карточка с аватаром xl + смена/удаление, имя + внешность, сохранение через `characters.update`/`uploadAvatar`); player — обычный `Character` |
 | Задел под будущие характеристики (отношения, память, состояние…) | Учтено архитектурой единого профиля (§31) |
 
 ### 1.3 Ключевые факты архитектуры (для решений)
@@ -195,7 +195,15 @@
 
 ### Этап 5 — Player: имя + аватар + внешность (§17)
 
-- `components/settings/PlayerSettings.vue`: большая карточка с аватаром (смена/удаление), поле «Внешность» (многострочное), имя — всё сохраняется через `characters.update` / `uploadAvatar` (player — обычный `Character` с `is_player=true`, отдельной системы не создаём).
+> **Статус: ✅ ВЫПОЛНЕН** (`npm run build` — vue-tsc strict + vite — проходит).
+
+- ✅ `components/settings/PlayerSettings.vue` — редизайн (§17); player — обычный `Character` с `is_player=true`, отдельной системы не создаётся:
+  - большая карточка: `<Avatar size="xl">` (placeholder живёт по вводимому имени) + кнопки «Сменить»/«Удалить» аватара (скрытый file-input, `accept="image/png,image/jpeg,image/webp"`; upload/delete сразу через `characters.uploadAvatar/removeAvatar` — store синхронизирует массив → карточка/сообщения/правая панель обновляются; «Удалить» — если аватар есть);
+  - поля «Имя игрока» + «Внешность» (многострочный textarea); синк с `characters.player` через watch на отдельные поля (не перезатирает несохранённый ввод при upload аватара);
+  - сохранение одной кнопкой через `characters.update(player.id, { name, appearance })` (PUT `/characters/{id}`); кнопка disabled при пустом имени / без изменений / saving / avatarBusy; тосты успех/ошибка;
+  - responsive: `@media (max-width: 640px)` — карточка в одну колонку;
+  - TODO на следующий этап: паттерн upload/delete аватара дублируется с `CharacterProfileModal` — при ≥2–3 местах вынести общий `AvatarUploader`-компонент (preview, hidden file input, «Сменить», «Удалить», loading, error, validation).
+- ✅ **Cleanup:** удалён ставший мёртвым `updatePlayerName` из фронтенда (`api/types.ts` — интерфейс `Api`, `api/index.ts` — фасад, `api/characters.ts` — реализация, `mocks/service.ts` — мок, `stores/characters.ts` — метод + export). Backend-эндпоинт `PUT /chats/{id}/player` **не тронут** (старый frontend `app/static` может его использовать).
 
 ### Этап 6 — UI polish (§6, §30, §33 Этап 6)
 
@@ -229,7 +237,7 @@ Frontend: тестовой инфраструктуры нет — провер�
 | avatar у персонажа, показ в профиле/сообщениях/списках | ✅ Этап B (backend хранилище/upload) + ✅ Этап 2 (показ аватара/placeholder во всех местах); клики — frontend 4 |
 | avatar можно изменить, отсутствующий → placeholder | ✅ Этап B (upload/delete + замена файла) + ✅ Этап 3 (UI смены/удаления в профиле, кнопки «Сменить»/«Удалить», placeholder при пустом) |
 | отдельное поле `appearance`, редактируется, сохраняется в backend | ✅ Этап A (backend); ✅ frontend 1 (типы/API/store/mocks); ✅ Этап 3 (UI-редактирование: профиль — textarea во внешности, create — многострочное поле) |
-| `appearance` игрока поддерживается | frontend 5 |
+| `appearance` игрока поддерживается | ✅ Этап 5 (редактируется и сохраняется; в Character Context попадает как у любого персонажа) |
 | `appearance` попадает в Character Context | ✅ Этап C (самостоятельно + co-present в scene-блоке) |
 | `appearance` не нарушает изоляцию | ✅ Этап C (тест) |
 | клик по avatar/имени в сообщении → профиль | ✅ Этап 4 (NPC — avatar+имя, user — аватар игрока) |
@@ -264,5 +272,5 @@ Frontend: тестовой инфраструктуры нет — провер�
 5. ✅ **Frontend 2** (Avatar component: xl/circle/avatar_url + vite-прокси `/static`) → `npm run build` (vue-tsc strict) проходит.
 6. ✅ **Frontend 3** (CharacterProfileModal редизайн + перенос монтирования) → `npm run build` (vue-tsc strict) проходит.
 7. ✅ **Frontend 4** (три точки входа) → `npm run build` (vue-tsc strict) проходит.
-8. **Frontend 5** (Player).
+8. ✅ **Frontend 5** (Player: имя + аватар + внешность; cleanup `updatePlayerName`) → `npm run build` (vue-tsc strict) проходит.
 9. **Frontend 6** (polish + визуальная проверка) → финальный `npm run build` + `pytest`.

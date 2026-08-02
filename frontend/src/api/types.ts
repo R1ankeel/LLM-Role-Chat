@@ -133,7 +133,6 @@ export interface Api {
   deleteCharacter(characterId: number): Promise<void>
   uploadCharacterAvatar(characterId: number, file: File): Promise<Character>
   deleteCharacterAvatar(characterId: number): Promise<Character>
-  updatePlayerName(chatId: number, name: string): Promise<Character>
   fetchMemories(characterId: number): Promise<Memory[]>
   fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null>
   updateCharacterLocation(characterId: number, location: string): Promise<Character>

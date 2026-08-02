@@ -26,7 +26,6 @@ export const api: Api = useMocks
       deleteCharacter: charactersApi.deleteCharacter,
       uploadCharacterAvatar: charactersApi.uploadCharacterAvatar,
       deleteCharacterAvatar: charactersApi.deleteCharacterAvatar,
-      updatePlayerName: charactersApi.updatePlayerName,
       fetchMemories: charactersApi.fetchMemories,
       fetchCharacterSummary: charactersApi.fetchCharacterSummary,
       updateCharacterLocation: charactersApi.updateCharacterLocation,

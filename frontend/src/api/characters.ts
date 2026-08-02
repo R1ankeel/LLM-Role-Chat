@@ -40,10 +40,6 @@ export function deleteCharacterAvatar(characterId: number): Promise<Character> {
   return request<Character>(`/characters/${characterId}/avatar`, { method: 'DELETE' })
 }
 
-export function updatePlayerName(chatId: number, name: string): Promise<Character> {
-  return request<Character>(`/chats/${chatId}/player`, { method: 'PUT', body: { name } })
-}
-
 export function fetchMemories(characterId: number): Promise<Memory[]> {
   return request<Memory[]>(`/characters/${characterId}/memories`)
 }
