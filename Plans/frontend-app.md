@@ -1,6 +1,6 @@
 # Новый frontend ролевого движка — план реализации
 
-> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этап 4 «Подключение backend» выполнен (2026-08-02). Этап 5 — в работе.
+> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этап 4 «Подключение backend» выполнен (2026-08-02). Этап 5 «Character / Relationship UI» выполнен (2026-08-02). Этап 6 — следующий.
 > **Дата:** 2026-08-02
 > **Ограничение:** существующий frontend (Vanilla JS SPA) НЕ удаляется, НЕ переписывается и НЕ ломается.
 
@@ -520,7 +520,7 @@ ai-roleplay-chat/frontend/
 - **Проверка:** `npm run build` (vue-tsc + vite) без ошибок; dev-сервер `:3000` отдаёт все модули (200), proxy `/api/health` работает; старый фронт `:8000` не изменялся.
 - **Визуальная проверка:** проводится вручную (сверка с `docs/Frontend.png`): читаемость и разделение типов сообщений (character / user / system / world event), accent-цвета и аватары персонажей, поведение Composer (авто-рост, Enter/Shift+Enter), индикатор генерации без «прыжков» раскладки, пустые состояния чата.
 
-### Этап 4 — Подключение backend
+### Этап 4 — Подключение backend ✅ (выполнен)
 - Реализовать полный `api/` слой + SSE-клиент; выключить mocks.
 - Реальные: список/создание/детали чатов, сообщения с пагинацией, отправка + streaming + stop, восстановление после перезагрузки, сцена, персонажи.
 - Проверка: полноценный RP-раунд через новый UI против живого backend; rate-limit и 409 отображаются корректно.
@@ -532,14 +532,35 @@ ai-roleplay-chat/frontend/
 - Store'ы переписаны на `api`: `messages` — реальный стрим с отрицательными temp-id, ошибки `rate-limit|conflict|generic`, stop = abort+POST, поллинг `generation-status` каждые 2 сек при восстановлении, regenerate/delete через API; `chats` — числовой `currentChatId`, localStorage «последний чат», модели из `fetchModels()`; `characters`/`scene` — реальные endpoints.
 - Компоненты: Composer (блокировка 409, отсчёт 429, max-height 40vh), MessageList (обновление только streaming-сообщения по отрицательному id, инлайн-карточка ошибки + «Повторить»), MessageItem (реальные regenerate/delete, disabled во время генерации), GenerationIndicator (режим восстановления), Sidebar (модели из API + предупреждение), RightPanel (mapping `custom_state`), ChatView (redirect на `/` при 404 + очистка last-chat), router (валидация числового `chatId`, редирект на последний чат).
 - `npm run build` (vue-tsc + vite) — без ошибок.
-- **Не проверено вживую (backend не был запущен):** полный RP-раунд, 429/409 в реальном UI.
+- **Живое тестирование (backend запущен, чат 8):** обнаружены и исправлены два бага —
+  1) `ChatDetail` backend отдаёт **плоским** (наследует `ChatRead`, без ключа `chat`): тип `ChatDetail` переведён на `extends Chat {characters; messages}`, `chats.openChat` ставит `currentChat.value = detail`, mock приведён к той же форме — иначе Composer был заблокирован (`hasChat=false`);
+  2) backend первым SSE-событием шлёт **эхо сообщения игрока** (`chat_engine.py:338`) — `onMessage` в `stores/messages.ts` теперь заменяет optimistic-копию (`role==='user'`) реальным сообщением вместо добавления дубликата (иначе игрок дублировался, боты шли под первой копией, вторая уезжала вниз).
+- **Проверено вживую:** полный RP-раунд (генерация ответов ботов через Ollama), 429/409 в реальном UI, восстановление генерации после перезагрузки, regenerate/delete в реальном UI.
 
-### Этап 5 — Character / Relationship UI
+### Этап 5 — Character / Relationship UI ✅ (выполнен)
 - Правая панель: список персонажей, детали, память, смена локации.
 - RelationshipView: граф/список метрик, issues, таймлайн пары (реальные endpoints).
 - WorldStatePanel: время/погода/присутствующие из `GET /scene`.
 - Проверка: открыть чат с несколькими персонажами, посмотреть отношения.
 - **Визуальная проверка:** иерархия правой панели (персонажи/мир/отношения) без перегруза, компактность progress-баров и badges, независимость панелей от ленты сообщений.
+
+**Выполнено (2026-08-02):**
+- **Типы**: `types/memory.ts` (Memory + категории), `types/relationship.ts` расширен — `CharacterRelationship` (+`open_issue_count`), `RelationshipEvent`, `RelationshipTimeline`, `RELATIONSHIP_TYPES`/`RELATIONSHIP_TYPE_LABELS`, `RELATIONSHIP_METRICS` (с флагом negative), `ISSUE_TYPE_LABELS`, `RELATIONSHIP_KIND_LABELS` (порт из старого `app.js`); `types/character.ts` — `CharacterSummary` по `CharacterSummaryRead`.
+- **API-слой**: `characters.ts` — `fetchMemories`, `fetchCharacterSummary` (404→null), `updateCharacterLocation` (PATCH `/characters/{id}/location`); `relationships.ts` — outgoing/incoming, pair GET/PUT, pair issues, resolve issue (POST `.../resolve`), pair timeline (пагинация limit/offset); `scene.ts` — `updatePlayerLocation` (PUT `/chats/{id}` с `player_location`); интерфейс `Api` и фасад `api/index.ts` расширены 1:1 (mocks обязательны к синхронизации).
+- **Store'ы**: новый `relationships.ts` (граф, chat-issues, outgoing/incoming выбранного персонажа с обогащением `open_issue_count` из графа, pair+issues+timeline с пагинацией «Загрузить ещё»); `characters.ts` — `selectedId/selected`, `memories`, `summary`, `selectCharacter`, `updateLocation`; `scene.ts` — `updatePlayerLocation`; `ui.ts` — `relationshipsModalOpen`.
+- **Компоненты**:
+  - `common/ProgressBar.vue` — компактный progress-бар с тонами (positive/negative/romance/accent/neutral).
+  - `characters/CharacterList.vue` — кликабельный список (Avatar+имя+badge «Игрок»+локация), активный персонаж подсвечен.
+  - `characters/CharacterDetails.vue` — большой Avatar, описание (personality/traits/background/speech_style/relationships), редактируемая локация (PATCH), сводка (`/summary`), память с категорией/важностью, кнопка «Отношения».
+  - `characters/RelationshipView.vue` — компактные направленные связи выбранного персонажа (→/←), type badge, 5 progress-баров с тонами, badge открытых issues (из графа).
+  - `characters/RelationshipGraph.vue` — SVG-граф (порт `rel-graph-view`): круговой layout, направленные рёбра со стрелками, изгиб при взаимных рёбрах, классы edge-pos/neg/rom/neu, drag-перетаскивание узлов, клик по ребру → detail.
+  - `characters/RelationshipPairDetail.vue` — метрики пары + редактирование (тип, слider'ы, описание → PUT), issues с «Решить» (с причиной), таймлайн событий (kind-бейджи, дельты, снапшот после, исходные сообщения, «Загрузить ещё»).
+  - `characters/RelationshipModal.vue` — вкладки «Граф / Список / Вопросы»; список — ручные правки метрик всех пар; вопросы — группировка по парам + сворачиваемые «Решённые».
+  - `scene/WorldStatePanel.vue` — время/погода/настроение/напряжение(progress)/цель/активные события/важные объекты + смена локации игрока (PUT `/chats/{id}`).
+- **Рефакторинг** `RightPanel.vue` → иерархия «Персонажи → (детали+отношения выбранного) → Мир → Мировые события»; `ChatHeader.vue` — кнопка «Отношения» включена; `ChatView.vue` — загрузка `relationships.loadForChat` + модалка отношений.
+- **Mocks**: `data.ts` — граф/рёбра/issues/события/память/сводки для чата 1; `service.ts` — все новые методы `Api` 1:1.
+- **Проверка**: `npm run build` (vue-tsc strict + vite) — без ошибок.
+- **Живое тестирование (backend на :8000, чат 8):** все endpoints подтверждены — memories, outgoing/incoming, pair GET/PUT, pair issues, timeline (events kind `llm`/`decay`, deltas, `after`-метрики, round_id), `PATCH /characters/{id}/location` и `PUT /chats/{id}` (player_location); `GET /characters/{id}/summary` возвращает 404 для персонажей без сводки — фронт обрабатывает как `null`.
 
 ### Этап 6 — Polish
 - Анимации появления, hover/focus, переходы drawer'ов.

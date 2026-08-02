@@ -18,6 +18,10 @@ export async function updateScene(
   return request<SceneState>(`/chats/${chatId}/scene`, { method: 'PATCH', body: patch })
 }
 
+export async function updatePlayerLocation(chatId: number, location: string): Promise<void> {
+  await request(`/chats/${chatId}`, { method: 'PUT', body: { player_location: location } })
+}
+
 export async function fetchWorldEvents(): Promise<WorldEvent[]> {
   // Backend has no dedicated world-events endpoint yet (docs/frontend-app.md §1.7).
   return []

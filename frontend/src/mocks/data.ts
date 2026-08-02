@@ -1,7 +1,14 @@
 import type { Chat, ChatListItem } from '@/types/chat'
-import type { Character } from '@/types/character'
+import type { Character, CharacterSummary } from '@/types/character'
+import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
+import type {
+  CharacterRelationship,
+  RelationshipEvent,
+  RelationshipGraph,
+  RelationshipIssue,
+} from '@/types/relationship'
 
 export const MOCK_MODELS = ['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b']
 
@@ -375,4 +382,298 @@ export function chatToListItem(chat: Chat): ChatListItem {
     last_message_at: last ? last.timestamp : null,
     created_at: chat.created_at,
   }
+}
+
+/* ── Relationships (mock) ───────────────────────────────── */
+
+function rel(
+  id: number,
+  sourceId: number,
+  targetId: number,
+  type: string,
+  affection: number,
+  trust: number,
+  attraction: number,
+  resentment: number,
+  jealousy: number,
+  description: string,
+): CharacterRelationship {
+  return {
+    id,
+    chat_id: 1,
+    source_character_id: sourceId,
+    target_character_id: targetId,
+    relationship_type: type,
+    affection,
+    trust,
+    attraction,
+    resentment,
+    jealousy,
+    description,
+    initial_description: description,
+    updated_at: '2026-08-01T18:11:00Z',
+  }
+}
+
+export const mockRelationships: Record<number, CharacterRelationship[]> = {
+  1: [
+    rel(5001, 102, 101, 'симпатия', 68, 55, 40, 5, 8, 'Alice чувствует любопытство к страннику.'),
+    rel(5002, 103, 101, 'друг', 72, 62, 10, 2, 4, 'Bob сразу проникся симпатией к Игроку.'),
+    rel(5003, 103, 102, 'знакомый', 45, 40, 15, 12, 22, 'Bob побаивается колкостей Alice.'),
+    rel(5004, 102, 103, 'друг', 60, 50, 5, 20, 30, 'Alice устала от рассеянности Bob.'),
+  ],
+  2: [],
+  3: [],
+}
+
+export const mockRelationshipGraph: Record<number, RelationshipGraph> = {
+  1: {
+    characters: [
+      { id: 101, name: 'Игрок', is_player: true, location: 'Таверна' },
+      { id: 102, name: 'Alice', is_player: false, location: 'Таверна' },
+      { id: 103, name: 'Bob', is_player: false, location: 'Таверна' },
+      { id: 104, name: 'Charlie', is_player: false, location: 'Улица' },
+    ],
+    edges: [
+      {
+        id: 5001,
+        source_character_id: 102,
+        target_character_id: 101,
+        relationship_type: 'симпатия',
+        affection: 68,
+        trust: 55,
+        attraction: 40,
+        resentment: 5,
+        jealousy: 8,
+        description: 'Alice чувствует любопытство к страннику.',
+        open_issue_count: 0,
+      },
+      {
+        id: 5002,
+        source_character_id: 103,
+        target_character_id: 101,
+        relationship_type: 'друг',
+        affection: 72,
+        trust: 62,
+        attraction: 10,
+        resentment: 2,
+        jealousy: 4,
+        description: 'Bob сразу проникся симпатией к Игроку.',
+        open_issue_count: 1,
+      },
+      {
+        id: 5003,
+        source_character_id: 103,
+        target_character_id: 102,
+        relationship_type: 'знакомый',
+        affection: 45,
+        trust: 40,
+        attraction: 15,
+        resentment: 12,
+        jealousy: 22,
+        description: 'Bob побаивается колкостей Alice.',
+        open_issue_count: 0,
+      },
+      {
+        id: 5004,
+        source_character_id: 102,
+        target_character_id: 103,
+        relationship_type: 'друг',
+        affection: 60,
+        trust: 50,
+        attraction: 5,
+        resentment: 20,
+        jealousy: 30,
+        description: 'Alice устала от рассеянности Bob.',
+        open_issue_count: 2,
+      },
+    ],
+  },
+  2: { characters: [], edges: [] },
+  3: { characters: [], edges: [] },
+}
+
+export const mockRelationshipIssues: Record<number, RelationshipIssue[]> = {
+  1: [
+    {
+      id: 6001,
+      relationship_id: 5002,
+      issue_type: 'unfulfilled_request',
+      text: 'Bob пообещал достать реагенты, но забыл про это.',
+      importance: 7,
+      state: 'open',
+      created_at: '2026-08-01T18:08:00Z',
+      resolved_at: null,
+      source_character_id: 103,
+      target_character_id: 101,
+      source_name: 'Bob',
+      target_name: 'Игрок',
+      rounds_since_last_mention: 2,
+    },
+    {
+      id: 6002,
+      relationship_id: 5004,
+      issue_type: 'broken_promise',
+      text: 'Alice пообещала прикрыть Bob на лекции, но не пришла.',
+      importance: 5,
+      state: 'open',
+      created_at: '2026-08-01T18:09:00Z',
+      resolved_at: null,
+      source_character_id: 102,
+      target_character_id: 103,
+      source_name: 'Alice',
+      target_name: 'Bob',
+      rounds_since_last_mention: 1,
+    },
+    {
+      id: 6003,
+      relationship_id: 5004,
+      issue_type: 'suspicion',
+      text: 'Alice подозревает, что Bob что-то скрывает насчёт Холодной башни.',
+      importance: 4,
+      state: 'open',
+      created_at: '2026-08-01T18:10:00Z',
+      resolved_at: null,
+      source_character_id: 102,
+      target_character_id: 103,
+      source_name: 'Alice',
+      target_name: 'Bob',
+      rounds_since_last_mention: 0,
+    },
+  ],
+  2: [],
+  3: [],
+}
+
+export const mockRelationshipEvents: Record<number, RelationshipEvent[]> = {
+  1: [
+    {
+      id: 7001,
+      relationship_id: 5002,
+      kind: 'llm',
+      description: 'Bob с воодушевлением согласился присоединиться к походу.',
+      reason: 'Игрок предложил контракт на Холодную башню, Bob обрадовался.',
+      delta_affection: 8,
+      delta_trust: 5,
+      delta_attraction: 0,
+      delta_resentment: -2,
+      delta_jealousy: 0,
+      affection_after: 72,
+      trust_after: 62,
+      attraction_after: 10,
+      resentment_after: 2,
+      jealousy_after: 4,
+      importance: 6,
+      round_id: 'r1-m1007',
+      timestamp: '2026-08-01T18:11:00Z',
+      source_messages: [
+        { id: 1007, role: 'user', content: 'Договорились. Собираемся у ворот на рассвете.', timestamp: '2026-08-01T18:11:00Z' },
+      ],
+    },
+    {
+      id: 7002,
+      relationship_id: 5002,
+      kind: 'decay',
+      description: 'Небольшое затухание привязанности без взаимодействия.',
+      reason: '',
+      delta_affection: -2,
+      delta_trust: -1,
+      delta_attraction: 0,
+      delta_resentment: 0,
+      delta_jealousy: 0,
+      affection_after: 70,
+      trust_after: 61,
+      attraction_after: 10,
+      resentment_after: 2,
+      jealousy_after: 4,
+      importance: 1,
+      round_id: 'r1-m1008',
+      timestamp: '2026-08-01T18:15:00Z',
+      source_messages: [],
+    },
+    {
+      id: 7003,
+      relationship_id: 5004,
+      kind: 'llm',
+      description: 'Alice иронизирует про навыки Bob и подкалывает его.',
+      reason: 'Bob хвастался знаниями о башне, Alice недоверчива.',
+      delta_affection: -3,
+      delta_trust: -4,
+      delta_attraction: 0,
+      delta_resentment: 6,
+      delta_jealousy: 3,
+      affection_after: 57,
+      trust_after: 46,
+      attraction_after: 5,
+      resentment_after: 26,
+      jealousy_after: 33,
+      importance: 5,
+      round_id: 'r1-m1006',
+      timestamp: '2026-08-01T18:10:00Z',
+      source_messages: [
+        { id: 1006, role: 'character', content: 'Три человека и запертая башня. Звучит как начало плохой шутки.', timestamp: '2026-08-01T18:10:00Z' },
+      ],
+    },
+  ],
+  2: [],
+  3: [],
+}
+
+export const mockMemories: Record<number, Memory[]> = {
+  102: [
+    {
+      id: 8001,
+      chat_id: 1,
+      character_id: 102,
+      content: 'Игрок прибыл в таверну с предложением контракта на Холодную башню.',
+      importance: 0.8,
+      category: 'событие',
+      created_at: '2026-08-01T18:07:00Z',
+      last_accessed_at: '2026-08-01T18:10:00Z',
+      source_message_ids: [1003],
+    },
+    {
+      id: 8002,
+      chat_id: 1,
+      character_id: 102,
+      content: 'Bob хвастался, что читал о Холодной башне — возможный источник информации.',
+      importance: 0.6,
+      category: 'отношения',
+      created_at: '2026-08-01T18:08:00Z',
+      last_accessed_at: null,
+      source_message_ids: [1004],
+    },
+  ],
+  103: [
+    {
+      id: 8003,
+      chat_id: 1,
+      character_id: 103,
+      content: 'У меня закончились взрывоопасные компоненты — надо пополнить запасы.',
+      importance: 0.7,
+      category: 'другое',
+      created_at: '2026-08-01T18:08:00Z',
+      last_accessed_at: null,
+      source_message_ids: [1004],
+    },
+  ],
+}
+
+export const mockSummaries: Record<number, CharacterSummary> = {
+  102: {
+    id: 1,
+    chat_id: 1,
+    character_id: 102,
+    content: 'Бывшая наёмница, присматривается к новому страннику. Заинтересована в оплачиваемом деле, но относится с иронией к громким историям.',
+    through_message_id: 1006,
+    updated_at: '2026-08-01T18:10:00Z',
+  },
+  103: {
+    id: 2,
+    chat_id: 1,
+    character_id: 103,
+    content: 'Маг-недоучка, полный энтузиазма относительно похода к Холодной башне. Собирается присоединиться к отряду.',
+    through_message_id: 1007,
+    updated_at: '2026-08-01T18:11:00Z',
+  },
 }

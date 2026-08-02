@@ -15,3 +15,13 @@ export interface Character {
   is_player: boolean
   created_at: string
 }
+
+/** GET /characters/{id}/summary */
+export interface CharacterSummary {
+  id: number
+  chat_id: number
+  character_id: number
+  content: string
+  through_message_id: number
+  updated_at: string
+}

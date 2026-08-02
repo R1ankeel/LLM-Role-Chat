@@ -18,6 +18,10 @@ export const api: Api = useMocks
       renameChat: chatsApi.renameChat,
       deleteChat: chatsApi.deleteChat,
       fetchCharacters: charactersApi.fetchCharacters,
+      fetchMemories: charactersApi.fetchMemories,
+      fetchCharacterSummary: charactersApi.fetchCharacterSummary,
+      updateCharacterLocation: charactersApi.updateCharacterLocation,
+      updatePlayerLocation: sceneApi.updatePlayerLocation,
       fetchMessages: messagesApi.fetchMessages,
       fetchScene: sceneApi.fetchScene,
       fetchWorldEvents: sceneApi.fetchWorldEvents,
@@ -28,6 +32,13 @@ export const api: Api = useMocks
       deleteMessage: messagesApi.deleteMessage,
       fetchRelationshipGraph: relationshipsApi.fetchRelationshipGraph,
       fetchRelationshipIssues: relationshipsApi.fetchRelationshipIssues,
+      fetchOutgoingRelationships: relationshipsApi.fetchOutgoingRelationships,
+      fetchIncomingRelationships: relationshipsApi.fetchIncomingRelationships,
+      fetchRelationshipPair: relationshipsApi.fetchRelationshipPair,
+      updateRelationshipPair: relationshipsApi.updateRelationshipPair,
+      fetchPairIssues: relationshipsApi.fetchPairIssues,
+      resolvePairIssue: relationshipsApi.resolvePairIssue,
+      fetchPairTimeline: relationshipsApi.fetchPairTimeline,
     }
 
 export { useMocks }

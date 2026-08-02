@@ -5,10 +5,12 @@ import { useChatsStore, clearLastChat } from '@/stores/chats'
 import { useMessagesStore } from '@/stores/messages'
 import { useCharactersStore } from '@/stores/characters'
 import { useSceneStore } from '@/stores/scene'
+import { useRelationshipsStore } from '@/stores/relationships'
 import { toNumber } from '@/router'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import Composer from '@/components/chat/Composer.vue'
+import RelationshipModal from '@/components/characters/RelationshipModal.vue'
 import { useUiStore } from '@/stores/ui'
 
 const route = useRoute()
@@ -18,6 +20,7 @@ const chats = useChatsStore()
 const messages = useMessagesStore()
 const characters = useCharactersStore()
 const scene = useSceneStore()
+const relationships = useRelationshipsStore()
 
 async function openChat(id: number) {
   const detail = await chats.openChat(id)
@@ -30,6 +33,7 @@ async function openChat(id: number) {
     characters.loadForChat(id),
     messages.loadForChat(id),
     scene.loadForChat(id),
+    relationships.loadForChat(id),
   ])
 }
 
@@ -47,6 +51,7 @@ onBeforeUnmount(() => {
   messages.reset()
   characters.reset()
   scene.reset()
+  relationships.reset()
   chats.clearChat()
 })
 </script>
@@ -56,6 +61,7 @@ onBeforeUnmount(() => {
     <ChatHeader />
     <MessageList />
     <Composer />
+    <RelationshipModal />
   </div>
 </template>
 

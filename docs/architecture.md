@@ -61,13 +61,16 @@
    mock-стрим имитирует токены через `setTimeout`. Включаются только через `VITE_USE_MOCKS=true`.
 4. **`stores/`** — Pinia: `chats` (числовой `currentChatId`, «последний чат» в localStorage, модели),
    `messages` (реальный SSE-стрим, отрицательные temp-id, ошибки `rate-limit|conflict|generic`,
-   восстановление генерации поллингом `generation-status`), `characters`, `scene`, `ui`.
+   восстановление генерации поллингом `generation-status`), `characters` (персонажи + выбранный +
+   память/сводка + смена локации), `relationships` (граф, issues, outgoing/incoming с обогащением
+   `open_issue_count` из графа, pair + timeline с пагинацией), `scene`, `ui` (модалка отношений).
    Гигантских store нет.
 5. **`router/`** — `/` (redirect на последний чат из localStorage) и `/chat/:chatId`
    (валидация числового id, при 404 — редирект на `/`).
 6. **`components/`** — презентационные компоненты: `layout/` (AppLayout, Sidebar, MainPanel, RightPanel),
    `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView),
-   `common/` (Avatar, Badge, Modal, EmptyState).
+   `characters/` (CharacterList, CharacterDetails, RelationshipView, RelationshipGraph, RelationshipPairDetail,
+   RelationshipModal), `scene/` (WorldStatePanel), `common/` (Avatar, Badge, Modal, EmptyState, ProgressBar).
 7. **`styles/`** — дизайн-токены (CSS-переменные), base, компонентные классы.
 
 Ключевые решения:
@@ -77,6 +80,10 @@
   с отрицательным temp-id (точечное обновление в ленте), на финальный `message`-event placeholder
   заменяется реальным; `stop()` = `abort()` + POST `/stop-generation`; 429 → отсчёт в Composer,
   409 → блокировка с объяснением, пагинация `GET /messages` — fetch-all страницами по 500 (backend не менялся).
+  Два контрактных нюанса, учтённых при живой проверке:
+  - `ChatDetail` приходит **плоским** (`extends ChatRead`, без ключа `chat`) — `currentChat = detail`;
+  - backend первым SSE-событием шлёт **эхо сообщения игрока** — `onMessage` при `role==='user'`
+    заменяет optimistic-копию реальным сообщением, чтобы не было дубликата.
 - **Типы сообщений:** `character` (Avatar + accent + имя), `user` (свой стиль/выравнивание),
   `system` (центрированный блок — перемещения/смена сцены), `WorldEvent` (карточка с иконкой 🌍,
   не похожа на реплику). Лента `MessageList` объединяет сообщения и world-события по времени.

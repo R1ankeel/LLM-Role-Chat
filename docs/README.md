@@ -28,6 +28,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
   - *Context builder* — токено-ориентированная сборка контекста под лимит бюджета.
 - **Фронтенд**: одностраничное приложение (Vanilla JS), SSE-стриминг ответов, вкладки настроек, управления персонажами/памятью/сценой/отношениями.
 - **UI отношений (Sprint 4)**: модалка «Отношения» (кнопка 🕸️ в шапке чата) — граф отношений (SVG), таймлайн пары, открытые вопросы всего чата с решением, ручное редактирование (тип, метрики, описание, добавление ребра).
+- **UI отношений (новый frontend, Этап 5)**: та же функциональность в Vue — кнопка «Отношения» в шапке, модалка с вкладками «Граф / Список / Вопросы» (SVG-граф с перетаскиванием узлов, клик по ребру → детали пары: метрики, issues с «Решить», таймлайн с «Загрузить ещё»), правая панель: список персонажей → детали (описание, редактируемая локация, память, сводка) → компактные отношения выбранного персонажа, панель мира (время/погода/напряжение/цель + смена локации игрока).
 
 ## Структура репозитория
 
@@ -92,6 +93,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
   (тот же интерфейс `Api`, mock-стрим имитирует токены). По умолчанию `false` — реальный backend.
 - Производственная сборка: `vite build` → `frontend/dist/`, отдаётся статик-сервером (нужен SPA-fallback на `/chat/:id`).
 
+Замечания по контракту backend (важно для фронтенда):
+
+- `GET /api/chats/{id}` возвращает **плоский** `ChatDetail` (поля чата на верхнем уровне + `characters` + `messages`), без вложенного `chat`.
+- В SSE при отправке сообщения первым событием приходит **эхо самого сообщения игрока** (`{"type":"message",...}` с `role="user"`); фронтенд заменяет им optimistic-копию, а не добавляет дубликат.
+- Пагинация `GET /api/messages?limit&offset` — от начала без счётчика; фронтенд использует «fetch-all» страницами по 500.
+
 Запуск:
 
 ```bash
@@ -110,11 +117,12 @@ npm run preview      # локальный просмотр production-сборк
 - `mocks/` — mock-данные и mock-сервис (`data.ts`, `service.ts`), интерфейс 1:1 с `api/`;
 - `stores/` — Pinia: `chats` (числовой `currentChatId`, «последний чат» в localStorage), `messages`
   (реальный SSE-стрим, отрицательные temp-id, ошибки rate-limit/conflict, восстановление генерации),
-  `characters`, `scene`, `ui`;
+  `characters` (выбранный персонаж, память/сводка, смена локации), `relationships` (граф, issues,
+  outgoing/incoming, таймлайн пары), `scene`, `ui`;
 - `router/` — маршруты: `/` (redirect на последний чат) и `/chat/:chatId` (валидация числового id);
-- `components/` — `layout/` (AppLayout, Sidebar, MainPanel, RightPanel), `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView), `common/` (Avatar, Badge, Modal, EmptyState);
+- `components/` — `layout/` (AppLayout, Sidebar, MainPanel, RightPanel), `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView), `characters/` (CharacterList, CharacterDetails, RelationshipView, RelationshipGraph, RelationshipPairDetail, RelationshipModal), `scene/` (WorldStatePanel), `common/` (Avatar, Badge, Modal, EmptyState, ProgressBar);
 - `composables/` — `useViewport.ts` (desktop/tablet/mobile);
-- `utils/color.ts` — детерминированные accent-цвета персонажей;
+- `utils/color.ts` — детерминированные accent-цвета персонажей; `utils/format.ts` — форматирование дат/времени;
 - `styles/` — дизайн-токены, базовые стили, компонентные классы.
 
 Актуальное состояние по этапам — в [`Plans/frontend-app.md`](../Plans/frontend-app.md).

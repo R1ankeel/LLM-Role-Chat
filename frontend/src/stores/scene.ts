@@ -8,6 +8,7 @@ export const useSceneStore = defineStore('scene', () => {
   const scene = ref<SceneState | null>(null)
   const worldEvents = ref<WorldEvent[]>([])
   const loading = ref(false)
+  const locationSaving = ref(false)
 
   async function loadForChat(chatId: number) {
     loading.value = true
@@ -23,10 +24,20 @@ export const useSceneStore = defineStore('scene', () => {
     worldEvents.value.unshift(event)
   }
 
+  async function updatePlayerLocation(chatId: number, location: string) {
+    locationSaving.value = true
+    try {
+      await api.updatePlayerLocation(chatId, location)
+      if (scene.value) scene.value.player_location = location
+    } finally {
+      locationSaving.value = false
+    }
+  }
+
   function reset() {
     scene.value = null
     worldEvents.value = []
   }
 
-  return { scene, worldEvents, loading, loadForChat, injectEvent, reset }
+  return { scene, worldEvents, loading, locationSaving, loadForChat, injectEvent, updatePlayerLocation, reset }
 })

@@ -1,7 +1,14 @@
 import type { Chat, ChatListItem } from '@/types/chat'
-import type { Character } from '@/types/character'
+import type { Character, CharacterSummary } from '@/types/character'
+import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
+import type {
+  CharacterRelationship,
+  RelationshipGraph,
+  RelationshipIssue,
+  RelationshipTimeline,
+} from '@/types/relationship'
 import type { MessageStream } from '@/api/sse'
 import type { ApiError } from '@/api/client'
 import type {
@@ -10,14 +17,23 @@ import type {
   CreateChatInput,
   MessagesPage,
   ModelsResponse,
+  RelationshipIssueState,
+  RelationshipUpdateInput,
+  TimelinePage,
 } from '@/api/types'
 import {
   MOCK_MODELS as mockModels,
   chatToListItem,
   mockCharacters,
   mockChats,
+  mockMemories,
   mockMessages,
+  mockRelationshipEvents,
+  mockRelationshipGraph,
+  mockRelationshipIssues,
+  mockRelationships,
   mockScene,
+  mockSummaries,
   mockWorldEvents,
 } from '@/mocks/data'
 
@@ -134,6 +150,32 @@ export const mockApi: Api = {
 
   fetchCharacters(chatId: number, _includePlayer?: boolean): Promise<Character[]> {
     return delay(clone(mockCharacters[chatId] ?? []))
+  },
+
+  fetchMemories(characterId: number): Promise<Memory[]> {
+    return delay(clone(mockMemories[characterId] ?? []))
+  },
+
+  fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null> {
+    return delay(clone(mockSummaries[characterId] ?? null))
+  },
+
+  updateCharacterLocation(characterId: number, location: string): Promise<Character> {
+    for (const list of Object.values(mockCharacters)) {
+      const char = list.find((c) => c.id === characterId)
+      if (char) {
+        char.location = location
+        return delay(clone(char))
+      }
+    }
+    return delay(clone(mockCharacters[1]?.[0] ?? {} as Character))
+  },
+
+  updatePlayerLocation(chatId: number, location: string): Promise<void> {
+    const chat = mockChats.find((c) => c.id === chatId)
+    if (chat) chat.player_location = location
+    if (mockScene[chatId]) mockScene[chatId].player_location = location
+    return delay(undefined)
   },
 
   fetchMessages(chatId: number, page?: MessagesPage): Promise<Message[]> {
@@ -284,14 +326,146 @@ export const mockApi: Api = {
     return delay(undefined)
   },
 
-  fetchRelationshipGraph(_chatId: number): Promise<import('@/types/relationship').RelationshipGraph> {
-    return delay({ characters: [], edges: [] })
+  fetchRelationshipGraph(chatId: number): Promise<RelationshipGraph> {
+    return delay(clone(mockRelationshipGraph[chatId] ?? { characters: [], edges: [] }))
   },
 
   fetchRelationshipIssues(
-    _chatId: number,
-    _state?: 'open' | 'resolved' | 'all',
-  ): Promise<import('@/types/relationship').RelationshipIssue[]> {
-    return delay([])
+    chatId: number,
+    state: RelationshipIssueState = 'open',
+  ): Promise<RelationshipIssue[]> {
+    const all = mockRelationshipIssues[chatId] ?? []
+    if (state === 'all') return delay(clone(all))
+    return delay(clone(all.filter((i) => i.state === state)))
+  },
+
+  fetchOutgoingRelationships(
+    chatId: number,
+    characterId: number,
+  ): Promise<CharacterRelationship[]> {
+    const all = mockRelationships[chatId] ?? []
+    return delay(clone(all.filter((r) => r.source_character_id === characterId)))
+  },
+
+  fetchIncomingRelationships(
+    chatId: number,
+    characterId: number,
+  ): Promise<CharacterRelationship[]> {
+    const all = mockRelationships[chatId] ?? []
+    return delay(clone(all.filter((r) => r.target_character_id === characterId)))
+  },
+
+  fetchRelationshipPair(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+  ): Promise<CharacterRelationship | null> {
+    const rel = (mockRelationships[chatId] ?? []).find(
+      (r) => r.source_character_id === sourceId && r.target_character_id === targetId,
+    )
+    return delay(clone(rel ?? null))
+  },
+
+  updateRelationshipPair(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    input: RelationshipUpdateInput,
+  ): Promise<CharacterRelationship> {
+    const list = (mockRelationships[chatId] ??= [])
+    let rel = list.find(
+      (r) => r.source_character_id === sourceId && r.target_character_id === targetId,
+    )
+    if (!rel) {
+      rel = {
+        id: nextId(),
+        chat_id: chatId,
+        source_character_id: sourceId,
+        target_character_id: targetId,
+        relationship_type: 'нейтральное',
+        affection: 50,
+        trust: 50,
+        attraction: 0,
+        resentment: 0,
+        jealousy: 0,
+        description: '',
+        initial_description: '',
+        updated_at: nowIso(),
+      }
+      list.push(rel)
+    }
+    if (input.relationship_type != null) rel.relationship_type = input.relationship_type
+    if (input.affection != null) rel.affection = input.affection
+    if (input.trust != null) rel.trust = input.trust
+    if (input.attraction != null) rel.attraction = input.attraction
+    if (input.resentment != null) rel.resentment = input.resentment
+    if (input.jealousy != null) rel.jealousy = input.jealousy
+    if (input.description != null) rel.description = input.description
+    rel.updated_at = nowIso()
+    return delay(clone(rel))
+  },
+
+  fetchPairIssues(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    state: RelationshipIssueState = 'open',
+  ): Promise<RelationshipIssue[]> {
+    const rel = (mockRelationships[chatId] ?? []).find(
+      (r) => r.source_character_id === sourceId && r.target_character_id === targetId,
+    )
+    if (!rel) return delay([])
+    const all = (mockRelationshipIssues[chatId] ?? []).filter((i) => i.relationship_id === rel.id)
+    if (state === 'all') return delay(clone(all))
+    return delay(clone(all.filter((i) => i.state === state)))
+  },
+
+  resolvePairIssue(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    issueId: number,
+    _reason = '',
+  ): Promise<RelationshipIssue> {
+    const rel = (mockRelationships[chatId] ?? []).find(
+      (r) => r.source_character_id === sourceId && r.target_character_id === targetId,
+    )
+    const issue = (mockRelationshipIssues[chatId] ?? []).find(
+      (i) => i.id === issueId && (!rel || i.relationship_id === rel.id),
+    )
+    if (issue) {
+      issue.state = 'resolved'
+      issue.resolved_at = nowIso()
+    }
+    return delay(clone(issue ?? { id: issueId } as RelationshipIssue))
+  },
+
+  fetchPairTimeline(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    page: TimelinePage = {},
+  ): Promise<RelationshipTimeline> {
+    const rel = (mockRelationships[chatId] ?? []).find(
+      (r) => r.source_character_id === sourceId && r.target_character_id === targetId,
+    )
+    const all = (mockRelationshipEvents[chatId] ?? []).filter(
+      (e) => !rel || e.relationship_id === rel.id,
+    )
+    const offset = page.offset ?? 0
+    const limit = page.limit ?? 50
+    const events = all.slice(offset, offset + limit)
+    return delay({
+      events: clone(events),
+      issues: [],
+      messages: clone(events.flatMap((e) => e.source_messages)),
+      pagination: {
+        limit,
+        offset,
+        total_events: all.length,
+        total_issues: 0,
+        total: all.length,
+      },
+    })
   },
 }

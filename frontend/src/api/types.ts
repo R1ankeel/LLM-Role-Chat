@@ -1,7 +1,13 @@
 import type { Chat, ChatListItem } from '@/types/chat'
-import type { Character } from '@/types/character'
+import type { Character, CharacterSummary } from '@/types/character'
+import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
-import type { RelationshipGraph, RelationshipIssue } from '@/types/relationship'
+import type {
+  CharacterRelationship,
+  RelationshipGraph,
+  RelationshipIssue,
+  RelationshipTimeline,
+} from '@/types/relationship'
 import type { SceneState } from '@/types/scene'
 import type { MessageStream } from '@/api/sse'
 
@@ -27,6 +33,23 @@ export interface MessagesPage {
   offset?: number
 }
 
+export type RelationshipIssueState = 'open' | 'resolved' | 'all'
+
+export interface RelationshipUpdateInput {
+  relationship_type?: string
+  affection?: number
+  trust?: number
+  attraction?: number
+  resentment?: number
+  jealousy?: number
+  description?: string
+}
+
+export interface TimelinePage {
+  limit?: number
+  offset?: number
+}
+
 export interface Api {
   fetchModels(): Promise<ModelsResponse>
   fetchChats(): Promise<ChatListItem[]>
@@ -35,6 +58,10 @@ export interface Api {
   renameChat(chatId: number, name: string): Promise<void>
   deleteChat(chatId: number): Promise<void>
   fetchCharacters(chatId: number, includePlayer?: boolean): Promise<Character[]>
+  fetchMemories(characterId: number): Promise<Memory[]>
+  fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null>
+  updateCharacterLocation(characterId: number, location: string): Promise<Character>
+  updatePlayerLocation(chatId: number, location: string): Promise<void>
   fetchMessages(chatId: number, page?: MessagesPage): Promise<Message[]>
   fetchScene(chatId: number): Promise<SceneState | null>
   fetchWorldEvents(chatId: number): Promise<WorldEvent[]>
@@ -46,6 +73,38 @@ export interface Api {
   fetchRelationshipGraph(chatId: number): Promise<RelationshipGraph>
   fetchRelationshipIssues(
     chatId: number,
-    state?: 'open' | 'resolved' | 'all',
+    state?: RelationshipIssueState,
   ): Promise<RelationshipIssue[]>
+  fetchOutgoingRelationships(chatId: number, characterId: number): Promise<CharacterRelationship[]>
+  fetchIncomingRelationships(chatId: number, characterId: number): Promise<CharacterRelationship[]>
+  fetchRelationshipPair(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+  ): Promise<CharacterRelationship | null>
+  updateRelationshipPair(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    input: RelationshipUpdateInput,
+  ): Promise<CharacterRelationship>
+  fetchPairIssues(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    state?: RelationshipIssueState,
+  ): Promise<RelationshipIssue[]>
+  resolvePairIssue(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    issueId: number,
+    reason?: string,
+  ): Promise<RelationshipIssue>
+  fetchPairTimeline(
+    chatId: number,
+    sourceId: number,
+    targetId: number,
+    page?: TimelinePage,
+  ): Promise<RelationshipTimeline>
 }

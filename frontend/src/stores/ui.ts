@@ -34,6 +34,8 @@ export const useUiStore = defineStore('ui', () => {
   const rightPanelDrawerOpen = ref(false)
   const viewport = ref<Viewport>('desktop')
 
+  const relationshipsModalOpen = ref(false)
+
   function persist() {
     localStorage.setItem(
       STORAGE_KEY,
@@ -71,9 +73,18 @@ export const useUiStore = defineStore('ui', () => {
     viewport.value = v
   }
 
+  function openRelationshipsModal() {
+    relationshipsModalOpen.value = true
+  }
+
+  function closeRelationshipsModal() {
+    relationshipsModalOpen.value = false
+  }
+
   function closeAllOverlays() {
     sidebarDrawerOpen.value = false
     rightPanelDrawerOpen.value = false
+    relationshipsModalOpen.value = false
   }
 
   return {
@@ -82,6 +93,7 @@ export const useUiStore = defineStore('ui', () => {
     sidebarDrawerOpen,
     rightPanelDrawerOpen,
     viewport,
+    relationshipsModalOpen,
     toggleSidebar,
     toggleRightPanel,
     openSidebarDrawer,
@@ -89,6 +101,8 @@ export const useUiStore = defineStore('ui', () => {
     openRightPanelDrawer,
     closeRightPanelDrawer,
     setViewport,
+    openRelationshipsModal,
+    closeRelationshipsModal,
     closeAllOverlays,
   }
 })
