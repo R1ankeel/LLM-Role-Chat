@@ -12,6 +12,8 @@ export interface Character {
   location: string
   appearance: string
   avatar_url: string
+  /** JSON-строка: {"scale", "positionX", "positionY"} или "" (docs/avatar_ui_crop_spec.md). */
+  avatar_crop: string
   temperature?: number | null
   order_index: number
   is_player: boolean
@@ -47,6 +49,7 @@ export interface CharacterForm {
   order_index: number
   appearance: string
   avatar_url: string
+  avatar_crop: string
 }
 
 export function characterToForm(character: Character): CharacterForm {
@@ -64,6 +67,7 @@ export function characterToForm(character: Character): CharacterForm {
     order_index: character.order_index,
     appearance: character.appearance,
     avatar_url: character.avatar_url,
+    avatar_crop: character.avatar_crop,
   }
 }
 
@@ -81,6 +85,7 @@ export function formToCharacterUpdate(form: CharacterForm): {
   order_index: number
   appearance: string
   avatar_url: string
+  avatar_crop: string
 } {
   return {
     name: form.name,
@@ -99,5 +104,6 @@ export function formToCharacterUpdate(form: CharacterForm): {
     order_index: form.order_index,
     appearance: form.appearance,
     avatar_url: form.avatar_url,
+    avatar_crop: form.avatar_crop,
   }
 }

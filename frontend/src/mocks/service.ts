@@ -176,6 +176,7 @@ export const mockApi: Api = {
       location: input.location ?? '',
       appearance: '',
       avatar_url: '',
+      avatar_crop: '',
       temperature: input.temperature ?? 0.8,
       order_index: input.order_index ?? list.length,
       is_player: false,
@@ -200,6 +201,7 @@ export const mockApi: Api = {
       if (patch.location != null) char.location = patch.location
       if (patch.appearance != null) char.appearance = patch.appearance
       if (patch.avatar_url != null) char.avatar_url = patch.avatar_url
+      if (patch.avatar_crop != null) char.avatar_crop = patch.avatar_crop
       if (patch.temperature != null) char.temperature = patch.temperature
       if (patch.order_index != null) char.order_index = patch.order_index
       return delay(clone(char))
@@ -223,6 +225,7 @@ export const mockApi: Api = {
       const char = list.find((c) => c.id === characterId)
       if (char) {
         char.avatar_url = `/static/avatars/${characterId}-mock.webp`
+        char.avatar_crop = ''
         return delay(clone(char))
       }
     }
@@ -234,6 +237,7 @@ export const mockApi: Api = {
       const char = list.find((c) => c.id === characterId)
       if (char) {
         char.avatar_url = ''
+        char.avatar_crop = ''
         return delay(clone(char))
       }
     }
@@ -323,6 +327,7 @@ export const mockApi: Api = {
         location: '—',
         appearance: '',
         avatar_url: '',
+        avatar_crop: '',
         order_index: 0,
         is_player: true,
         created_at: chat.created_at,

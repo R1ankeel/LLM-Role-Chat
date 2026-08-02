@@ -25,6 +25,7 @@ const form = reactive<CharacterForm>({
   order_index: 0,
   appearance: '',
   avatar_url: '',
+  avatar_crop: '',
 })
 
 const canSubmit = () => form.name.trim().length > 0

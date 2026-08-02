@@ -2,6 +2,7 @@
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { accentForName } from '@/utils/color'
+import { parseCrop } from '@/utils/avatarCrop'
 import Avatar from '@/components/common/Avatar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
@@ -63,6 +64,7 @@ function remove(characterId: number) {
         <Avatar
           :name="character.name"
           :image-url="character.avatar_url"
+          :crop="parseCrop(character.avatar_crop)"
           size="sm"
           class="character-settings__avatar"
         />

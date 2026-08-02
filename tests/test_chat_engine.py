@@ -13,6 +13,7 @@ from app import chat_engine
 from app import crud
 from app import memory_service
 from app import schemas
+from app.config import settings
 from app.schemas import RelationshipDelta
 from tests.conftest import create_characters
 
@@ -209,7 +210,11 @@ async def test_per_character_memory_extraction_called(
     ), patch(
         "app.chat_engine.ollama_client.generate",
         side_effect=fake_generate,
-    ), patch("app.database.get_session_factory", lambda: test_session_factory):
+    ), patch.object(settings, "task_queue_enabled", False), patch(
+        "app.chat_engine.AsyncSessionLocal", test_session_factory
+    ), patch(
+        "app.memory_service.AsyncSessionLocal", test_session_factory
+    ):
         async for _ in chat_engine.process_user_message_streaming(
             mock_client, db_session, chat.id, "Test message"
         ):

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { Message } from '@/types/message'
 import type { Character } from '@/types/character'
 import { accentForName } from '@/utils/color'
+import { parseCrop } from '@/utils/avatarCrop'
 import Avatar from '@/components/common/Avatar.vue'
 import { useMessagesStore } from '@/stores/messages'
 import { useCharactersStore } from '@/stores/characters'
@@ -25,6 +26,8 @@ const ui = useUiStore()
 
 const authorName = computed(() => props.character?.name ?? 'Неизвестный')
 const authorAccent = computed(() => accentForName(authorName.value))
+const authorCrop = computed(() => parseCrop(props.character?.avatar_crop))
+const playerCrop = computed(() => parseCrop(characters.player?.avatar_crop))
 const location = computed(() => props.message.location?.trim() || '')
 const timeLabel = computed(() => formatTime(props.message.timestamp))
 
@@ -57,26 +60,19 @@ function onDelete() {
     <template v-if="message.role === 'character'">
       <button
         v-if="props.character"
-        class="message-item__avatar-btn"
+        class="message-item__avatar-btn message-item__avatar-btn--author"
         title="Открыть профиль"
-        aria-label="Открыть профиль персонажа"
+        aria-label="Открыть профиль"
         @click="openAuthorProfile(props.character.id)"
       >
         <Avatar
           :name="authorName"
           :image-url="props.character.avatar_url"
-          size="sm"
+          :crop="authorCrop"
+          size="lg"
           shape="circle"
-          class="message-item__avatar"
         />
       </button>
-      <Avatar
-        v-else
-        :name="authorName"
-        size="sm"
-        shape="circle"
-        class="message-item__avatar"
-      />
       <div class="message-item__body">
         <div class="message-item__meta">
           <button
@@ -86,10 +82,10 @@ function onDelete() {
             title="Открыть профиль"
             @click="openAuthorProfile(props.character.id)"
           >
-            {{ authorName }}
+            <span class="message-item__author-name">{{ authorName }}</span>
           </button>
           <span v-else class="message-item__author" :style="{ color: authorAccent }">
-            {{ authorName }}
+            <span class="message-item__author-name">{{ authorName }}</span>
           </span>
           <span v-if="location" class="message-item__location" :title="location">
             {{ location }}
@@ -147,6 +143,7 @@ function onDelete() {
         <Avatar
           :name="characters.player.name"
           :image-url="characters.player.avatar_url"
+          :crop="playerCrop"
           size="sm"
           shape="circle"
           class="message-item__avatar"
@@ -167,6 +164,7 @@ function onDelete() {
 .message-item {
   display: flex;
   gap: var(--space-3);
+  align-items: flex-start;
   max-width: 76ch;
   animation: message-in var(--transition-base);
 }
@@ -201,6 +199,10 @@ function onDelete() {
   cursor: pointer;
 }
 
+.message-item__avatar-btn--author {
+  flex-shrink: 0;
+}
+
 .message-item__avatar-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -219,14 +221,21 @@ function onDelete() {
 
 .message-item__meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
   margin-bottom: 2px;
 }
 
 .message-item__author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--text-sm);
   font-weight: 600;
+}
+
+.message-item__author-name {
+  white-space: nowrap;
 }
 
 button.message-item__author {

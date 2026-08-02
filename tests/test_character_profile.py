@@ -65,6 +65,7 @@ class TestCharacterProfileFields:
                     "name": "Alice",
                     "appearance": "Tall, red hair",
                     "avatar_url": "/static/avatars/evil.png",
+                    "avatar_crop": '{"scale": 2, "positionX": 0.5, "positionY": -0.5}',
                 },
             )
             assert resp.status_code == 201
@@ -72,6 +73,8 @@ class TestCharacterProfileFields:
             assert data["appearance"] == "Tall, red hair"
             # avatar_url при создании не задаётся (только через upload endpoint)
             assert data["avatar_url"] == ""
+            # avatar_crop тоже задаётся только вместе с файлом аватара
+            assert data["avatar_crop"] == ""
 
     async def test_update_appearance_persists(self, db_engine):
         session_factory = async_sessionmaker(
@@ -134,6 +137,63 @@ class TestCharacterProfileFields:
             )
             assert resp.status_code == 200
             assert resp.json()["temperature"] == 1.35
+
+    async def test_update_avatar_crop_persists(self, db_engine):
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+        crop_json = '{"scale": 1.5, "positionX": 0.25, "positionY": -0.75}'
+
+        async with await _make_client(session_factory) as client:
+            resp = await client.put(
+                f"/characters/{char_id}", json={"avatar_crop": crop_json}
+            )
+            assert resp.status_code == 200
+            assert resp.json()["avatar_crop"] == crop_json
+
+        async with session_factory() as db:
+            fresh = await crud.get_character(db, char_id)
+            assert fresh.avatar_crop == crop_json
+
+    async def test_update_avatar_crop_invalid_rejected(self, db_engine):
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+
+        bad_crops = [
+            "not json",
+            '{"scale": 2}',
+            '{"scale": 0.5, "positionX": 0, "positionY": 0}',
+            '{"scale": 9, "positionX": 0, "positionY": 0}',
+            '{"scale": 1, "positionX": 1.5, "positionY": 0}',
+            '[1, 2, 3]',
+        ]
+        async with await _make_client(session_factory) as client:
+            for crop in bad_crops:
+                resp = await client.put(
+                    f"/characters/{char_id}", json={"avatar_crop": crop}
+                )
+                assert resp.status_code == 422, f"avatar_crop={crop}"
+
+    async def test_update_avatar_crop_clear(self, db_engine):
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+        crop_json = '{"scale": 1.5, "positionX": 0, "positionY": 0}'
+
+        async with await _make_client(session_factory) as client:
+            set_resp = await client.put(
+                f"/characters/{char_id}", json={"avatar_crop": crop_json}
+            )
+            assert set_resp.status_code == 200
+            clear_resp = await client.put(
+                f"/characters/{char_id}", json={"avatar_crop": ""}
+            )
+            assert clear_resp.status_code == 200
+            assert clear_resp.json()["avatar_crop"] == ""
 
 
 def _make_image_bytes(size=(120, 80), color=(200, 30, 30), fmt="PNG") -> bytes:
@@ -246,6 +306,52 @@ class TestCharacterAvatar:
             files = _avatar_files(tmp_path, char_id)
             assert len(files) == 1
             assert files[0].name != first_file.name
+
+    async def test_upload_avatar_resets_crop(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+        crop_json = '{"scale": 1.5, "positionX": 0, "positionY": 0}'
+
+        async with await _make_client(session_factory) as client:
+            set_resp = await client.put(
+                f"/characters/{char_id}", json={"avatar_crop": crop_json}
+            )
+            assert set_resp.status_code == 200
+
+            resp = await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("avatar.png", _make_image_bytes(), "image/png")},
+            )
+            assert resp.status_code == 200, resp.text
+            # Новый файл получает собственные параметры кадрирования: старые сброшены
+            assert resp.json()["avatar_crop"] == ""
+
+    async def test_delete_avatar_resets_crop(self, db_engine, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))
+        session_factory = async_sessionmaker(
+            db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+        )
+        chat_id, char_id = await _chat_and_character(db_engine)
+        crop_json = '{"scale": 1.5, "positionX": 0, "positionY": 0}'
+
+        async with await _make_client(session_factory) as client:
+            await client.post(
+                f"/characters/{char_id}/avatar",
+                files={"file": ("avatar.png", _make_image_bytes(), "image/png")},
+            )
+            set_resp = await client.put(
+                f"/characters/{char_id}", json={"avatar_crop": crop_json}
+            )
+            assert set_resp.status_code == 200
+
+            resp = await client.delete(f"/characters/{char_id}/avatar")
+            assert resp.status_code == 200
+            assert resp.json()["avatar_url"] == ""
+            assert resp.json()["avatar_crop"] == ""
+            assert _avatar_files(tmp_path, char_id) == []
 
     async def test_delete_avatar_removes_file_and_url(self, db_engine, tmp_path, monkeypatch):
         monkeypatch.setattr(settings, "avatar_dir", str(tmp_path))

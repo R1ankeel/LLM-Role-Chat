@@ -110,8 +110,9 @@ async def upload_character_avatar(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
+    # Новый файл получает собственные параметры кадрирования: старые сбрасываются
     return await crud.update_character(
-        db, character_id, schemas.CharacterUpdate(avatar_url=avatar_url)
+        db, character_id, schemas.CharacterUpdate(avatar_url=avatar_url, avatar_crop="")
     )
 
 
@@ -128,7 +129,7 @@ async def delete_character_avatar(
         )
     avatar_service.remove_avatar(character_id)
     return await crud.update_character(
-        db, character_id, schemas.CharacterUpdate(avatar_url="")
+        db, character_id, schemas.CharacterUpdate(avatar_url="", avatar_crop="")
     )
 
 

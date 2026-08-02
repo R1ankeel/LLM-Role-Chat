@@ -59,6 +59,7 @@ export interface CharacterUpdateInput {
   location?: string
   appearance?: string
   avatar_url?: string
+  avatar_crop?: string
   temperature?: number | null
   order_index?: number
 }

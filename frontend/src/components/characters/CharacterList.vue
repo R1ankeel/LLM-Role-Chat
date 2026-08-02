@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { accentForName } from '@/utils/color'
+import { parseCrop } from '@/utils/avatarCrop'
 import Avatar from '@/components/common/Avatar.vue'
 import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -67,6 +68,7 @@ function showDetails(id: number) {
         <Avatar
           :name="character.name"
           :image-url="character.avatar_url"
+          :crop="parseCrop(character.avatar_crop)"
           size="sm"
           class="character-row__avatar"
         />

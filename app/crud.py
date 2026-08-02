@@ -117,6 +117,7 @@ async def create_character(
     char_data.pop("is_player", None)  # prevent setting is_player from API
     # avatar грузится только через upload endpoint, а не при создании
     char_data.pop("avatar_url", None)
+    char_data.pop("avatar_crop", None)
     db_character = models.Character(chat_id=chat_id, **char_data)
     db.add(db_character)
     await db.commit()

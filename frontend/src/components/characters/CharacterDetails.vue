@@ -4,6 +4,7 @@ import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { useRelationshipsStore } from '@/stores/relationships'
 import { accentForName } from '@/utils/color'
+import { parseCrop } from '@/utils/avatarCrop'
 import { formatDateTime } from '@/utils/format'
 import { memoryCategoryLabel } from '@/types/memory'
 import Avatar from '@/components/common/Avatar.vue'
@@ -87,7 +88,7 @@ function focusLocation() {
     </button>
 
     <header class="character-details__header">
-      <Avatar :name="selected.name" :image-url="selected.avatar_url" size="lg" />
+      <Avatar :name="selected.name" :image-url="selected.avatar_url" :crop="parseCrop(selected.avatar_crop)" size="lg" />
       <div class="character-details__heading">
         <h3 class="character-details__name" :style="{ color: accent }">{{ selected.name }}</h3>
         <div class="character-details__badges">

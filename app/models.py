@@ -75,6 +75,10 @@ class Character(Base):
     relationships: Mapped[str] = mapped_column(Text, default="")
     appearance: Mapped[str] = mapped_column(Text, default="")
     avatar_url: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    # JSON: {"scale": number, "positionX": number, "positionY": number} —
+    # параметры кадрирования аватара (docs/avatar_ui_crop_spec.md §4).
+    # Пустая строка = кадрирование не задано (стандартное object-fit: cover).
+    avatar_crop: Mapped[str] = mapped_column(Text, default="", nullable=False)
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
     order_index: Mapped[int] = mapped_column(Integer, default=0)

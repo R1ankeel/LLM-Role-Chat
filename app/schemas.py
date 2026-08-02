@@ -93,6 +93,40 @@ class ChatRead(ChatBase):
 
 
 # ---------------------------- Character ----------------------------
+def _validate_avatar_crop(value: object) -> str:
+    """Валидация JSON-параметров кадрирования аватара.
+
+    Допускается пустая строка (кадрирование не задано) либо JSON-объект
+    вида {"scale": 1..8, "positionX": -1..1, "positionY": -1..1}.
+    """
+    import json
+
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value)
+    text = str(value).strip()
+    if text == "":
+        return ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("avatar_crop должен быть валидным JSON") from exc
+    if not isinstance(data, dict):
+        raise ValueError("avatar_crop должен быть JSON-объектом")
+    for key in ("scale", "positionX", "positionY"):
+        if key not in data:
+            raise ValueError(f"avatar_crop: отсутствует ключ '{key}'")
+    scale = data.get("scale")
+    if not isinstance(scale, (int, float)) or not (1.0 <= float(scale) <= 8.0):
+        raise ValueError("avatar_crop.scale должен быть числом от 1 до 8")
+    for key in ("positionX", "positionY"):
+        pos = data.get(key)
+        if not isinstance(pos, (int, float)) or not (-1.0 <= float(pos) <= 1.0):
+            raise ValueError(f"avatar_crop.{key} должен быть числом от -1 до 1")
+    return text
+
+
 class CharacterBase(BaseModel):
     name: str
     personality: str = ""
@@ -104,6 +138,7 @@ class CharacterBase(BaseModel):
     relationships: str = ""
     appearance: str = ""
     avatar_url: str = ""
+    avatar_crop: str = ""
     location: str = ""
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     order_index: int = 0
@@ -138,10 +173,18 @@ class CharacterUpdate(BaseModel):
     relationships: Optional[str] = None
     appearance: Optional[str] = None
     avatar_url: Optional[str] = None
+    avatar_crop: Optional[str] = None
     location: Optional[str] = None
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     order_index: Optional[int] = None
     is_player: Optional[bool] = None
+
+    @field_validator("avatar_crop", mode="before")
+    @classmethod
+    def _avatar_crop(cls, value: object) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_avatar_crop(value)
 
 
 class CharacterRead(CharacterBase):

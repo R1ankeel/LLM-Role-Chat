@@ -3,7 +3,10 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { characterToForm, formToCharacterUpdate, type CharacterForm } from '@/types/character'
+import type { AvatarCrop } from '@/utils/avatarCrop'
+import { parseCrop, serializeCrop } from '@/utils/avatarCrop'
 import Avatar from '@/components/common/Avatar.vue'
+import AvatarCropEditor from '@/components/settings/AvatarCropEditor.vue'
 import Badge from '@/components/common/Badge.vue'
 import Modal from '@/components/common/Modal.vue'
 import CharacterFormFields from '@/components/settings/CharacterFormFields.vue'
@@ -14,6 +17,9 @@ const ui = useUiStore()
 const saving = ref(false)
 const avatarBusy = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const cropEditor = ref<{ file: File; objectUrl: string; initialCrop: AvatarCrop | null } | null>(
+  null,
+)
 
 const target = computed(() =>
   ui.characterProfileId != null ? characters.getById(ui.characterProfileId) : null,
@@ -33,7 +39,10 @@ const form = reactive<CharacterForm>({
   order_index: 0,
   appearance: '',
   avatar_url: '',
+  avatar_crop: '',
 })
+
+const avatarCrop = computed(() => parseCrop(form.avatar_crop))
 
 watch(
   () => ui.characterProfileId,
@@ -98,15 +107,41 @@ async function onFileChange(e: Event) {
   input.value = ''
   const id = ui.characterProfileId
   if (!file || id == null || avatarBusy.value) return
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+    ui.toast('Поддерживаются изображения PNG, JPEG, WebP.', 'error')
+    return
+  }
+  // Сначала открывается редактор кадрирования; файл загружается после «Сохранить».
+  cropEditor.value = {
+    file,
+    objectUrl: URL.createObjectURL(file),
+    initialCrop: null,
+  }
+}
+
+function closeCropEditor() {
+  const editor = cropEditor.value
+  cropEditor.value = null
+  if (editor) URL.revokeObjectURL(editor.objectUrl)
+}
+
+async function onCropSave(crop: AvatarCrop) {
+  const editor = cropEditor.value
+  const id = ui.characterProfileId
+  if (!editor || id == null || avatarBusy.value) return
   avatarBusy.value = true
   try {
-    const updated = await characters.uploadAvatar(id, file)
-    form.avatar_url = updated.avatar_url
+    const uploaded = await characters.uploadAvatar(id, editor.file)
+    const cropJson = serializeCrop(crop)
+    const updated = await characters.update(id, { avatar_crop: cropJson })
+    form.avatar_url = uploaded.avatar_url
+    form.avatar_crop = updated.avatar_crop || cropJson
     ui.toast('Аватар обновлён', 'success')
   } catch (e) {
     ui.toast(errorMessage(e, 'Не удалось загрузить аватар.'), 'error')
   } finally {
     avatarBusy.value = false
+    closeCropEditor()
   }
 }
 
@@ -117,6 +152,7 @@ async function removeAvatar() {
   try {
     const updated = await characters.removeAvatar(id)
     form.avatar_url = updated.avatar_url
+    form.avatar_crop = updated.avatar_crop || ''
     ui.toast('Аватар удалён', 'info')
   } catch (e) {
     ui.toast(errorMessage(e, 'Не удалось удалить аватар.'), 'error')
@@ -150,10 +186,11 @@ async function submit() {
   >
     <div class="character-profile">
       <div class="character-profile__top">
-        <div class="character-profile__avatar-col">
+        <div class="character-profile__avatar-card">
           <Avatar
             :name="form.name"
             :image-url="form.avatar_url"
+            :crop="avatarCrop"
             size="xl"
             class="character-profile__avatar"
             :class="{ 'is-busy': avatarBusy }"
@@ -220,6 +257,14 @@ async function submit() {
       <CharacterFormFields :model="form" mode="profile" />
     </div>
 
+    <AvatarCropEditor
+      v-if="cropEditor"
+      :image-url="cropEditor.objectUrl"
+      :initial-crop="cropEditor.initialCrop"
+      @save="onCropSave"
+      @cancel="closeCropEditor"
+    />
+
     <template #footer>
       <span v-if="dirty && !saving" class="character-profile__dirty-hint">Несохранённые изменения</span>
       <button class="button button--ghost" :disabled="saving" @click="close">Отмена</button>
@@ -244,16 +289,26 @@ async function submit() {
   align-items: start;
 }
 
-.character-profile__avatar-col {
+.character-profile__avatar-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
 .character-profile__avatar-actions {
   display: flex;
   gap: var(--space-2);
+  width: 100%;
+}
+
+.character-profile__avatar-actions .button {
+  flex: 1;
+  justify-content: center;
 }
 
 .character-profile__avatar.is-busy {

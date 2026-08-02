@@ -200,6 +200,7 @@ def ensure_schema(db_engine) -> None:
             ("relationships", "TEXT NOT NULL DEFAULT ''"),
             ("appearance", "TEXT NOT NULL DEFAULT ''"),
             ("avatar_url", "TEXT NOT NULL DEFAULT ''"),
+            ("avatar_crop", "TEXT NOT NULL DEFAULT ''"),
             ("temperature", "REAL"),
             ("location", "TEXT NOT NULL DEFAULT ''"),
         ]

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { accentForName } from '@/utils/color'
+import { parseCrop } from '@/utils/avatarCrop'
 import Avatar from '@/components/common/Avatar.vue'
 import Modal from '@/components/common/Modal.vue'
 
@@ -48,7 +49,7 @@ async function confirm() {
     @close="ui.cancelCharacterDelete"
   >
     <div class="character-delete__content">
-      <Avatar :name="target.name" :image-url="target.avatar_url" size="lg" />
+      <Avatar :name="target.name" :image-url="target.avatar_url" :crop="parseCrop(target.avatar_crop)" size="lg" />
       <div class="character-delete__text">
         <span class="character-delete__name" :style="{ color: accent }">{{ target.name }}</span>
         <p class="character-delete__description">

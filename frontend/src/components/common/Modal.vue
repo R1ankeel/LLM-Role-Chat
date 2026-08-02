@@ -47,7 +47,7 @@ function onBackdrop(e: MouseEvent) {
   <Teleport to="body">
     <transition name="modal">
       <div class="modal-backdrop" @mousedown="onBackdrop">
-        <div class="modal" :style="{ width }" role="dialog" aria-modal="true" :aria-label="title || 'Диалог'">
+        <div class="modal" :style="{ '--modal-width': width }" role="dialog" aria-modal="true" :aria-label="title || 'Диалог'">
           <header class="modal__header">
             <h2 class="modal__title">{{ title }}</h2>
             <button class="icon-button" aria-label="Закрыть" title="Закрыть" @click="emit('close')">
@@ -73,15 +73,17 @@ function onBackdrop(e: MouseEvent) {
   position: fixed;
   inset: 0;
   z-index: 100;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: var(--space-4);
   background: rgba(8, 10, 16, 0.62);
   backdrop-filter: blur(3px);
 }
 
 .modal {
-  width: 100%;
+  width: min(var(--modal-width, 420px), 100%);
+  min-width: 0;
   max-width: 100%;
   max-height: min(80vh, 640px);
   display: flex;
@@ -129,6 +131,20 @@ function onBackdrop(e: MouseEvent) {
   flex-shrink: 0;
 }
 
+@media (max-width: 640px) {
+  .modal-backdrop {
+    padding: var(--space-3);
+    align-items: flex-end;
+  }
+
+  .modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 90vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+}
+
 .modal-enter-active,
 .modal-leave-active {
   transition: opacity var(--transition-base);
@@ -147,5 +163,12 @@ function onBackdrop(e: MouseEvent) {
 .modal-enter-from .modal,
 .modal-leave-to .modal {
   transform: translateY(12px) scale(0.98);
+}
+
+@media (max-width: 640px) {
+  .modal-enter-from .modal,
+  .modal-leave-to .modal {
+    transform: translateY(100%);
+  }
 }
 </style>

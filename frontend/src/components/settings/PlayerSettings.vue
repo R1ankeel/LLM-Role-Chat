@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
+import { parseCrop } from '@/utils/avatarCrop'
 import Avatar from '@/components/common/Avatar.vue'
 
 const characters = useCharactersStore()
@@ -108,6 +109,7 @@ async function save() {
         <Avatar
           :name="name || player.name"
           :image-url="player.avatar_url"
+          :crop="parseCrop(player.avatar_crop)"
           size="xl"
           class="player-settings__avatar"
           :class="{ 'is-busy': avatarBusy }"
