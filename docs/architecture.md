@@ -9,12 +9,17 @@
 3. **Слой данных** — `app/crud.py` (async-операции), `app/models.py` (ORM), `app/database.py` (движки + миграции).
 
 Всё состояние живёт в SQLite (`ai_chat.db`). LLM-вызовы идут в локальный Ollama.
-Фронтенд — статический SPA, который общается с API через fetch + SSE.
+Фронтендов два, оба общаются с одним API (fetch + SSE):
+
+- **Старый**: Vanilla JS SPA в `app/static/`, отдаётся самим FastAPI на `:8000` (не изменяется).
+- **Новый**: Vue 3 + TypeScript + Vite в `frontend/`, dev на `:3000` с proxy `/api → :8000` (см. [README](README.md)).
 
 ```
 ┌──────────────────────────────┐
-│  Браузер (app/static SPA)    │
-│  app.js: fetch / SSE         │
+│  Браузер                     │
+│  app/static SPA (:8000)      │  ← старый, не изменяется
+│  frontend/ Vue SPA (:3000)   │  ← новый (Vite dev, proxy /api)
+│  fetch / SSE                 │
 └──────────────┬───────────────┘
                │ HTTP + SSE
 ┌──────────────▼───────────────┐
@@ -22,21 +27,56 @@
 │  routers/*.py                │
 │  CORS, lifespan, воркеры     │
 └──────┬───────────────┬───────┘
-       │               │
+               │               │
 ┌──────▼─────────┐ ┌───▼──────────────┐
 │  chat_engine   │ │  task_queue      │
 │  memory_service│ │  memory jobs     │
 │  relationships │ │  (embed/backfill │
 │  ollama_client │ │   /consolidation)│
 └──────┬─────────┘ └───┬──────────────┘
-       │               │
-       ├───────────────┼────────────────────────┐
-       │               │                        │
+               │               │
+               ├───────────────┼────────────────────────┐
+               │               │                        │
 ┌──────▼───────────────▼─────┐  ┌───────────────▼──────────┐
 │  crud.py / models.py       │  │  Ollama (localhost:11434)│
 │  database.py (SQLite)      │  │  generate/chat/embed     │
 └────────────────────────────┘  └──────────────────────────┘
 ```
+
+## Новый frontend (`frontend/`)
+
+Отдельное Vite-приложение (Vue 3 + Composition API + TypeScript + Pinia + Vue Router),
+разрабатывается по плану [`Plans/frontend-app.md`](../Plans/frontend-app.md). Полностью изолировано
+от `app/static/`; backend не меняется.
+
+Слои (разделение ответственности):
+
+1. **`types/`** — TS-интерфейсы 1:1 со схемами API (`chat`, `character`, `message`, `scene`).
+2. **`mocks/`** — mock-данные и mock-сервис (`data.ts`, `service.ts`). На Этапе 3 store'ы вызывают
+   сервис напрямую; в Этапе 4 появится `api/`-слой с тем же интерфейсом, и переключение
+   «mock / реальный API» будет управляться `VITE_USE_MOCKS`.
+3. **`stores/`** — Pinia: `chats`, `messages` (в т.ч. состояние генерации и streaming-буфер),
+   `characters`, `scene`, `ui`. Гигантских store нет.
+4. **`router/`** — `/` (home-placeholder) и `/chat/:chatId` (вложенный RouterView внутри AppLayout).
+5. **`components/`** — презентационные компоненты: `layout/` (AppLayout, Sidebar, MainPanel, RightPanel),
+   `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView),
+   `common/` (Avatar, Badge, Modal, EmptyState).
+6. **`styles/`** — дизайн-токены (CSS-переменные), base, компонентные классы.
+
+Ключевые решения:
+
+- **Имитация генерации (Этап 3):** в `stores/messages.ts` состояния `idle → sending → waiting →
+  streaming → done|stopped`, потоковая дозапись слов по таймерам, optimistic-сообщение пользователя,
+  `stop()` финализирует частичный ответ. В Этапе 4 будет заменена на реальный SSE-клиент (§1.4 плана).
+- **Типы сообщений:** `character` (Avatar + accent + имя), `user` (свой стиль/выравнивание),
+  `system` (центрированный блок — перемещения/смена сцены), `WorldEvent` (карточка с иконкой 🌍,
+  не похожа на реплику). Лента `MessageList` объединяет сообщения и world-события по времени.
+- **Аватары:** инициалы + детерминированный accent-цвет (`utils/color.ts`, палитра «приятных» тонов);
+  компонент готов к `imageUrl` (TODO — поле появится в backend).
+- **Composer:** авто-рост textarea, Enter=отправить / Shift+Enter=перенос, защита IME, Send↔Stop,
+  disabled без выбранного чата.
+- **Автоскролл** ленты — только если пользователь у нижней границы; иначе хинт «Новые сообщения».
+  Индикатор генерации имеет зарезервированную высоту — без «прыжков» раскладки.
 
 ## Жизненный цикл одного раунда
 

@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
+import { RouterView } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
+import { useChatsStore } from '@/stores/chats'
 import Sidebar from '@/components/layout/Sidebar.vue'
-import MainPanel from '@/components/layout/MainPanel.vue'
 import RightPanel from '@/components/layout/RightPanel.vue'
 import { useViewport } from '@/composables/useViewport'
 
 useViewport()
 
 const ui = useUiStore()
+const chats = useChatsStore()
+
+onMounted(() => {
+  void chats.loadChats()
+})
 
 const isMobile = computed(() => ui.viewport === 'mobile')
 const isTablet = computed(() => ui.viewport === 'tablet')
@@ -56,7 +62,7 @@ function onBackdropClick() {
     </transition>
 
     <main class="app-layout__main">
-      <MainPanel />
+      <RouterView />
     </main>
 
     <aside

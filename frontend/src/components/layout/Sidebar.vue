@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
+import { useChatsStore } from '@/stores/chats'
+import { MOCK_MODELS as mockModels } from '@/mocks/data'
+import Avatar from '@/components/common/Avatar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import Modal from '@/components/common/Modal.vue'
 
 withDefaults(
   defineProps<{
@@ -13,14 +18,104 @@ withDefaults(
 )
 
 const ui = useUiStore()
+const chats = useChatsStore()
+const route = useRoute()
+const router = useRouter()
 
 const query = ref('')
+const showNewChat = ref(false)
+const editingId = ref<string | null>(null)
+const editName = ref('')
+const creating = ref(false)
+
+const newName = ref('')
+const newPrompt = ref('')
+const newModel = ref(mockModels[0])
+const newThinking = ref(true)
+
+const filteredChats = computed(() => {
+  const q = query.value.trim().toLowerCase()
+  if (!q) return chats.chats
+  return chats.chats.filter((c) => c.name.toLowerCase().includes(q))
+})
+
+const activeChatId = computed(() =>
+  typeof route.params.chatId === 'string' ? route.params.chatId : null,
+)
+
+const canSubmitNew = computed(() => newName.value.trim().length > 0 && !creating.value)
+
+function openChat(id: string) {
+  if (route.params.chatId === id) return
+  router.push({ name: 'chat', params: { chatId: id } })
+  if (ui.viewport === 'mobile') ui.closeSidebarDrawer()
+}
+
+function goHome() {
+  if (route.params.chatId !== undefined) router.push({ name: 'home' })
+  if (ui.viewport === 'mobile') ui.closeSidebarDrawer()
+}
+
+function openNewChat() {
+  newName.value = ''
+  newPrompt.value = ''
+  newModel.value = mockModels[0]
+  newThinking.value = true
+  showNewChat.value = true
+}
+
+async function createChat() {
+  if (!canSubmitNew.value) return
+  creating.value = true
+  try {
+    const chat = await chats.createChat({
+      name: newName.value.trim(),
+      general_prompt: newPrompt.value.trim(),
+      model_name: newModel.value,
+      thinking_mode: newThinking.value,
+    })
+    showNewChat.value = false
+    router.push({ name: 'chat', params: { chatId: chat.id } })
+    if (ui.viewport === 'mobile') ui.closeSidebarDrawer()
+  } finally {
+    creating.value = false
+  }
+}
+
+async function deleteChat(id: string) {
+  await chats.deleteChat(id)
+  if (activeChatId.value === id) router.replace({ name: 'home' })
+}
+
+function startRename(id: string, name: string) {
+  editingId.value = id
+  editName.value = name
+}
+
+async function commitRename() {
+  const id = editingId.value
+  if (id && editName.value.trim()) {
+    await chats.renameChat(id, editName.value.trim())
+  }
+  editingId.value = null
+}
+
+function cancelRename() {
+  editingId.value = null
+}
+
+function formatSidebarTime(ts: string | null) {
+  if (!ts) return ''
+  const date = new Date(ts)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+}
 </script>
 
 <template>
   <div class="sidebar" :class="{ 'is-collapsed': collapsed }">
     <header class="sidebar__header">
-      <div class="sidebar__brand">
+      <div class="sidebar__brand" role="button" tabindex="0" @click="goHome" @keydown.enter="goHome">
         <span class="sidebar__logo" aria-hidden="true">◆</span>
         <span v-if="!collapsed" class="sidebar__title">Сцены</span>
       </div>
@@ -41,7 +136,7 @@ const query = ref('')
 
     <template v-if="!collapsed">
       <div class="sidebar__create">
-        <button class="button button--primary button--block">
+        <button class="button button--primary button--block" @click="openNewChat">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           </svg>
@@ -64,11 +159,81 @@ const query = ref('')
       </div>
 
       <nav class="sidebar__list" aria-label="Список чатов">
+        <template v-if="chats.loadingChats && !chats.chats.length">
+          <div class="sidebar__loading">Загрузка…</div>
+        </template>
+
+        <template v-else-if="filteredChats.length">
+          <div
+            v-for="chat in filteredChats"
+            :key="chat.id"
+            class="chat-item"
+            :class="{ 'is-active': chat.id === activeChatId }"
+            role="button"
+            tabindex="0"
+            @click="openChat(chat.id)"
+            @keydown.enter="openChat(chat.id)"
+          >
+            <Avatar :name="chat.name" size="sm" class="chat-item__avatar" />
+            <div class="chat-item__content">
+              <div class="chat-item__title-row">
+                <input
+                  v-if="editingId === chat.id"
+                  v-model="editName"
+                  class="chat-item__edit"
+                  aria-label="Название чата"
+                  @keydown.enter.prevent="commitRename"
+                  @keydown.esc="cancelRename"
+                  @blur="commitRename"
+                  @click.stop
+                />
+                <template v-else>
+                  <span class="chat-item__title">{{ chat.name }}</span>
+                  <span v-if="chat.thinking_mode" class="chat-item__thinking" title="Thinking mode">🧠</span>
+                </template>
+              </div>
+              <span class="chat-item__preview">{{ chat.last_message || 'Нет сообщений' }}</span>
+            </div>
+            <div class="chat-item__aside">
+              <span class="chat-item__time">{{ formatSidebarTime(chat.last_message_at) }}</span>
+              <div class="chat-item__tools">
+                <button
+                  class="icon-button icon-button--xs"
+                  title="Переименовать"
+                  aria-label="Переименовать чат"
+                  @click.stop="startRename(chat.id, chat.name)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 20h4L19.5 8.5a2.1 2.1 0 00-3-3L5 17v3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+                  </svg>
+                </button>
+                <button
+                  class="icon-button icon-button--xs"
+                  title="Удалить"
+                  aria-label="Удалить чат"
+                  @click.stop="deleteChat(chat.id)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <EmptyState
+          v-else-if="query.trim()"
+          title="Ничего не найдено"
+          description="Попробуйте изменить запрос."
+        />
+
+        <EmptyState
+          v-else
           title="Нет чатов"
           description="Создайте первую сцену, чтобы начать ролевую сессию."
         >
-          <button class="button button--secondary">
+          <button class="button button--secondary" @click="openNewChat">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
             </svg>
@@ -79,8 +244,57 @@ const query = ref('')
     </template>
 
     <nav v-else class="sidebar__list sidebar__list--collapsed" aria-label="Список чатов">
-      <span class="sidebar__collapsed-hint">Нет чатов</span>
+      <span class="sidebar__collapsed-hint">Чаты</span>
     </nav>
+
+    <Modal
+      v-if="showNewChat"
+      title="Новый чат"
+      width="460px"
+      @close="showNewChat = false"
+    >
+      <div class="new-chat-form">
+        <label class="field">
+          <span class="field__label">Название сцены</span>
+          <input
+            v-model="newName"
+            class="field__input"
+            type="text"
+            placeholder="Например, Таверна у дороги"
+            autofocus
+            @keydown.enter.prevent="createChat"
+          />
+        </label>
+        <label class="field">
+          <span class="field__label">Сюжет / системный промпт</span>
+          <textarea
+            v-model="newPrompt"
+            class="field__input field__input--area"
+            rows="3"
+            placeholder="Краткое описание мира и завязки…"
+          ></textarea>
+        </label>
+        <div class="new-chat-form__row">
+          <label class="field">
+            <span class="field__label">Модель</span>
+            <select v-model="newModel" class="field__input">
+              <option v-for="m in mockModels" :key="m" :value="m">{{ m }}</option>
+            </select>
+          </label>
+          <label class="toggle">
+            <input v-model="newThinking" type="checkbox" />
+            <span class="toggle__track" aria-hidden="true"><span class="toggle__thumb" /></span>
+            <span class="toggle__label">Thinking</span>
+          </label>
+        </div>
+      </div>
+      <template #footer>
+        <button class="button button--ghost" @click="showNewChat = false">Отмена</button>
+        <button class="button button--primary" :disabled="!canSubmitNew" @click="createChat">
+          {{ creating ? 'Создание…' : 'Создать' }}
+        </button>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -108,6 +322,8 @@ const query = ref('')
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
 }
 
 .sidebar__logo {
@@ -195,7 +411,121 @@ const query = ref('')
   color: var(--text-muted);
 }
 
-/* Collapsed state */
+.sidebar__loading {
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Chat item */
+.chat-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  position: relative;
+}
+
+.chat-item:hover,
+.chat-item:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.chat-item.is-active {
+  background: var(--accent-soft);
+}
+
+.chat-item__avatar {
+  margin-top: 1px;
+}
+
+.chat-item__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-item__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.chat-item__title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-item.is-active .chat-item__title {
+  color: var(--accent);
+}
+
+.chat-item__thinking {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.chat-item__preview {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-item__edit {
+  width: 100%;
+  font-size: var(--text-sm);
+  padding: 2px 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.chat-item__aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.chat-item__time {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.chat-item__tools {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.chat-item:hover .chat-item__tools,
+.chat-item:focus-within .chat-item__tools {
+  opacity: 1;
+}
+
+.icon-button--xs {
+  width: 24px;
+  height: 24px;
+}
+
+/* Collapsed */
 .sidebar.is-collapsed .sidebar__header {
   justify-content: center;
   padding: var(--space-3) var(--space-2);
@@ -203,5 +533,110 @@ const query = ref('')
 
 .sidebar.is-collapsed .sidebar__brand {
   display: none;
+}
+
+/* New chat form */
+.new-chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.new-chat-form__row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.new-chat-form__row .field {
+  flex: 1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.field__input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field__input--area {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle__track {
+  width: 34px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
+  position: relative;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.toggle input:checked + .toggle__track {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.toggle input:checked + .toggle__track .toggle__thumb {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+.toggle__label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
 }
 </style>

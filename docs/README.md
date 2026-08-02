@@ -1,7 +1,8 @@
 # Документация проекта AI Roleplay Chat
 
 Локальное веб-приложение для ролевых игр с AI-персонажами через Ollama.
-FastAPI + SQLAlchemy 2.0 (async/aiosqlite) + Vanilla JS SPA.
+FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два независимых интерфейса на общем backend —
+существующий Vanilla JS SPA (`app/static/`, отдаётся на `:8000`) и новый Vue 3 + TypeScript + Vite (`frontend/`, dev на `:3000`).
 
 ## Оглавление
 
@@ -60,6 +61,7 @@ ai-roleplay-chat/
 │   ├── prompts/ru.json      # все шаблоны промптов
 │   ├── routers/             # API-роутеры (chats, characters, chat_engine, jobs, relationships)
 │   └── static/              # SPA: index.html, app.js, style.css
+├── frontend/                # НОВЫЙ frontend: Vue 3 + TS + Vite (см. ниже)
 ├── scripts/                 # CLI-скрипты (backfill_embeddings)
 ├── tests/                   # pytest + tests/eval (харнесс и метрики) + tests/golden
 └── .env / .env.example      # конфигурация
@@ -73,6 +75,45 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 На Windows также доступен `start_server.bat` (запускает `uvicorn app.main:app` с `--reload`).
+
+## Новый frontend (`frontend/`)
+
+Отдельное Vite-приложение (Vue 3 + TypeScript + Pinia + Vue Router), изолированное от старого SPA.
+Работает против того же backend'а, старый frontend не трогается.
+
+| Компонент | URL |
+|-----------|-----|
+| Старый frontend (Vanilla SPA) | `http://localhost:8000` |
+| Backend API | `http://localhost:8000/api` |
+| Новый frontend (dev) | `http://localhost:3000` |
+
+- Dev-прокси Vite: `'/api' → 'http://localhost:8000'` (пути API остаются чистыми, CORS не мешает).
+- Mock-режим: `VITE_USE_MOCKS=true` в `.env.development`. Пока `api/`-слой не создан (Этап 4),
+  store'ы берут данные из `src/mocks/`; данные не смешаны с production-путём.
+- Производственная сборка: `vite build` → `frontend/dist/`, отдаётся статик-сервером (нужен SPA-fallback на `/chat/:id`).
+
+Запуск:
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://localhost:3000 (dev + HMR + proxy /api)
+npm run build        # vue-tsc + vite build → dist/
+npm run preview      # локальный просмотр production-сборки
+```
+
+Структура `frontend/src/` (по этапам плана `Plans/frontend-app.md`):
+
+- `types/` — TS-интерфейсы, повторяющие Pydantic-схемы;
+- `mocks/` — mock-данные и mock-сервис (`data.ts`, `service.ts`);
+- `stores/` — Pinia: `chats`, `messages` (имитация генерации/streaming на Этапе 3), `characters`, `scene`, `ui`;
+- `router/` — маршруты: `/` (home-placeholder) и `/chat/:chatId`;
+- `components/` — `layout/` (AppLayout, Sidebar, MainPanel, RightPanel), `chat/` (ChatHeader, MessageList/Item, SystemMessage, WorldEvent, GenerationIndicator, Composer, ChatView), `common/` (Avatar, Badge, Modal, EmptyState);
+- `composables/` — `useViewport.ts` (desktop/tablet/mobile);
+- `utils/color.ts` — детерминированные accent-цвета персонажей;
+- `styles/` — дизайн-токены, базовые стили, компонентные классы.
+
+Актуальное состояние по этапам — в [`Plans/frontend-app.md`](../Plans/frontend-app.md).
 
 ## Тесты
 

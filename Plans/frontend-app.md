@@ -1,6 +1,6 @@
 # Новый frontend ролевого движка — план реализации
 
-> **Статус:** Этап 2 «Shell приложения» выполнен (2026-08-02). Этапы 3–6 — в работе.
+> **Статус:** Этап 3 «Chat UI на mock-данных» выполнен (2026-08-02). Этапы 4–6 — в работе.
 > **Дата:** 2026-08-02
 > **Ограничение:** существующий frontend (Vanilla JS SPA) НЕ удаляется, НЕ переписывается и НЕ ломается.
 
@@ -268,7 +268,7 @@ ai-roleplay-chat/frontend/
 
 ### 3.3 Зависимости (минимальный набор)
 
-- `vue`, `vue-router`, `pinia`, `typescript`, `vite`, `@vitejs/plugin-vue`.
+- `vue`, `vue-router` (установлен на Этапе 3), `pinia`, `typescript`, `vite`, `@vitejs/plugin-vue`.
 - `@vueuse/core` (опционально, утилиты: `useLocalStorage`, `useVirtualList` и т.п.).
 - Никаких UI-библиотек (Ant Design/Element/Vuetify) на старте — свои компоненты дают контроль над внешним видом и весом.
 
@@ -316,6 +316,7 @@ ai-roleplay-chat/frontend/
 - `VITE_USE_MOCKS=true` → `api/` модули делегируют в `mocks/` (тот же интерфейс функций). Это позволяет разрабатывать UI (Этап 3) без backend.
 - `VITE_USE_MOCKS=false` (по умолчанию) → реальный API.
 - Переключение только через env-флаг, код не меняется.
+- **Текущее состояние (Этап 3):** `api/`-слой ещё не создан; store'ы напрямую вызывают mock-сервис (`src/mocks/service.ts`, единая точка доступа к данным). В Этапе 4 появится `src/api/`, и импорты в store'ах переедут на него (интерфейс функций уже совпадает 1:1).
 
 ---
 
@@ -506,12 +507,18 @@ ai-roleplay-chat/frontend/
 - Проверка: `npm run build` (vue-tsc + vite) без ошибок; `npm run dev` на `:3000` → 200, страница без ошибок, proxy `/api/health` работает; старый фронт на `:8000` → 200, `/api/health` ok.
 - **Визуальная проверка:** пройдена вручную (общий вид 3-зонного layout, соответствие дизайн-токенам, hover/focus, desktop/tablet/mobile; сверка с `docs/Frontend.png` проведена пользователем).
 
-### Этап 3 — Chat UI на mock-данных
-- Компоненты: Sidebar (список/поиск/создание), ChatHeader, MessageList/MessageItem/SystemMessage/WorldEvent, Composer, GenerationIndicator.
-- Включён `VITE_USE_MOCKS=true`: мок чаты/сообщения/персонажи/события из `src/mocks/`.
-- Состояния генерации имитируются (таймер), но интерфейс уже полный.
-- Проверка: визуал соответствует концепции макета (сверить с `docs/Frontend.png` вручную).
-- **Визуальная проверка:** читаемость и разделение типов сообщений (character / user / system / world event), accent-цвета и аватары персонажей, поведение Composer (авто-рост, Enter/Shift+Enter), индикатор генерации без «прыжков» раскладки, пустые состояния чата.
+### Этап 3 — Chat UI на mock-данных ✅ (выполнен)
+- Установлен `vue-router@4`; `.env.development` дополнен `VITE_USE_MOCKS=true` (в Этапе 3 код всегда на моках; флаг станет переключателем при появлении `api/`-слоя в Этапе 4).
+- **Типы** (`src/types/`): `chat.ts`, `character.ts`, `message.ts` (включая `role`, `visibility`, `WorldEvent`), `scene.ts` — повторяют Pydantic-схемы (§1.5).
+- **Моки** (`src/mocks/`): `data.ts` (3 чата: полный, средний, пустой; 4+2 персонажа с player; сцены; лента мировых событий; список моделей), `service.ts` — async-«сервис» с задержкой (`fetchChats`, `fetchChatDetail`, `fetchCharacters`, `fetchMessages`, `fetchScene`, `fetchWorldEvents`, `createChat`, `renameChat`, `deleteChat`, `addMessage`, `addEvent`).
+- **Store'ы** (`src/stores/`): `chats`, `messages`, `characters`, `scene`, `ui` (из Этапа 2). В `messages` — имитация генерации `idle → sending → waiting → streaming → done|stopped`: потоковая дозапись слов по `setTimeout`-цепочке, optimistic-сообщение пользователя, инъекция world-события после ответа, `stop()` (финализирует частичный ответ), очистка таймеров при смене чата.
+- **Роутер** (`src/router/index.ts`): `/` (AppLayout + вложенный RouterView) → home-placeholder; `/chat/:chatId` → `ChatView`. `App.vue` → RouterView, `AppLayout` рендерит вложенный маршрут в центральной зоне.
+- **Компоненты**:
+  - `common/`: `Avatar` (инициалы + детерминированный accent через `utils/color.ts`, проп `imageUrl` на будущее), `Badge`, `Modal` (для «Нового чата»).
+  - `chat/`: `ChatHeader` (название, модель, бейдж ⚡/🧠, placeholder-кнопки отношений/настроек, toggle правой панели, mobile-меню), `MessageList` (объединяет сообщения и world-события по времени, автоскролл у нижней границы, хинт «Новые сообщения»), `MessageItem` (NPC: Avatar+accent+имя+текст+время, hover: перегенерация/удаление; user — отдельный стиль, выравнивание вправо; streaming-курсор), `SystemMessage` (центрированный тонкий блок), `WorldEvent` (карточка с иконкой 🌍, не похожа на реплику), `GenerationIndicator` («X размышляет…» + пульс, зарезервированная высота — без прыжков), `Composer` (авто-рост через `height=scrollHeight`, Enter/Shift+Enter, защита IME `isComposing`, Send↔Stop), `ChatView` (сборка колонки + загрузка по `route.params.chatId`).
+  - `layout/`: `Sidebar` (список из моков, клиентский поиск, активный чат, hover rename/delete, «Новый чат» через Modal: имя+промпт+модель+thinking), `MainPanel` (редуцирован до home-placeholder), `RightPanel` (персонажи с Avatar/badge «Игрок», мир: время/локация/погода/настроение/напряжение-progress/цель, лента мировых событий).
+- **Проверка:** `npm run build` (vue-tsc + vite) без ошибок; dev-сервер `:3000` отдаёт все модули (200), proxy `/api/health` работает; старый фронт `:8000` не изменялся.
+- **Визуальная проверка:** проводится вручную (сверка с `docs/Frontend.png`): читаемость и разделение типов сообщений (character / user / system / world event), accent-цвета и аватары персонажей, поведение Composer (авто-рост, Enter/Shift+Enter), индикатор генерации без «прыжков» раскладки, пустые состояния чата.
 
 ### Этап 4 — Подключение backend
 - Реализовать полный `api/` слой + SSE-клиент; выключить mocks.

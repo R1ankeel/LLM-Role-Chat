@@ -1,0 +1,74 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { accentForName } from '@/utils/color'
+
+const props = withDefaults(
+  defineProps<{
+    name: string
+    imageUrl?: string | null
+    size?: 'sm' | 'md' | 'lg'
+  }>(),
+  {
+    imageUrl: null,
+    size: 'md',
+  },
+)
+
+const accent = computed(() => accentForName(props.name))
+
+const initials = computed(() => {
+  const parts = props.name.trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase()
+  return (parts[0][0] + parts[1][0]).toUpperCase()
+})
+</script>
+
+<template>
+  <span class="avatar" :class="`avatar--${size}`" :style="{ background: accent }" role="img" :aria-label="name">
+    <img v-if="imageUrl" class="avatar__img" :src="imageUrl" :alt="name" />
+    <span v-else class="avatar__initials">{{ initials }}</span>
+  </span>
+</template>
+
+<style scoped>
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: var(--radius);
+  color: #0c0f1a;
+  font-weight: 600;
+  user-select: none;
+}
+
+.avatar__initials {
+  line-height: 1;
+}
+
+.avatar__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.avatar--sm {
+  width: 28px;
+  height: 28px;
+  font-size: var(--text-xs);
+}
+
+.avatar--md {
+  width: 36px;
+  height: 36px;
+  font-size: var(--text-sm);
+}
+
+.avatar--lg {
+  width: 56px;
+  height: 56px;
+  font-size: var(--text-md);
+  border-radius: var(--radius-lg);
+}
+</style>
