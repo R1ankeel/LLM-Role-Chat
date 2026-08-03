@@ -104,7 +104,7 @@ class TestGoldenSystemPrompt:
         char_pos = result.find("<character>")
         ex_pos = result.find("<examples>")
         rules_pos = result.find("<rules>")
-        isolation_pos = result.find("ТЕКУЩИЙ ПЕРСОНАЖ: Боб")
+        isolation_pos = result.find("ТЫ — Боб")
 
         # Scene is no longer in system prompt (built by ContextBuilder instead)
         assert "<scene>" not in result

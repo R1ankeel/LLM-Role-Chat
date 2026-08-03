@@ -126,14 +126,14 @@ class TestBuildSystemPrompt:
             general_prompt="Таверна",
         )
         rules_pos = prompt.find("<rules>")
-        isolation_pos = prompt.find("ТЕКУЩИЙ ПЕРСОНАЖ: Алиса")
+        isolation_pos = prompt.find("ТЫ — Алиса")
         character_close = prompt.find("</character>")
 
         assert rules_pos != -1
         assert isolation_pos != -1
         assert rules_pos < isolation_pos
         assert character_close < rules_pos
-        assert "ТЕКУЩИЙ ПЕРСОНАЖ" not in prompt[:character_close]
+        assert "ТЫ — Алиса" not in prompt[:character_close]
 
     def test_strict_mode_adds_retry_warning(self):
         normal = build_role_isolation_block("Алиса", strict=False)

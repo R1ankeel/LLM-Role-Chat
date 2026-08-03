@@ -49,7 +49,6 @@ from .role_isolation import (
     build_fallback_prompt,
     build_generation_cue,
     build_generation_cue_for_chat,
-    build_isolated_generation_cue,
     build_stop_sequences,
     find_foreign_speaker_marker,
     sanitize_and_validate_response,
@@ -909,11 +908,7 @@ async def _generate_once(
     tokens_collected = []
 
     if settings.use_chat_api:
-        generation_cue = (
-            build_isolated_generation_cue(character.name)
-            if is_isolated
-            else build_generation_cue_for_chat(character.name)
-        )
+        generation_cue = build_generation_cue_for_chat(character.name)
         chat_messages = _build_generation_messages(
             system_prompt,
             summary_block,
@@ -937,11 +932,7 @@ async def _generate_once(
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
     else:
-        generation_cue = (
-            build_isolated_generation_cue(character.name)
-            if is_isolated
-            else build_generation_cue(character.name)
-        )
+        generation_cue = build_generation_cue(character.name)
         context_parts = [system_prompt]
         if summary_block:
             context_parts.append(summary_block)

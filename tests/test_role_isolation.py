@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.prompt_builder import (
+    build_isolated_block,
+    build_negative_prompting_block,
+    build_rules_block,
+)
 from app.role_isolation import (
     ValidationResult,
     build_fallback_prompt,
     build_generation_cue,
+    build_generation_cue_for_chat,
     build_post_history_reinforcement,
     build_role_isolation_block,
     build_stop_sequences,
@@ -52,7 +58,9 @@ class TestRoleIsolationUnit:
 
     def test_two_characters_isolation_block_is_dynamic(self):
         block = build_role_isolation_block("Character A")
-        assert "ТЕКУЩИЙ ПЕРСОНАЖ: Character A" in block
+        assert "ТЫ — Character A." in block
+        assert "Ты управляешь ТОЛЬКО своим персонажем Character A." in block
+        assert "ВЗАИМОДЕЙСТВИЕ:" in block
 
     def test_multi_speaker_output_is_truncated(self):
         raw = (
@@ -272,3 +280,83 @@ class TestFallbackPrompt:
         assert "ТОЛЬКО за него" in prompt
         assert "НИКОГДА не пиши за других" in prompt
         assert "Элиза:" in prompt
+
+
+class TestIsolationBehaviorFreedom:
+    """ТЗ §18 tests 1-3, 21-24: isolation restricts authorship, not behavior."""
+
+    FORBIDDEN_BEHAVIOR_PHRASES = (
+        "НЕ покидай",
+        "не покидай",
+        "не иди к игроку",
+        "не обращайся к нему",
+        "не двигайся в локацию",
+        "играй здесь и сейчас",
+    )
+
+    def _all_prompt_text(self, name: str) -> str:
+        """Full rendered prompt surface: cues, isolation, rules, negative, isolated."""
+        texts = [
+            build_role_isolation_block(name),
+            build_generation_cue(name),
+            build_generation_cue_for_chat(name),
+            build_rules_block(),
+            build_negative_prompting_block(),
+            build_isolated_block(),
+        ]
+        return "\n".join(texts)
+
+    # §18 test 1: персонаж может уйти из своей локации
+    def test_may_leave_location_no_ban(self):
+        text = self._all_prompt_text("Алиса")
+        for phrase in self.FORBIDDEN_BEHAVIOR_PHRASES:
+            assert phrase.lower() not in text.lower(), f"Запрет поведения найден: {phrase}"
+        assert "покидать текущую локацию" in build_role_isolation_block("Алиса")
+        assert "входить в другую локацию" in build_role_isolation_block("Алиса")
+
+    # §18 test 2: персонаж может обратиться к другому персонажу
+    def test_may_address_other_character(self):
+        block = build_role_isolation_block("Алиса")
+        assert "обращаться к ним" in block
+        assert "отвечать на их реплики" in block
+        assert "реагировать на других персонажей" in block
+
+    # §18 test 3: персонаж не пишет действия другого — hard-violation сохраняется
+    def test_does_not_act_for_others_still_enforced(self):
+        block = build_role_isolation_block("Алиса")
+        assert "НЕ пиши реплики других персонажей" in block
+        assert "НЕ принимай решения за других персонажей" in block
+
+        hard, soft = contains_perspective_violation(
+            "Боб решил уйти и закрыть дверь", ["Боб"]
+        )
+        assert hard is True
+
+    # §18 test 21: ответ на обращение может быть коротким
+    def test_short_reply_allowed(self):
+        cue = build_generation_cue_for_chat("Алиса")
+        legacy = build_generation_cue("Алиса")
+        assert "может быть коротким" in cue
+        assert "может быть коротким" in legacy
+
+    # §18 test 22: нет обязательных 150-250 слов / 3-5 абзацев
+    def test_no_hard_length_mandate(self):
+        text = self._all_prompt_text("Алиса")
+        assert "150-250" not in text
+        assert "3-5 абзацев" not in text
+        assert "минимум 3-5" not in text
+
+    # §18 test 23: персонаж может начать действие сам
+    def test_may_start_action_initiative(self):
+        cue = build_generation_cue_for_chat("Алиса")
+        assert "развивать свою сцену" in cue
+        block = build_role_isolation_block("Алиса")
+        assert "самостоятельно начинать разговор" in block
+        assert "Ты сам решаешь, как действовать" in block
+
+    # §18 test 24: персонаж может проигнорировать стимул
+    def test_may_ignore_stimulus(self):
+        text = self._all_prompt_text("Алиса")
+        assert "обязан реагировать" not in text
+        assert "обязан" not in text
+        assert "Ты сам решаешь" in build_role_isolation_block("Алиса")

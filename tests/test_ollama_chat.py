@@ -71,7 +71,7 @@ def test_reinforcement_block_is_short():
     block = build_reinforcement_block("Alice")
     assert len(block) < 400  # reasonably short
     assert "ТОЛЬКО Alice" in block
-    assert "не сворачивая ответ" in block
+    assert "отвечай только от своего лица" in block
 
 
 def test_behavior_drivers_block_wrapper():

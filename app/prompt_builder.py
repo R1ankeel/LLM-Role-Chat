@@ -556,8 +556,19 @@ def build_scene_advancement_block(
 
 
 def build_isolated_block() -> str:
-    """Build the isolation block for characters at different locations from the player."""
-    return _TEMPLATES.get("isolated", "")
+    """Informational block for a character alone in its location.
+
+    Content lives in the ``isolated`` template (ru.json). It is informational
+    only — a note about perception (no one nearby, only loud sounds from
+    adjacent locations are audible). It NEVER bans movement, addressing others
+    or interaction (ТЗ §5).
+    """
+    return _TEMPLATES.get(
+        "isolated",
+        "Ты сейчас один(а) в своей локации — рядом никого. "
+        "Ты можешь слышать только достаточно громкие звуки из соседних локаций. "
+        "Это не ограничивает твои действия: решай сам(а), что делать.",
+    )
 
 
 def build_intervention_block(text: str) -> str:

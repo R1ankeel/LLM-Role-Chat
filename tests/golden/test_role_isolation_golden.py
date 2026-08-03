@@ -144,9 +144,11 @@ class TestGoldenIsolationBlock:
         """Different character names produce correctly formatted blocks."""
         result = build_role_isolation_block(BOB, strict=False)
         assert f"{CURRENT_CHAR_PREFIX}{BOB}" in result
-        assert f"{ACTIONS_PREFIX}{BOB}" in result
-        assert REPLIKI_PREFIX in result
+        assert ACTIONS_PREFIX in result
         assert OTHER_REPLIKI in result
+        assert "ВЗАИМОДЕЙСТВИЕ:" in result
+        assert "покидать текущую локацию" in result
+        assert "входить в другую локацию" in result
 
 
 class TestGoldenReinforcement:

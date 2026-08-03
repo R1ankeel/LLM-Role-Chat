@@ -41,7 +41,6 @@ from .repetition_detector import build_repetition_feedback_block
 from .role_isolation import (
     build_generation_cue,
     build_generation_cue_for_chat,
-    build_isolated_generation_cue,
 )
 from .token_counter import get_token_counter
 from .witness_model import Presence, format_line_for_presence, resolve_presence
@@ -521,19 +520,9 @@ class ContextBuilder:
             parts.append(feedback)
         parts.append(build_negative_prompting_block())
         if settings.use_chat_api:
-            cue = (
-                build_isolated_generation_cue(character.name)
-                if is_isolated
-                else build_generation_cue_for_chat(character.name)
-            )
-            parts.append(cue)
+            parts.append(build_generation_cue_for_chat(character.name))
         else:
-            cue = (
-                build_isolated_generation_cue(character.name)
-                if is_isolated
-                else build_generation_cue(character.name)
-            )
-            parts.append(cue)
+            parts.append(build_generation_cue(character.name))
         return "\n\n".join(part for part in parts if part and part.strip())
 
     @staticmethod
