@@ -4,6 +4,7 @@ import type { Api } from '@/api/types'
 
 import * as chatsApi from '@/api/chats'
 import * as charactersApi from '@/api/characters'
+import * as locationsApi from '@/api/locations'
 import * as messagesApi from '@/api/messages'
 import * as interventionApi from '@/api/intervention'
 import * as sceneApi from '@/api/scene'
@@ -27,6 +28,10 @@ export const api: Api = useMocks
       deleteCharacter: charactersApi.deleteCharacter,
       uploadCharacterAvatar: charactersApi.uploadCharacterAvatar,
       deleteCharacterAvatar: charactersApi.deleteCharacterAvatar,
+      fetchLocations: locationsApi.fetchLocations,
+      createLocation: locationsApi.createLocation,
+      updateLocation: locationsApi.updateLocation,
+      deleteLocation: locationsApi.deleteLocation,
       fetchMemories: charactersApi.fetchMemories,
       fetchCharacterSummary: charactersApi.fetchCharacterSummary,
       updateCharacterLocation: charactersApi.updateCharacterLocation,

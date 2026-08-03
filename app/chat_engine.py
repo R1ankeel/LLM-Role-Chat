@@ -57,6 +57,24 @@ def _message_snapshot(m) -> dict:
     }
 
 
+def _character_is_isolated(
+    character_locations: dict[int, str],
+    character_id: int,
+    characters: list,
+    player_location: str,
+) -> bool:
+    """Whether the character has no player or other NPC in their location.
+
+    Uses `perception.compute_is_isolated`: an empty location is a shared scene
+    and never isolates (Plans/locations2.md §6, Sprint 5).
+    """
+    return perception.compute_is_isolated(
+        character_locations.get(character_id, ""),
+        [character_locations[c.id] for c in characters if c.id != character_id],
+        player_location,
+    )
+
+
 def _compute_epistemic_evidence(
     round_snapshots: list[dict],
     viewer,
@@ -593,9 +611,11 @@ async def process_user_message_streaming(
                     current_character.id, ""
                 ),
                 prior_replies=effective_prior_replies,
-                is_isolated=(
-                    character_locations.get(current_character.id, "")
-                    != player_location
+                is_isolated=_character_is_isolated(
+                    character_locations,
+                    current_character.id,
+                    characters,
+                    player_location,
                 ),
                 max_tokens=max_tokens,
             )
@@ -624,7 +644,12 @@ async def process_user_message_streaming(
                 scene_state=scene_state,
                 present_character_names=None,
                 stagnation_rounds=stagnation_rounds,
-                is_isolated=(character_locations.get(current_character.id, "") != player_location),
+                is_isolated=_character_is_isolated(
+                    character_locations,
+                    current_character.id,
+                    characters,
+                    player_location,
+                ),
                 locations=chat_locations,
                 relationships_block=relationships_blocks.get(current_character.id, ""),
                 behavior_drivers_block=drivers_blocks.get(current_character.id, ""),
@@ -1968,8 +1993,11 @@ async def regenerate_message_streaming(
             stagnation_rounds=stagnation_rounds,
             viewer_location=character_locations.get(character.id, ""),
             prior_replies=prior_replies,
-            is_isolated=(
-                character_locations.get(character.id, "") != player_location
+            is_isolated=_character_is_isolated(
+                character_locations,
+                character.id,
+                characters,
+                player_location,
             ),
             max_tokens=max_tokens,
         )
@@ -2006,7 +2034,12 @@ async def regenerate_message_streaming(
             scene_state=scene_state,
             present_character_names=None,
             stagnation_rounds=stagnation_rounds,
-            is_isolated=(character_locations.get(character.id, "") != player_location),
+            is_isolated=_character_is_isolated(
+                character_locations,
+                character.id,
+                characters,
+                player_location,
+            ),
             locations=chat_locations,
             relationships_block=relationships_block,
             behavior_drivers_block=drivers_block,

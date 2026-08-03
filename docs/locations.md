@@ -1,7 +1,8 @@
 # Локации 2.0
 
 Локации — самостоятельная сущность чата с CRUD API и UI. Реализовано в рамках
-«Локации 2.0 и проверка изоляции NPC» (см. `Plans/locations2.md`, спринты 1–2).
+«Локации 2.0 и проверка изоляции NPC» (см. `Plans/locations2.md`, спринты 1–3,
+5).
 
 ## Модель и совместимость
 
@@ -71,8 +72,54 @@
   `{ "message": "...", "characters": ["Имя1", ...] }` — список персонажей,
   использующих локацию. Удаление блокируется, локация не удаляется молча.
 
+## UI вкладки «Локации» (спринт 3)
+
+В новом Vue-фронтенде вкладка «Локации» (`LocationSettings.vue`) полностью
+управляет сущностью:
+
+- список локаций грузится через `GET /locations` при смене чата;
+- кнопка «+» открывает инлайн-форму «Название / Описание»;
+- карточки «Изменить» / «Удалить»;
+- удаление подтверждается `confirm`; при `409` показывается тост со списком
+  ссылающихся персонажей (из `detail.characters`);
+- тосты через `ui.toast`, сетевые ошибки через `ApiError`/`ApiError.detailData`;
+- в мок-режиме (`useMocks`) данные хранятся в `mockLocations` и синхронизируют
+  `chats.locations` (JSON-кэш названий).
+
+## Точная изоляция NPC: `compute_is_isolated` (спринт 5)
+
+`is_isolated` решает только один вопрос (Планы §5-B): «есть ли рядом с NPC
+кто-либо, с кем он может непосредственно взаимодействовать?» — и **не является**
+универсальным фильтром истории (это делает perception / `can_character_perceive_event`).
+
+Хелпер `perception.compute_is_isolated(char_loc, other_char_locs, player_loc)`:
+
+- NPC изолирован **только если** в его локации нет ни игрока, ни других NPC.
+- Сравнение локаций — через `perception.locations_match` (case-insensitive
+  при `settings.normalize_locations=True`).
+- Пустая локация (`""`) = общая сцена → **не** изолирует.
+
+```python
+perception.compute_is_isolated("living_room", ["living_room"], "kitchen")  # False — Борис рядом
+perception.compute_is_isolated("living_room", ["kitchen"], "kitchen")      # True  — рядом никого
+perception.compute_is_isolated("", [], "")                                  # False — общая сцена
+```
+
+Применяется во всех **4 местах** расчёта изоляции в `chat_engine.py` через
+хелпер `_character_is_isolated`:
+
+- обычная генерация — `context_builder.build(... is_isolated=...)` и
+  `ollama_client.generate(... is_isolated=...)`;
+- регенерация (`regenerate_message_streaming`) — те же две точки.
+
+Эффект: Анна и Борис в гостиной при игроке на кухне **не изолированы** —
+полноценно взаимодействуют друг с другом (тест 5 §22).
+
+Role isolation / foreign speaker protection **не затронуты** (§12): маркер
+`изоляция`, stop sequences, `sanitize_and_validate_response` и чужие speaker
+markers по-прежнему обрабатываются независимо от `is_isolated`.
+
 ## Дальнейшие спринты
 
-- Спринт 3 — UI вкладки «Локации» (кнопка «+», форма, edit/delete) в новом Vue-фронтенде.
-- Спринты 4–7 — использование локаций движком: персональная фильтрация истории,
-  `compute_is_isolated`, описание локации в scene block, память, диагностика.
+- Спринты 4, 6–7 — персональная фильтрация истории, описание локации в scene
+  block, память, диагностика, полная регрессия.

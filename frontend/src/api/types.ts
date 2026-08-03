@@ -1,5 +1,6 @@
 import type { Chat, ChatListItem } from '@/types/chat'
 import type { Character, CharacterSummary } from '@/types/character'
+import type { Location } from '@/types/location'
 import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type {
@@ -62,6 +63,18 @@ export interface CharacterUpdateInput {
   avatar_crop?: string
   temperature?: number | null
   order_index?: number
+}
+
+/** POST /chats/{chat_id}/locations. */
+export interface LocationCreateInput {
+  name: string
+  description?: string
+}
+
+/** PUT /chats/{chat_id}/locations/{id}. */
+export interface LocationUpdateInput {
+  name?: string
+  description?: string
 }
 
 /** PATCH /chats/{id}/scene. weather и active_goal живут в custom_state. */
@@ -142,6 +155,14 @@ export interface Api {
   deleteCharacter(characterId: number): Promise<void>
   uploadCharacterAvatar(characterId: number, file: File): Promise<Character>
   deleteCharacterAvatar(characterId: number): Promise<Character>
+  fetchLocations(chatId: number): Promise<Location[]>
+  createLocation(chatId: number, input: LocationCreateInput): Promise<Location>
+  updateLocation(
+    chatId: number,
+    locationId: number,
+    patch: LocationUpdateInput,
+  ): Promise<Location>
+  deleteLocation(chatId: number, locationId: number): Promise<void>
   fetchMemories(characterId: number): Promise<Memory[]>
   fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null>
   updateCharacterLocation(characterId: number, location: string): Promise<Character>

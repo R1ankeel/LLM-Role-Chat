@@ -37,6 +37,27 @@ def locations_match(a: str | None, b: str | None) -> bool:
     return normalize_location(a) == normalize_location(b)
 
 
+def compute_is_isolated(
+    char_loc: str | None,
+    other_char_locs: list[str | None],
+    player_loc: str | None,
+) -> bool:
+    """Whether the character has no one (player or other NPC) nearby.
+
+    A character is isolated only when neither the player nor any other NPC
+    shares their location. Locations are compared via `locations_match`.
+    An empty location (`""`) means a shared scene and never isolates.
+    """
+    if not (char_loc or "").strip():
+        return False
+    if locations_match(char_loc, player_loc):
+        return False
+    for other_loc in other_char_locs:
+        if locations_match(char_loc, other_loc):
+            return False
+    return True
+
+
 def parse_target_ids(raw: Any) -> list[int]:
     """Parse target character ids from list, JSON string, or empty."""
     if raw is None or raw == "":

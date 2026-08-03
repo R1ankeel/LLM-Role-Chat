@@ -410,6 +410,55 @@ async def test_epistemic_evidence_detects_direct_interaction(db_session, chat, m
 
 
 @pytest.mark.asyncio
+async def test_compute_is_isolated_engine_applied(db_session, chat, mock_client):
+    """TEST 5: NPC with a peer in the same location is not isolated even when the
+    player is elsewhere; an NPC alone in its location is isolated."""
+    await crud.update_chat(
+        db_session, chat.id, schemas.ChatUpdate(player_location="kitchen")
+    )
+    a = await crud.create_character(
+        db_session, chat.id,
+        schemas.CharacterCreate(name="Anna", location="living_room", order_index=1),
+    )
+    b = await crud.create_character(
+        db_session, chat.id,
+        schemas.CharacterCreate(name="Boris", location="living_room", order_index=2),
+    )
+    c = await crud.create_character(
+        db_session, chat.id,
+        schemas.CharacterCreate(name="Cid", location="bedroom", order_index=3),
+    )
+
+    captured_isolated: dict[str, bool] = {}
+
+    async def fake_generate(**kwargs):
+        character = kwargs["character"]
+        captured_isolated[character.name] = kwargs.get("is_isolated", False)
+        yield {
+            "type": "response",
+            "text": f"Reply from {character.name} with enough text for validation.",
+        }
+
+    with patch(
+        "app.chat_engine.ollama_client.generate",
+        side_effect=fake_generate,
+    ), patch("app.chat_engine.asyncio.create_task"), patch(
+        "app.chat_engine.asyncio.to_thread",
+        side_effect=_run_in_current_thread,
+    ):
+        async for _ in chat_engine.process_user_message_streaming(
+            mock_client, db_session, chat.id, "Hello everyone",
+        ):
+            pass
+
+    assert captured_isolated["Anna"] is False  # Boris nearby
+    assert captured_isolated["Boris"] is False  # Anna nearby
+    assert captured_isolated["Cid"] is True  # alone in bedroom
+
+    assert set(captured_isolated) == {"Anna", "Boris", "Cid"}
+
+
+@pytest.mark.asyncio
 async def test_batch_failure_falls_back_to_per_pair(db_engine, mock_client):
     """Sprint 1 item 8: batch failure -> per-pair fallback; gating still applies."""
     from sqlalchemy.ext.asyncio import async_sessionmaker

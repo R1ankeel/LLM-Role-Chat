@@ -1,5 +1,6 @@
 import type { Chat, ChatListItem } from '@/types/chat'
 import type { Character, CharacterSummary } from '@/types/character'
+import type { Location } from '@/types/location'
 import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
@@ -18,6 +19,8 @@ import type {
   CharacterCreateInput,
   CharacterUpdateInput,
   CreateChatInput,
+  LocationCreateInput,
+  LocationUpdateInput,
   MessagesPage,
   ModelsResponse,
   RelationshipIssueState,
@@ -31,6 +34,7 @@ import {
   chatToListItem,
   mockCharacters,
   mockChats,
+  mockLocations,
   mockMemories,
   mockMessages,
   mockRelationshipEvents,
@@ -247,6 +251,52 @@ export const mockApi: Api = {
     throw new Error('Персонаж не найден')
   },
 
+  fetchLocations(chatId: number): Promise<Location[]> {
+    return delay(clone(mockLocations[chatId] ?? []))
+  },
+
+  createLocation(chatId: number, input: LocationCreateInput): Promise<Location> {
+    const list = (mockLocations[chatId] ??= [])
+    const now = nowIso()
+    const location: Location = {
+      id: nextId(),
+      chat_id: chatId,
+      name: input.name,
+      description: input.description ?? '',
+      created_at: now,
+      updated_at: now,
+    }
+    list.push(location)
+    const chat = mockChats.find((c) => c.id === chatId)
+    if (chat) chat.locations = JSON.stringify(list.map((l) => l.name))
+    return delay(clone(location))
+  },
+
+  updateLocation(
+    chatId: number,
+    locationId: number,
+    patch: LocationUpdateInput,
+  ): Promise<Location> {
+    const list = mockLocations[chatId] ?? []
+    const loc = list.find((l) => l.id === locationId)
+    if (!loc) throw new Error('Локация не найдена')
+    if (patch.name != null) loc.name = patch.name
+    if (patch.description != null) loc.description = patch.description
+    loc.updated_at = nowIso()
+    const chat = mockChats.find((c) => c.id === chatId)
+    if (chat) chat.locations = JSON.stringify(list.map((l) => l.name))
+    return delay(clone(loc))
+  },
+
+  deleteLocation(chatId: number, locationId: number): Promise<void> {
+    const list = mockLocations[chatId] ?? []
+    const index = list.findIndex((l) => l.id === locationId)
+    if (index !== -1) list.splice(index, 1)
+    const chat = mockChats.find((c) => c.id === chatId)
+    if (chat) chat.locations = JSON.stringify(list.map((l) => l.name))
+    return delay(undefined)
+  },
+
   fetchMemories(characterId: number): Promise<Memory[]> {
     return delay(clone(mockMemories[characterId] ?? []))
   },
@@ -337,6 +387,7 @@ export const mockApi: Api = {
       },
     ]
     mockMessages[chat.id] = []
+    mockLocations[chat.id] = []
     mockWorldEvents[chat.id] = []
     mockScene[chat.id] = {
       chat_id: chat.id,
@@ -386,6 +437,7 @@ export const mockApi: Api = {
     if (index !== -1) mockChats.splice(index, 1)
     delete mockCharacters[chatId]
     delete mockMessages[chatId]
+    delete mockLocations[chatId]
     delete mockWorldEvents[chatId]
     delete mockScene[chatId]
     return delay(undefined)

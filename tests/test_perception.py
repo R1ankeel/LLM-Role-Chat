@@ -302,6 +302,53 @@ async def test_sequential_generation_respects_locations(db_session, chat, mock_c
     assert bob_map[alice_msg.id] == "absent"
 
 
+def test_compute_is_isolated_basic():
+    # A + B same location, player elsewhere -> not isolated (Boris nearby)
+    assert (
+        perception.compute_is_isolated(
+            "living_room", ["living_room"], "kitchen"
+        )
+        is False
+    )
+    # A + B different locations, player with B -> isolated (no one nearby)
+    assert (
+        perception.compute_is_isolated(
+            "living_room", ["kitchen"], "kitchen"
+        )
+        is True
+    )
+
+
+def test_compute_is_isolated_player_same_location():
+    assert (
+        perception.compute_is_isolated(
+            "living_room", ["kitchen"], "living_room"
+        )
+        is False
+    )
+
+
+def test_compute_is_isolated_empty_location_is_shared_scene():
+    assert perception.compute_is_isolated("", [], "") is False
+    assert perception.compute_is_isolated("", ["kitchen"], "kitchen") is False
+    assert perception.compute_is_isolated("", [], "living_room") is False
+
+
+def test_compute_is_isolated_case_insensitive():
+    assert (
+        perception.compute_is_isolated(
+            "Living_Room", ["living_room"], "kitchen"
+        )
+        is False
+    )
+    assert (
+        perception.compute_is_isolated(
+            "Living_Room", ["Кухня"], "кухня"
+        )
+        is True
+    )
+
+
 def test_can_character_perceive_event_api():
     presence, reason = perception.can_character_perceive_event(
         viewer_character_id=2,

@@ -1,5 +1,6 @@
 import type { Chat, ChatListItem } from '@/types/chat'
 import type { Character, CharacterSummary } from '@/types/character'
+import type { Location } from '@/types/location'
 import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
@@ -47,6 +48,45 @@ export const mockChats: Chat[] = [
     created_at: '2026-08-02T09:00:00Z',
   },
 ]
+
+export const mockLocations: Record<number, Location[]> = {
+  1: [
+    {
+      id: 1,
+      chat_id: 1,
+      name: 'Таверна',
+      description: 'Тёплый зал с камином, за стойкой шумно.',
+      created_at: '2026-08-01T18:00:00Z',
+      updated_at: '2026-08-01T18:00:00Z',
+    },
+    {
+      id: 2,
+      chat_id: 1,
+      name: 'Улица',
+      description: 'Грязная мостовая, редкие фонари.',
+      created_at: '2026-08-01T18:00:00Z',
+      updated_at: '2026-08-01T18:00:00Z',
+    },
+    {
+      id: 3,
+      chat_id: 1,
+      name: 'Городские ворота',
+      description: 'Массивные деревянные ворота, стража.',
+      created_at: '2026-08-01T18:00:00Z',
+      updated_at: '2026-08-01T18:00:00Z',
+    },
+  ],
+  2: [
+    {
+      id: 10,
+      chat_id: 2,
+      name: 'Аудитория',
+      description: 'Ряды парт, доска с формулами.',
+      created_at: '2026-08-01T16:30:00Z',
+      updated_at: '2026-08-01T16:30:00Z',
+    },
+  ],
+}
 
 export const mockCharacters: Record<number, Character[]> = {
   1: [

@@ -3,13 +3,16 @@ export const API_BASE: string = import.meta.env.VITE_API_BASE || '/api'
 export class ApiError extends Error {
   status: number
   detail: string
+  /** Распарсенный объект `detail` (например, {message, characters} при DELETE 409). */
+  detailData: unknown
   rateLimit: boolean
 
-  constructor(status: number, detail: string, rateLimit = false) {
+  constructor(status: number, detail: string, rateLimit = false, detailData?: unknown) {
     super(detail)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.detailData = detailData
     this.rateLimit = rateLimit
   }
 }
@@ -25,13 +28,19 @@ export interface RequestOptions {
 
 export async function toApiError(res: Response): Promise<ApiError> {
   let detail = `Ошибка ${res.status}`
+  let detailData: unknown
   try {
     const data = await res.json()
     if (typeof data?.detail === 'string') detail = data.detail
+    else if (data?.detail && typeof data.detail === 'object') {
+      detailData = data.detail
+      const message = (data.detail as { message?: string }).message
+      detail = message || JSON.stringify(data.detail)
+    }
   } catch {
     // non-JSON body — keep the default detail
   }
-  return new ApiError(res.status, detail, res.status === 429)
+  return new ApiError(res.status, detail, res.status === 429, detailData)
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {

@@ -1,6 +1,6 @@
 # Локации 2.0 и исправление изоляции NPC — план реализации
 
-> **Статус:** Спринт 1 «Модель Location + миграция/backfill» выполнен (2026-08-03). Спринт 2 «CRUD API» выполнен (2026-08-03). Спринты 3-7 — впереди.
+> **Статус:** Спринты 1-3 выполнены (2026-08-03). Спринт 3 «UI вкладки Локации» выполнен (2026-08-03): CRUD в UI, обработка 409, сборка/типы прошли. Спринт 5 «compute_is_isolated» выполнен (2026-08-03). Спринты 4, 6-7 — впереди.
 > **Дата:** 2026-08-03
 > **Цель:** реализовать систему «Локации 2.0» (локации как самостоятельная сущность с CRUD и UI) и исправить чрезмерную изоляцию NPC.
 > **Главный принцип:** общая история чата остаётся единой. Для каждого NPC из неё формируется персональное представление истории на основании того, какие события этот NPC мог воспринимать. Локация — главный фактор восприятия, но не единственный. NPC одной локации полноценно взаимодействуют друг с другом.
@@ -277,7 +277,7 @@ Filtered messages=<M>
 7. CRUD API (§16).
 8. UI вкладки «Локации» (§17).
 9. Персональная фильтрация истории через perception (§2-4, §8-9).
-10. `compute_is_isolated` (§6).
+10. `compute_is_isolated` (§6). (выполнено, Спринт 5)
 11. `effective_prior_replies` (§10).
 12. Проверка sequential generation (§11).
 13. Описание локации в scene block (§18).
@@ -364,7 +364,7 @@ Filtered messages=<M>
 - `pytest tests/test_locations_api.py`: 8 passed.
 - Полный прогон `pytest`: 550 passed, 28 failed — набор падений идентичен pre-existing из Спринта 1 (проверено списком; новых нет).
 
-## Спринт 3 — UI вкладки «Локации»
+## Спринт 3 — UI вкладки «Локации» — ВЫПОЛНЕН (2026-08-03)
 **Цель:** пользователь управляет локациями из нового Vue-фронтенда.
 **Задачи:**
 1. `frontend/src/api/locations.ts` (новый API-слой).
@@ -372,6 +372,14 @@ Filtered messages=<M>
 3. Обработка 409 при удалении — показ ссылающихся персонажей.
 4. Обновление списка после CRUD; при необходимости синхронизация `chat.locations` в сторе.
 **Критерий готовности:** полный цикл create → list → edit → delete в UI; старый SPA не тронут.
+
+**Что сделано:**
+- `frontend/src/api/locations.ts`: `fetchLocations/createLocation/updateLocation/deleteLocation` + `LocationCreateInput/LocationUpdateInput` (дубликаты типов также в `api/types.ts`); в `api/index.ts` методы добавлены в фасад реального API, интерфейс `Api` в `api/types.ts` расширен.
+- `frontend/src/api/client.ts`: `ApiError.detailData` + парсинг объектного `detail` (`message` или `JSON.stringify`) в `toApiError`.
+- `frontend/src/mocks/data.ts`: `mockLocations` (чаты 1, 2); `frontend/src/mocks/service.ts`: мок-реализации CRUD + синхронизация `chat.locations` (JSON-кэш названий) и очистка `mockLocations` при create/delete чата.
+- `frontend/src/components/settings/LocationSettings.vue` переписан: список (загрузка при смене чата), кнопка «+» → инлайн-форма «Название/Описание», карточки «Изменить/Удалить», подтверждение удаления через `confirm`, обработка 409 через `ApiError.detailData` (тост со списком персонажей), тосты через `ui.toast`.
+- Синхронизация `chat.locations` в сторе `chats.ts` не требуется: поле нигде не читается в UI, mock и backend синхронизируют его на каждый CRUD.
+**Проверка:** `npx vue-tsc -b` без ошибок; `npm run build` собран (366ms); `pytest tests/test_locations_api.py` — 8 passed. `frontend/dist` в gitignore.
 
 ## Спринт 4 — Персональная фильтрация истории (perception)
 **Цель:** корректные персональные view истории NPC (§2-4, §8-9).
@@ -382,13 +390,24 @@ Filtered messages=<M>
 4. Проверить sequential generation (§11) и перемещение между локациями (§19) — view пересчитывается по текущей локации.
 **Критерий готовности:** тесты 1-4, 7, 9 (§22) проходят; единый фильтр для истории, `prior_replies`, sequential generation.
 
-## Спринт 5 — `compute_is_isolated`
+## Спринт 5 — `compute_is_isolated` — ВЫПОЛНЕН (2026-08-03)
 **Цель:** точная изоляция (§5-6).
 **Задачи:**
 1. Хелпер `compute_is_isolated(char_loc, other_char_locs, player_loc)` с `locations_match`; `""` = общая сцена → не изолирован.
 2. Применить во всех 4 местах `chat_engine.py` (обычная генерация + регенерация).
 3. Убедиться, что role isolation и foreign speaker protection не затронуты (§12).
 **Критерий готовности:** тест 5 (§22) проходит; Анна и Борис в гостиной при игроке на кухне взаимодействуют.
+
+**Что сделано:**
+- `app/perception.py`: хелпер `compute_is_isolated(char_loc, other_char_locs, player_loc)` — NPC изолирован только если в его локации нет ни игрока, ни других NPC; сравнение через `locations_match`; пустая локация (`""`) = общая сцена → `False`.
+- `app/chat_engine.py`: хелпер `_character_is_isolated(character_locations, character_id, characters, player_location)`; применён во всех **4** местах расчёта изоляции: `context_builder.build(...)` и `ollama_client.generate(...)` в обычной генерации (`process_user_message_streaming`) и в `regenerate_message_streaming`. Старое выражение `character_locations.get(id) != player_location` убрано.
+- Role isolation / foreign speaker protection **не тронуты**: `is_isolated` лишь включает/выключает `isolated_block` и generation cue; маркер `изоляция`, stop sequences, `sanitize_and_validate_response`, чужие speaker markers обрабатываются независимо (§12).
+- Тесты: юнит-тесты `compute_is_isolated` в `tests/test_perception.py` (общая сцена, игрок рядом, другой NPC рядом, одинокий NPC, case-insensitive); интеграционный тест `tests/test_chat_engine.py::test_compute_is_isolated_engine_applied` (тест 5 §22: A+B в гостиной → `is_isolated=False`, одинокий C → `is_isolated=True` при игроке на кухне).
+- `docs/locations.md`: раздел «Точная изоляция NPC: compute_is_isolated».
+
+**Проверка:**
+- `pytest tests/test_perception.py tests/test_chat_engine.py tests/test_role_isolation.py tests/test_witness_filter.py tests/test_locations_api.py`: 74 passed.
+- Полный прогон `pytest`: 555 passed, 28 failed — набор падений идентичен pre-existing из Спринтов 1-2 (task_queue `MemoryJobQueue`, context_state, embeddings, memory, repetition, stream_disconnect, token_counter; в изменённых файлах падений нет).
 
 ## Спринт 6 — Scene block с описанием + память + логирование
 **Цель:** полировка контекста и диагностика.
