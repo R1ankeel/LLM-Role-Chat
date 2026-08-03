@@ -1,6 +1,6 @@
 # Локации 2.0 и исправление изоляции NPC — план реализации
 
-> **Статус:** Спринты 1-3 выполнены (2026-08-03). Спринт 3 «UI вкладки Локации» выполнен (2026-08-03): CRUD в UI, обработка 409, сборка/типы прошли. Спринт 5 «compute_is_isolated» выполнен (2026-08-03). Спринты 4, 6-7 — впереди.
+> **Статус:** Спринты 1-3 выполнены (2026-08-03). Спринт 3 «UI вкладки Локации» выполнен (2026-08-03): CRUD в UI, обработка 409, сборка/типы прошли. Спринт 5 «compute_is_isolated» выполнен (2026-08-03). Спринт 6 «Scene block с описанием + память + логирование» выполнен (2026-08-03). Спринты 4, 7 — впереди.
 > **Дата:** 2026-08-03
 > **Цель:** реализовать систему «Локации 2.0» (локации как самостоятельная сущность с CRUD и UI) и исправить чрезмерную изоляцию NPC.
 > **Главный принцип:** общая история чата остаётся единой. Для каждого NPC из неё формируется персональное представление истории на основании того, какие события этот NPC мог воспринимать. Локация — главный фактор восприятия, но не единственный. NPC одной локации полноценно взаимодействуют друг с другом.
@@ -280,9 +280,9 @@ Filtered messages=<M>
 10. `compute_is_isolated` (§6). (выполнено, Спринт 5)
 11. `effective_prior_replies` (§10).
 12. Проверка sequential generation (§11).
-13. Описание локации в scene block (§18).
-14. Проверка memory attribution (§20).
-15. Диагностическое логирование (§21).
+13. Описание локации в scene block (§18). (выполнено, Спринт 6)
+14. Проверка memory attribution (§20). (выполнено, Спринт 6)
+15. Диагностическое логирование (§21). (выполнено, Спринт 6)
 16. Автотесты (§22).
 17. Ручные сценарии (§23).
 18. Проверка, что существующие тесты role isolation не сломаны (§12).
@@ -409,13 +409,26 @@ Filtered messages=<M>
 - `pytest tests/test_perception.py tests/test_chat_engine.py tests/test_role_isolation.py tests/test_witness_filter.py tests/test_locations_api.py`: 74 passed.
 - Полный прогон `pytest`: 555 passed, 28 failed — набор падений идентичен pre-existing из Спринтов 1-2 (task_queue `MemoryJobQueue`, context_state, embeddings, memory, repetition, stream_disconnect, token_counter; в изменённых файлах падений нет).
 
-## Спринт 6 — Scene block с описанием + память + логирование
+## Спринт 6 — Scene block с описанием + память + логирование — ВЫПОЛНЕН (2026-08-03)
 **Цель:** полировка контекста и диагностика.
 **Задачи:**
 1. `Location.description` в scene block (§18): «Твоя локация: <name> — <description>», без описания — только название.
 2. Проверка memory attribution (§20) — факт привязан к говорящему (тест 8).
 3. Диагностическое DEBUG-логирование (§21): NPC, Location, PlayerLocation, Visible/Hidden characters, Visible/Filtered messages.
 **Критерий готовности:** тест 8 проходит; логи позволяют ответить на «почему NPC не видит другого NPC» и «почему сообщение чужой локации попало в контекст».
+
+**Что сделано:**
+- **Scene block с описанием (§18):** `prompt_builder.build_scene_block` — новый параметр `location_descriptions: dict[str, str]` (имя → описание). После «Твоя локация: <name>» добавляется описание на отдельной строке, если непустое; без описания — только название. Описание другой локации в контекст не попадает.
+- **Проводка в оба пути генерации:** новый хелпер `chat_engine._load_location_descriptions(db, chat_id)` (из `crud.get_chat_locations`); вызывается в `process_user_message_streaming` и `regenerate_message_streaming`, передаётся в `ContextBuilder.build(...)` и `ollama_client.generate(...)` → `_generate_once(...)` → `build_scene_block(...)`.
+- **Память / attribution (§20, тест 8):** проверен `filter_history_for_memory_extraction` — строки сохраняют префикс говорящего («Анна: Я ненавижу кофе.»), так что Борис слышит реплику Анны, но владелец факта — Анна. Архитектура памяти не менялась. Новый тест `tests/test_memory_perception.py::test_memory_attribution_speaker_preserved_same_room`.
+- **Диагностическое логирование (§21):** настройка `settings.generation_debug` (`GENERATION_DEBUG`, default `false`). Хелпер `chat_engine._log_generation_diagnostics` вызывается в цикле генерации NPC обоих путей и пишет в `logger.debug`: `NPC / Location / PlayerLocation / Visible characters / Hidden characters / Visible messages / Filtered messages`. Visible messages — presence ≠ absent; Filtered — presence = absent (через `resolve_presence`).
+- Тесты: scene block с описанием (3 юнит-теста в `tests/test_prompt_builder.py`), описание в обоих путях генерации + `location_descriptions` в `generate` (`tests/test_chat_engine.py::test_location_description_in_scene_block`), DEBUG-лог (§21) с on/off флагом (`tests/test_chat_engine.py::test_generation_diagnostics_log`), тест 8 (§20) memory attribution (`tests/test_memory_perception.py`).
+- `docs/locations.md`: разделы «Описание локации в scene block», «Память и attribution», «Диагностическое логирование».
+
+**Проверка:**
+- Новые тесты: `test_prompt_builder.py::TestBuildSceneBlockLocationDescriptions`, `test_chat_engine.py::test_location_description_in_scene_block`, `test_chat_engine.py::test_generation_diagnostics_log`, `test_memory_perception.py::test_memory_attribution_speaker_preserved_same_room` — 6 passed.
+- Затронутые файлы (`test_chat_engine`, `test_context_builder`, `test_ollama_chat`, `test_prompt_builder`, `test_perception`, `test_locations_api`, `test_witness_filter`): 107 passed.
+- Полный прогон `pytest`: 561 passed, 28 failed — набор падений идентичен pre-existing из Спринтов 1-2-5 (task_queue `MemoryJobQueue`, context_state, embeddings, memory_service, memory_perception ×6, repetition, stream_disconnect, token_counter; в изменённых файлах новых падений нет).
 
 ## Спринт 7 — Полный прогон тестов и ручные сценарии
 **Цель:** регрессия и верификация всего.

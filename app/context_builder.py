@@ -99,6 +99,7 @@ class ContextBuilder:
         present_character_names: list[str] | None = None,
         relationships_block: str = "",
         locations: str = "[]",
+        location_descriptions: dict[str, str] | None = None,
         stagnation_rounds: int = 0,
         viewer_location: str | None = None,
         prior_replies: list[tuple[str, str]] | None = None,
@@ -215,6 +216,7 @@ class ContextBuilder:
             ),
             character_appearances=character_appearances,
             locations=locations,
+            location_descriptions=location_descriptions,
         )
         instructions_text = self._build_instructions_text(
             character, scene_state, stagnation_rounds, prior_replies, is_isolated

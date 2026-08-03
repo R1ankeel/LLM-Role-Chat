@@ -808,6 +808,7 @@ async def _generate_once(
     stagnation_rounds: int = 0,
     is_isolated: bool = False,
     locations: str = "[]",
+    location_descriptions: dict[str, str] | None = None,
     relationships_block: str = "",
     behavior_drivers_block: str = "",
     open_issues_block: str = "",
@@ -876,6 +877,7 @@ async def _generate_once(
             current_character_name=character.name,
             character_locations=char_locs,
             locations=locations,
+            location_descriptions=location_descriptions,
         )
 
     # Vocabulary fingerprinting block — prevents style contamination (Phase 5)
@@ -1222,6 +1224,7 @@ async def generate(
     stagnation_rounds: int = 0,
     is_isolated: bool = False,
     locations: str = "[]",
+    location_descriptions: dict[str, str] | None = None,
     relationships_block: str = "",
     behavior_drivers_block: str = "",
     open_issues_block: str = "",
@@ -1308,6 +1311,7 @@ async def generate(
             stagnation_rounds=stagnation_rounds,
             is_isolated=is_isolated,
             locations=locations,
+            location_descriptions=location_descriptions,
             relationships_block=relationships_block,
             behavior_drivers_block=behavior_drivers_block,
             open_issues_block=open_issues_block,

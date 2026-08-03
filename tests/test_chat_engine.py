@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -539,3 +541,127 @@ async def test_batch_failure_falls_back_to_per_pair(db_engine, mock_client):
         assert rel_ab.trust == 45
     finally:
         await verify.close()
+
+
+def test_generation_diagnostics_log(caplog):
+    """TEST (§21): DEBUG log shows visible/hidden characters and message counts."""
+    anna = SimpleNamespace(id=1, name="Анна")
+    boris = SimpleNamespace(id=2, name="Борис")
+    victor = SimpleNamespace(id=3, name="Виктор")
+    characters = [anna, boris, victor]
+    character_locations = {1: "гостиная", 2: "гостиная", 3: "кухня"}
+    character_names = {1: "Анна", 2: "Борис", 3: "Виктор"}
+
+    messages = [
+        SimpleNamespace(
+            id=1, role="user", content="Всем привет!", location="гостиная",
+            visibility="local", character_id=None, target_character_ids="[]",
+        ),
+        SimpleNamespace(
+            id=2, role="character", content="Что-то с кухни.", location="кухня",
+            visibility="local", character_id=3, target_character_ids="[]",
+        ),
+    ]
+
+    with patch.object(settings, "generation_debug", True), caplog.at_level(
+        logging.DEBUG, logger="app.chat_engine"
+    ):
+        chat_engine._log_generation_diagnostics(
+            character_id=anna.id,
+            character_name=anna.name,
+            character_locations=character_locations,
+            player_location="кухня",
+            player_name="Игрок",
+            characters=characters,
+            character_names=character_names,
+            messages=messages,
+            presence_map=None,
+        )
+
+    text = caplog.text
+    assert "NPC=Анна" in text
+    assert "Location='гостиная'" in text
+    assert "PlayerLocation='кухня'" in text
+    # Boris is in the same location (visible); Victor is not (hidden).
+    assert "Visible characters=['Борис']" in text
+    assert "Hidden characters=['Виктор']" in text
+    # The user message in the living room is visible; the kitchen line is filtered.
+    assert "Visible messages=1" in text
+    assert "Filtered messages=1" in text
+    # The player is on the kitchen, so is NOT listed as visible to Anna.
+    visible_line = [l for l in text.splitlines() if l.startswith("Visible characters=")][0]
+    assert "Игрок" not in visible_line
+
+    # Off by default: no diagnostics are emitted when the flag is off.
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="app.chat_engine"):
+        chat_engine._log_generation_diagnostics(
+            character_id=anna.id,
+            character_name=anna.name,
+            character_locations=character_locations,
+            player_location="кухня",
+            player_name="Игрок",
+            characters=characters,
+            character_names=character_names,
+            messages=messages,
+            presence_map=None,
+        )
+    assert "NPC=Анна" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_location_description_in_scene_block(db_session, chat, mock_client):
+    """TEST (§18): Location.description flows into the scene block via both paths."""
+    await crud.create_location(
+        db_session,
+        chat.id,
+        schemas.LocationCreate(
+            name="Гостиная", description="Большая светлая гостиная с камином."
+        ),
+    )
+    await crud.create_location(
+        db_session,
+        chat.id,
+        schemas.LocationCreate(name="Кухня", description="Тесная кухня."),
+    )
+    await crud.create_character(
+        db_session,
+        chat.id,
+        schemas.CharacterCreate(name="Анна", location="Гостиная", order_index=1),
+    )
+
+    captured_scene_texts: list[str] = []
+    captured_descriptions: list = []
+
+    async def fake_generate(**kwargs):
+        built_context = kwargs.get("built_context")
+        if built_context is not None:
+            captured_scene_texts.append(built_context.scene_text)
+        captured_descriptions.append(kwargs.get("location_descriptions"))
+        yield {
+            "type": "response",
+            "text": "Reply from Анна with enough text for validation.",
+        }
+
+    with patch(
+        "app.chat_engine.ollama_client.generate",
+        side_effect=fake_generate,
+    ), patch("app.chat_engine.asyncio.create_task"), patch(
+        "app.chat_engine.asyncio.to_thread",
+        side_effect=_run_in_current_thread,
+    ):
+        async for _ in chat_engine.process_user_message_streaming(
+            mock_client, db_session, chat.id, "Привет всем",
+        ):
+            pass
+
+    # The descriptions map is passed to both generation entry points.
+    assert captured_descriptions == [
+        {"Гостиная": "Большая светлая гостиная с камином.", "Кухня": "Тесная кухня."}
+    ]
+    # The scene text renders the description under the character's location.
+    scene_text = captured_scene_texts[0]
+    assert "Твоя локация: Гостиная" in scene_text
+    assert "Большая светлая гостиная с камином." in scene_text
+    # Another location's description does not leak in.
+    assert "Тесная кухня" not in scene_text

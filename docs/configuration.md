@@ -142,6 +142,12 @@
 | `CONTEXT_MESSAGE_EMBEDDING_ENABLED` | `false` | — | эмбеддинг сообщений |
 | `CONTEXT_DEBUG` | `false` | `false` | диагностика в логах |
 
+## Диагностика генерации (Локации 2.0, §21)
+
+| ключ | дефолт | описание |
+|---|---|---|
+| `GENERATION_DEBUG` | `false` | по-NPC DEBUG-лог в `chat_engine` (NPC, локации, visible/hidden персонажи, visible/filtered сообщения). Выключен на production |
+
 Приоритет бюджета: резерв → state (P0) → summary/memory (P2) → retrieval (P3) → свежий диалог (остаток).
 
 ## Динамический num_ctx (KV window)

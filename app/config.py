@@ -131,6 +131,11 @@ class Settings(BaseSettings):
     context_message_embedding_enabled: bool = Field(default=False, alias="CONTEXT_MESSAGE_EMBEDDING_ENABLED")
     context_debug: bool = Field(default=False, alias="CONTEXT_DEBUG")
 
+    # Diagnostic per-NPC generation logging (Plans/locations2.md §21). When on,
+    # each generation logs NPC/location + visible/hidden characters and message
+    # counts to answer "why doesn't this NPC see that NPC / that message".
+    generation_debug: bool = Field(default=False, alias="GENERATION_DEBUG")
+
     # Dynamic Ollama num_ctx window (KV cache). Starts at MIN_CTX per chat and
     # only grows when the assembled prompt outgrows it, capped by MAX_CTX.
     min_ctx_tokens: int = Field(default=8192, alias="MIN_CTX")

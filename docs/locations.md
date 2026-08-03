@@ -2,7 +2,7 @@
 
 Локации — самостоятельная сущность чата с CRUD API и UI. Реализовано в рамках
 «Локации 2.0 и проверка изоляции NPC» (см. `Plans/locations2.md`, спринты 1–3,
-5).
+5–6).
 
 ## Модель и совместимость
 
@@ -119,7 +119,60 @@ Role isolation / foreign speaker protection **не затронуты** (§12): 
 `изоляция`, stop sequences, `sanitize_and_validate_response` и чужие speaker
 markers по-прежнему обрабатываются независимо от `is_isolated`.
 
+## Описание локации в scene block (спринт 6)
+
+`Location.description` попадает в scene block персонажа под его локацией (§18):
+
+```
+Твоя локация: Гостиная
+
+Большая светлая гостиная с диваном, телевизором и выходом на кухню.
+```
+
+- Без описания — только «Твоя локация: Гостиная».
+- Описание — это **окружение**, а не «истина о происходящем»: не отдельная
+  сюжетная информация, не «правда» о событиях.
+- Описание другой локации в контекст персонажа **не** утекает.
+- Реализация: `prompt_builder.build_scene_block(..., location_descriptions=...)`,
+  параметр `location_descriptions: dict[str, str]` (имя локации → описание).
+  Передаётся из `crud.get_chat_locations` через оба пути генерации
+  (`process_user_message_streaming` и `regenerate_message_streaming`) в
+  `ContextBuilder.build` и `ollama_client.generate`/`_generate_once`.
+
+## Память и attribution (спринт 6, §20)
+
+Проверен `filter_history_for_memory_extraction`: строки форматируются с
+префиксом говорящего («Анна: Я ненавижу кофе.»), поэтому даже когда Борис
+**слышит** реплику Анны в одной комнате, владелец факта сохранён — извлечение
+приписывает факт Анне. **Доступность события ≠ владелец факта.**
+
+Memory architecture не менялась: фильтрация по presence (`present`/`told`)
+и attribution на уровне форматирования строк работают корректно (тест 8 §22).
+
+## Диагностическое логирование (спринт 6, §21)
+
+За настройкой `settings.generation_debug` (`GENERATION_DEBUG`, по умолчанию
+`false` — выключено на production). В цикле генерации NPC (обычная генерация
+и регенерация) логируется (`logger.debug`, логгер `app.chat_engine`):
+
+```
+NPC=<имя> Location=<локация> PlayerLocation=<локация игрока>
+Visible characters=[...]
+Hidden characters=[...]
+Visible messages=<N>
+Filtered messages=<M>
+```
+
+- **Visible characters** — NPC и игрок в той же локации, что и текущий персонаж;
+- **Hidden characters** — NPC в других локациях;
+- **Visible messages** — сообщения, прошедшие perception-фильтр (presence ≠ absent);
+- **Filtered messages** — сообщения, скрытые фильтром (presence = absent).
+
+Помогает ответить на вопросы: «почему NPC не видит другого NPC» и «почему
+сообщение из другой локации попало в контекст». Реализовано в
+`chat_engine._log_generation_diagnostics`.
+
 ## Дальнейшие спринты
 
-- Спринты 4, 6–7 — персональная фильтрация истории, описание локации в scene
-  block, память, диагностика, полная регрессия.
+- Спринты 4, 7 — персональная фильтрация истории, полная регрессия и ручные
+  сценарии.

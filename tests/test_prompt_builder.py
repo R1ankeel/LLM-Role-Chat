@@ -271,4 +271,55 @@ class TestBuildSceneBlock:
             character_locations=scene_state.character_locations,
         )
         assert "Рядом с тобой: Боб" in block
+
+
+class TestBuildSceneBlockLocationDescriptions:
+    """Location.description renders under the current character's location (§18)."""
+
+    def _scene_state(self, cl_map):
+        return SimpleNamespace(
+            time_of_day="",
+            custom_state=None,
+            character_locations=cl_map,
+        )
+
+    def test_description_rendered_after_location(self):
+        scene_state = self._scene_state({"Алиса": "Гостиная", "Боб": "Кухня"})
+        block = build_scene_block(
+            "Сюжет.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+            location_descriptions={
+                "Гостиная": "Большая светлая гостиная с диваном и камином.",
+                "Кухня": "Тесная кухня с чугунной плитой.",
+            },
+        )
+        assert "Твоя локация: Гостиная" in block
+        assert "Большая светлая гостиная с диваном и камином." in block
+        # Another location's description must not leak into this character's block
+        assert "чугунной плитой" not in block
+
+    def test_no_description_renders_location_only(self):
+        scene_state = self._scene_state({"Алиса": "Гостиная"})
+        block = build_scene_block(
+            "Сюжет.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+            location_descriptions={"Гостиная": "   "},
+        )
+        assert "Твоя локация: Гостиная" in block
+        assert block.count("Гостиная") == 1
+
+    def test_no_descriptions_arg_backward_compatible(self):
+        scene_state = self._scene_state({"Алиса": "Гостиная"})
+        block = build_scene_block(
+            "Сюжет.",
+            scene_state,
+            current_character_name="Алиса",
+            character_locations=scene_state.character_locations,
+        )
+        assert "Твоя локация: Гостиная" in block
+        assert "Твоя локация: Гостиная\n\n" not in block
         assert "Внешность рядом стоящих" not in block

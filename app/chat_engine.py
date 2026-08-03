@@ -28,7 +28,7 @@ from .database import AsyncSessionLocal
 from .context_state import ctx_state
 from .repetition_detector import analyze_response
 from .role_isolation import get_other_character_names
-from .witness_model import Presence
+from .witness_model import Presence, resolve_presence
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,20 @@ def _message_snapshot(m) -> dict:
     }
 
 
+async def _load_location_descriptions(
+    db: AsyncSession, chat_id: int
+) -> dict[str, str]:
+    """Map location_name -> description (Локации 2.0, §18). Empty when none."""
+    try:
+        locations = await crud.get_chat_locations(db, chat_id)
+    except Exception as exc:
+        logger.warning(
+            "[chat_id=%d] Failed to load location descriptions: %s", chat_id, exc
+        )
+        return {}
+    return {loc.name: (loc.description or "") for loc in locations}
+
+
 def _character_is_isolated(
     character_locations: dict[int, str],
     character_id: int,
@@ -72,6 +86,76 @@ def _character_is_isolated(
         character_locations.get(character_id, ""),
         [character_locations[c.id] for c in characters if c.id != character_id],
         player_location,
+    )
+
+
+def _log_generation_diagnostics(
+    *,
+    character_id: int,
+    character_name: str,
+    character_locations: dict[int, str],
+    player_location: str,
+    player_name: str,
+    characters: list,
+    character_names: dict[int, str],
+    messages: list,
+    presence_map: dict[int, str] | None = None,
+) -> None:
+    """DEBUG diagnostics per NPC generation (Plans/locations2.md §21).
+
+    Logs who this NPC sees (same-location characters), who is hidden, and how
+    many messages survived the perception filter. Enabled only via
+    ``settings.generation_debug`` (GENERATION_DEBUG).
+    """
+    if not settings.generation_debug:
+        return
+
+    my_loc = character_locations.get(character_id, "") or ""
+    visible_names: list[str] = []
+    hidden_names: list[str] = []
+    for c in characters:
+        if c.id == character_id:
+            continue
+        loc = character_locations.get(c.id, "") or ""
+        if loc and perception.locations_match(loc, my_loc):
+            visible_names.append(c.name)
+        else:
+            hidden_names.append(c.name)
+
+    # Player is handled separately: not part of the NPC loop.
+    if my_loc and perception.locations_match(my_loc, player_location):
+        if player_name:
+            visible_names.append(player_name)
+
+    visible_messages = 0
+    filtered_messages = 0
+    for message in messages:
+        presence = resolve_presence(
+            message,
+            character_id,
+            character_names,
+            presence_map,
+            viewer_location=my_loc,
+            character_locations=character_locations,
+        )
+        if presence == "absent":
+            filtered_messages += 1
+        else:
+            visible_messages += 1
+
+    logger.debug(
+        "[Generation] NPC=%s Location=%r PlayerLocation=%r\n"
+        "Visible characters=%s\n"
+        "Hidden characters=%s\n"
+        "Visible messages=%d\n"
+        "Filtered messages=%d",
+        character_name,
+        my_loc,
+        player_location,
+        sorted(visible_names),
+        sorted(hidden_names),
+        visible_messages,
+        filtered_messages,
     )
 
 
@@ -325,6 +409,7 @@ async def process_user_message_streaming(
     enable_thinking = bool(getattr(chat, "thinking_mode", settings.enable_thinking))
     player_location = getattr(chat, "player_location", "") or ""
     chat_locations = getattr(chat, "locations", "") or "[]"
+    location_descriptions = await _load_location_descriptions(db, chat_id)
 
     context_enabled = bool(settings.context_enabled)
     # Wide history window for retrieval when the Context Builder is active;
@@ -538,6 +623,18 @@ async def process_user_message_streaming(
             current_character.id,
         )
 
+        _log_generation_diagnostics(
+            character_id=current_character.id,
+            character_name=current_character.name,
+            character_locations=character_locations,
+            player_location=player_location,
+            player_name=character_names.get(player_id, "") if player_id else "",
+            characters=characters,
+            character_names=character_names,
+            messages=context_messages,
+            presence_map=presence_map,
+        )
+
         # Determine effective prior replies based on character's presence
         # Characters with presence "absent" or "mentioned" cannot perceive prior replies
         current_presence = presence_map.get(current_character.id, "present")
@@ -606,6 +703,7 @@ async def process_user_message_streaming(
                     current_character.id, ""
                 ),
                 locations=chat_locations,
+                location_descriptions=location_descriptions,
                 stagnation_rounds=stagnation_rounds,
                 viewer_location=character_locations.get(
                     current_character.id, ""
@@ -651,6 +749,7 @@ async def process_user_message_streaming(
                     player_location,
                 ),
                 locations=chat_locations,
+                location_descriptions=location_descriptions,
                 relationships_block=relationships_blocks.get(current_character.id, ""),
                 behavior_drivers_block=drivers_blocks.get(current_character.id, ""),
                 open_issues_block=open_issues_blocks.get(current_character.id, ""),
@@ -1817,6 +1916,7 @@ async def regenerate_message_streaming(
             character_locations[player_id] = getattr(player_obj, "location", "") or ""
     player_location = getattr(chat, "player_location", "") or ""
     chat_locations = getattr(chat, "locations", "") or "[]"
+    location_descriptions = await _load_location_descriptions(db, chat_id)
 
     scene_state = await crud.get_scene_state_with_presence(db, chat_id)
     stagnation_rounds = 0
@@ -1945,6 +2045,18 @@ async def regenerate_message_streaming(
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
     current_presence = presence_map.get(character.id, "present")
 
+    _log_generation_diagnostics(
+        character_id=character.id,
+        character_name=character.name,
+        character_locations=character_locations,
+        player_location=player_location,
+        player_name=character_names.get(player_id, "") if player_id else "",
+        characters=characters,
+        character_names=character_names,
+        messages=context_messages,
+        presence_map=presence_map,
+    )
+
     prior_replies: list[tuple[str, str]] = []
     if current_presence in ("present", "told"):
         for prior in round_messages:
@@ -1990,6 +2102,7 @@ async def regenerate_message_streaming(
             present_character_names=None,
             relationships_block=relationships_block,
             locations=chat_locations,
+            location_descriptions=location_descriptions,
             stagnation_rounds=stagnation_rounds,
             viewer_location=character_locations.get(character.id, ""),
             prior_replies=prior_replies,
@@ -2041,6 +2154,7 @@ async def regenerate_message_streaming(
                 player_location,
             ),
             locations=chat_locations,
+            location_descriptions=location_descriptions,
             relationships_block=relationships_block,
             behavior_drivers_block=drivers_block,
             open_issues_block=open_issues_block,

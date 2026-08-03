@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import sessionmaker
 
 from app import crud
@@ -649,3 +650,103 @@ async def test_bad_llm_fact_for_non_witness_grounding(
         assert crud.get_memories_by_character(verify, alina.id) == []
     finally:
         verify.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_attribution_speaker_preserved_same_room(
+    db_session, chat, db_engine
+):
+    """TEST 8 (§20): Boris hears Anna's line in the same room, but the fact
+    belongs to Anna — the speaker prefix is preserved in his extraction context,
+    so attribution is not lost. Availability of an event ≠ ownership of a fact."""
+    anna = await crud.create_character(
+        db_session,
+        chat.id,
+        schemas.CharacterCreate(name="Анна", location="гостиная", order_index=1),
+    )
+    boris = await crud.create_character(
+        db_session,
+        chat.id,
+        schemas.CharacterCreate(name="Борис", location="гостиная", order_index=2),
+    )
+    characters = [anna, boris]
+    names = {c.id: c.name for c in characters}
+
+    user_msg = await crud.create_message(
+        db_session,
+        schemas.MessageCreate(
+            chat_id=chat.id,
+            role="user",
+            content="Всем привет!",
+            location="гостиная",
+        ),
+    )
+    anna_msg = await crud.create_message(
+        db_session,
+        schemas.MessageCreate(
+            chat_id=chat.id,
+            role="character",
+            character_id=anna.id,
+            content="Я ненавижу кофе.",
+            location="гостиная",
+        ),
+    )
+    round_messages = [user_msg, anna_msg]
+    await crud.compute_and_save_presence_for_round(
+        db_session,
+        round_messages,
+        [c.id for c in characters],
+        names,
+        characters=characters,
+    )
+
+    captured: dict[str, str] = {}
+
+    async def fake_extract(client, model, character, round_text):
+        captured[character.name] = round_text
+        # Boris heard it and correctly attributes the dislike to Anna.
+        if character.name == "Борис":
+            return [
+                schemas.ExtractedFact(
+                    fact="Анна не любит кофе.",
+                    witnessed=True,
+                    importance=0.6,
+                    category="предмет",
+                )
+            ]
+        return [
+            schemas.ExtractedFact(
+                fact="Я не люблю кофе.",
+                witnessed=True,
+                importance=0.6,
+                category="предмет",
+            )
+        ]
+
+    test_factory = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    with patch(
+        "app.memory_service.ollama_client.extract_memories_for_character",
+        side_effect=fake_extract,
+    ), patch("app.memory_service.AsyncSessionLocal", test_factory):
+        await memory_service._extract_and_save_memories(
+            httpx.AsyncClient(base_url="http://test"),
+            chat.id,
+            [_snap_msg(m) for m in round_messages],
+            [_snap_char(c) for c in characters],
+            chat.model_name,
+        )
+
+    # Boris heard the line and the speaker is preserved in his context.
+    assert "Анна: Я ненавижу кофе." in captured["Борис"]
+    # Anna also sees her own line.
+    assert "Я ненавижу кофе." in captured["Анна"]
+
+    verify = test_factory()
+    try:
+        anna_mem = await crud.get_memories_by_character(verify, anna.id)
+        boris_mem = await crud.get_memories_by_character(verify, boris.id)
+        # Anna owns the dislike; Boris's fact explicitly names Anna.
+        assert any("кофе" in m.content for m in anna_mem)
+        assert any("Анна не любит кофе" in m.content for m in boris_mem)
+    finally:
+        await verify.close()

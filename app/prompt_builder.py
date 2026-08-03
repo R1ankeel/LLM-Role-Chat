@@ -197,6 +197,7 @@ def build_scene_block(
     character_locations: dict[str, str] | None = None,
     character_appearances: dict[str, str] | None = None,
     locations: str = "[]",
+    location_descriptions: dict[str, str] | None = None,
 ) -> str:
     """Build scene block with per-character location tracking (P3).
 
@@ -209,6 +210,8 @@ def build_scene_block(
         character_appearances: Map of character_name -> appearance, shown only for
             characters co-present with the current character (knowledge isolation).
         locations: JSON array of allowed locations for this chat.
+        location_descriptions: Map of location_name -> description (Локации 2.0,
+            §18). Shown under the current character's location when non-empty.
     """
     parts = []
     text = (general_prompt or "").strip()
@@ -228,7 +231,12 @@ def build_scene_block(
                 cl_map = raw
 
         if current_character_name and current_character_name in cl_map:
-            parts.append(f"Твоя локация: {cl_map[current_character_name]}")
+            my_loc = cl_map[current_character_name]
+            parts.append(f"Твоя локация: {my_loc}")
+            # Location description = the environment, not plot truth (§18).
+            description = (location_descriptions or {}).get(my_loc, "")
+            if (description or "").strip():
+                parts.append(description.strip())
 
         # Which characters are present in the same location
         if current_character_name and cl_map:
