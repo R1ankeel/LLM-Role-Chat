@@ -212,6 +212,47 @@ async def test_move_recalculates_perception(db_session, chat, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_audible_prior_reply_reaches_next_npc(db_session, chat, mock_client):
+    """§18 item 5 + §10: an audible knock from an adjacent location surfaces as
+    a sensory line in the next NPC's prior replies (no full-content leak)."""
+    await crud.create_location(
+        db_session, chat.id,
+        schemas.LocationCreate(name="Кухня", adjacent_to=["Гостиная"]),
+    )
+    await crud.create_location(
+        db_session, chat.id,
+        schemas.LocationCreate(name="Гостиная", adjacent_to=["Кухня"]),
+    )
+    await crud.create_character(
+        db_session, chat.id,
+        schemas.CharacterCreate(name="Аня", location="Кухня", order_index=1),
+    )
+    await crud.create_character(
+        db_session, chat.id,
+        schemas.CharacterCreate(name="Борис", location="Гостиная", order_index=2),
+    )
+
+    captured: dict[str, list[tuple[str, str]]] = {}
+
+    async def fake_generate(**kwargs):
+        char = kwargs["character"]
+        captured[char.name] = list(kwargs.get("prior_replies") or [])
+        if char.name == "Аня":
+            yield {"type": "response", "text": "Я стучу в дверь, кто-нибудь дома?"}
+        else:
+            yield {"type": "response", "text": f"Ответ {char.name} с достаточной длиной."}
+
+    await _run_round(db_session, chat.id, "Всем привет", mock_client, fake_generate)
+
+    # Boris is in the adjacent Гостиная: Anna's knock reaches him as audible.
+    anna_lines = [line for name, line in captured["Борис"] if name == "Аня"]
+    assert anna_lines, "Boris should hear Anna's knock as a prior reply"
+    assert "стук" in anna_lines[0]
+    # Full content must NOT leak into the audible line (§7/§8).
+    assert "кто-нибудь дома" not in anna_lines[0]
+
+
+@pytest.mark.asyncio
 async def test_remote_channel_bridges_locations(db_session, chat, mock_client):
     """§22 item 9: a targeted remote event reaches a character in another location."""
     await crud.update_chat(

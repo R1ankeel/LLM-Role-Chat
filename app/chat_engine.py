@@ -28,6 +28,7 @@ from .context_state import ctx_state
 from .repetition_detector import analyze_response
 from .role_isolation import get_other_character_names
 from .stimuli import extract_stimuli
+from .movement import detect_character_movement
 from .witness_model import Presence, resolve_presence
 
 logger = logging.getLogger(__name__)
@@ -95,14 +96,19 @@ def _effective_prior_replies(
     viewer_location: str,
     viewer_name: str,
     character_names: dict[int, str],
+    adjacency_index: dict[str, set[str]] | None = None,
 ) -> list[tuple[str, str]]:
     """Per-viewer filter of this round's prior replies (§10).
 
     Each prior reply is a real message event; availability is decided by the
     same perception mechanism as ordinary history — ``can_character_perceive_event``.
-    A reply is available only when it can be fully perceived (presence ``present``
-    or ``told``); ``absent``/``mentioned`` replies are hidden.
+    A reply is fully available when it can be perceived (presence ``present`` or
+    ``told``); ``audible``/``mentioned`` replies are surfaced as a sensory line
+    (via ``format_line_for_presence``) without leaking full content; ``absent``
+    replies are hidden.
     """
+    from .witness_model import format_line_for_presence
+
     effective: list[tuple[str, str]] = []
     for event in prior_reply_events:
         author_id = getattr(event, "character_id", None)
@@ -117,10 +123,18 @@ def _effective_prior_replies(
             viewer_location=viewer_location,
             event=event,
             viewer_name=viewer_name,
+            adjacency_index=adjacency_index,
         )
+        author_name = character_names.get(author_id, "")
         if presence in ("present", "told"):
             content = getattr(event, "content", "") or ""
-            effective.append((character_names.get(author_id, ""), content))
+            effective.append((author_name, content))
+        elif presence in ("audible", "mentioned"):
+            line = format_line_for_presence(
+                event, presence, character_names, viewer_name=viewer_name
+            )
+            if line:
+                effective.append((author_name, line))
     return effective
 
 
@@ -237,6 +251,38 @@ def _parse_allowed_locations(locations_json: str) -> set[str]:
     return set()
 
 
+def _parse_known_locations(
+    locations_json: str,
+    character_locations: dict[int, str],
+    player_location: str,
+) -> list[str]:
+    """Known location names for deterministic movement detection.
+
+    Combines the chat's declared locations (original casing), every character's
+    current location, and the player's location. Used by
+    ``detect_character_movement`` to resolve explicit destinations.
+    """
+    import json
+    known: list[str] = []
+    seen: set[str] = set()
+    try:
+        locs = json.loads(locations_json) if locations_json and locations_json != "[]" else []
+        if isinstance(locs, list):
+            for loc in locs:
+                name = str(loc).strip() if loc else ""
+                if name and name.casefold() not in seen:
+                    known.append(name)
+                    seen.add(name.casefold())
+    except (json.JSONDecodeError, TypeError):
+        pass
+    for loc in list(character_locations.values()) + [player_location]:
+        name = (loc or "").strip()
+        if name and name.casefold() not in seen:
+            known.append(name)
+            seen.add(name.casefold())
+    return known
+
+
 def _is_location_allowed(location: str, allowed: set[str]) -> bool:
     """Check if a location is in the allowed set (case-insensitive)."""
     if not allowed:
@@ -250,141 +296,6 @@ _CHANNEL_PATTERNS: list[tuple[str, list[str]]] = [
     ("radio", ["раци", "передатчик", "приёмник", "эфир", "частота", "радиосвяз"]),
     ("messenger", ["сообщени", "мессенджер", "чат", "электрон", "письм", "написал", "смс", "телеграм", "whatsapp", "telegram"]),
 ]
-
-
-_MOVEMENT_VERBS = [
-    "иду", "пошёл", "пошла", "пошли", "идёт", "идут", "идём", "идите",
-    "направляюсь", "направляется", "направляются", "направился", "направилась", "направились",
-    "перемещаюсь", "перемещается", "перемещаются", "переместился", "переместилась", "переместились",
-    "ушёл", "ушла", "ушли", "ушел", "ухожу", "уходит", "уходят", "уходим",
-    "вышел", "вышла", "вышли", "вышел", "выхожу", "выходит", "выходят", "выходим",
-    "зашёл", "зашла", "зашли", "зашёл", "захожу", "заходит", "заходят", "заходим",
-    "вхожу", "входит", "входят", "входим",
-    "веду", "ведёт", "ведут", "ведём", "ведёшь",
-    "отойди", "отходят", "отхожу",
-    "схожу", "сходит", "сходят",
-    "шагаю", "шагает", "шагают",
-    "бегу", "бежит", "бегут",
-    "спускаюсь", "спускается", "спускаются", "спустился", "спустилась",
-    "поднимаюсь", "поднимается", "поднимаются", "поднялся", "поднялась",
-    "возвращаюсь", "возвращается", "возвращаются", "вернулся", "вернулась",
-    "прохожу", "проходит", "проходят", "прошёл", "прошла",
-    "перехожу", "переходит", "переходят", "перешёл", "перешла",
-    "покидаю", "покидает", "покидают", "покинул", "покинула",
-]
-
-
-def _get_character_lines(round_text: str, character_name: str) -> str:
-    """Extract only the lines belonging to a specific character from round text.
-
-    The round text has lines in format: "CharacterName: content"
-    Returns the concatenated content of all lines for this character (lowercased).
-    """
-    name_lower = character_name.lower()
-    lines = []
-    for line in round_text.split('\n'):
-        stripped = line.strip()
-        if stripped.lower().startswith(name_lower + ':'):
-            # Remove the "Name: " prefix and add the rest
-            content = stripped[len(name_lower) + 1:].strip()
-            if content:
-                lines.append(content.lower())
-    return '\n'.join(lines)
-
-
-def _loc_keys(name: str) -> list[str]:
-    """Extract keywords from a location name with short prefixes for case-flexion matching.
-
-    Handles Russian declension: e.g. "Квартира" → ["квартира", "кварт"]
-    so that "из квартиры" still matches the key "кварт" even though the
-    full word "квартира" does not appear in the genitive "квартиры".
-    """
-    keys: set[str] = set()
-    for word in name.split():
-        w = word.strip().lower()
-        if len(w) <= 2:
-            continue
-        keys.add(w)
-        if len(w) >= 4:
-            keys.add(w[:4])
-        if len(w) >= 5:
-            keys.add(w[:5])
-    return list(keys)
-
-
-def _detect_movement_in_text(
-    round_text: str,
-    character_name: str,
-    new_location: str,
-    old_location: str | None,
-) -> bool:
-    """Check if the round text contains explicit movement for a character.
-
-    Returns True only when the character references leaving the OLD location
-    or arriving at the NEW location. Movement verbs alone (e.g. "иду из спальни
-    в ванную") are NOT sufficient — the text must connect them to the location
-    names to distinguish intra-location movement from location changes.
-    """
-    if not old_location:
-        return True  # first time setting location
-    if old_location == new_location:
-        return False
-
-    char_text = _get_character_lines(round_text, character_name)
-    # Fallback to full text if character-specific lines not found
-    if not char_text:
-        char_text = round_text.lower()
-
-    text_lower = round_text.lower()
-    old_keys = _loc_keys(old_location)
-    new_keys = _loc_keys(new_location)
-
-    # ── Departure from old location ────────────────────────────────────
-    # Verb: leave / go out / abandon + old-location keyword in text
-    _LEAVE_VERBS = (
-        "вышел", "вышла", "вышли", "выхожу", "выходит", "выходят",
-        "ушёл", "ушла", "ушли", "ухожу", "уходит", "уходят",
-        "покида", "покинул", "покинула",
-    )
-    for verb in _LEAVE_VERBS:
-        if verb in char_text and any(kw in char_text for kw in old_keys):
-            return True
-
-    # ── Arrival at new location ────────────────────────────────────────
-    # Verb: enter / come / arrive + new-location keyword in text
-    _ARRIVE_VERBS = (
-        "захожу", "заходит", "заходят", "зашёл", "зашла", "зашли",
-        "вхожу", "входит", "входят", "вошёл", "вошла", "вошли",
-        "прихожу", "приходит", "приходят", "пришёл", "пришла", "пришли",
-        "добираюсь", "добирается", "добрался", "добралась",
-        "дохожу", "доходит", "дошёл", "дошла",
-    )
-    for verb in _ARRIVE_VERBS:
-        if verb in char_text and any(kw in char_text for kw in new_keys):
-            return True
-
-    # ── Directional movement + location keyword ────────────────────────
-    # "иду из дома", "вышел на улицу", "направляюсь к лесу"
-    _DIR_VERBS = (
-        "иду", "пошёл", "пошла", "пошли", "идёт", "идут", "шёл", "шла", "шли",
-        "направляюсь", "направляется", "направился", "направилась",
-        "вышел", "вышла", "вышли", "выхожу", "выходит", "выходят",
-    )
-    for verb in _DIR_VERBS:
-        if verb in char_text:
-            # Away from old: "из/с/от + old_keyword"
-            if any(f"{prep} {kw}" in char_text for kw in old_keys for prep in ("из", "с", "от")):
-                return True
-            # Toward new: "в/на/к + new_keyword"
-            if any(f"{prep} {kw}" in char_text for kw in new_keys for prep in ("в", "на", "к")):
-                return True
-
-    # ── Fallback: original strict check (verb + location in full text) ─
-    for verb in _MOVEMENT_VERBS:
-        if verb in text_lower and new_location.lower() in text_lower:
-            return True
-
-    return False
 
 
 def _detect_communication_channel(
@@ -512,6 +423,18 @@ async def process_user_message_streaming(
         )
         if player_obj is not None:
             character_locations[player_id] = getattr(player_obj, "location", "") or ""
+
+    # Known location names for deterministic movement detection (Sprint 4, §9-§11).
+    known_locations = _parse_known_locations(
+        chat_locations, character_locations, player_location
+    )
+    # Adjacency index for audibility of events from neighboring locations (§6-§8).
+    adjacency_index = await crud.get_adjacency_index(db, chat_id)
+    # Locations confirmed by the deterministic detector during this round.
+    # The post-round LLM scene extraction must not overwrite them (§12).
+    detector_confirmed_locs: dict[str, str] = {}
+    # cid -> location already announced as a system message this round.
+    announced_movements: dict[int, str] = {}
 
     # Persist presence for the user event immediately (before any character reply)
     await crud.compute_and_save_presence_for_message(
@@ -687,6 +610,7 @@ async def process_user_message_streaming(
             character_locations.get(current_character.id, "") or "",
             current_character.name,
             character_names,
+            adjacency_index=adjacency_index,
         )
 
         # MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10): a
@@ -819,7 +743,44 @@ async def process_user_message_streaming(
             response_text = f"*[{current_character.name} молчит, не в силах ответить]*"
             round_generation_ok = False
 
-        char_location = getattr(current_character, "location", "") or ""
+        # Deterministic movement detection (§9-§11): the new location is applied
+        # BEFORE the message is saved and BEFORE the next NPC generates, so the
+        # updated world state is visible to the rest of the round (§12).
+        movement_target = detect_character_movement(
+            response_text,
+            current_character.name,
+            known_locations,
+            character_locations,
+            character_names,
+        )
+        if movement_target and movement_target != character_locations.get(
+            current_character.id, ""
+        ):
+            await crud.update_character_locations_batch(
+                db, chat_id, {current_character.id: movement_target}
+            )
+            character_locations[current_character.id] = movement_target
+            current_character.location = movement_target
+            detector_confirmed_locs[current_character.name] = movement_target
+
+            loc_msg_text = f"*{current_character.name} переместился в {movement_target}*"
+            loc_message = await crud.create_message(
+                db,
+                schemas.MessageCreate(
+                    chat_id=chat_id,
+                    role="system",
+                    content=loc_msg_text,
+                    visibility="global",
+                ),
+            )
+            yield {"type": "message", "message": _message_to_dict(loc_message)}
+            round_messages.append(loc_message)
+            context_messages.append(loc_message)
+            if len(context_messages) > history_limit:
+                context_messages = context_messages[-history_limit:]
+            announced_movements[current_character.id] = movement_target
+
+        char_location = character_locations.get(current_character.id, "") or ""
         # Detect remote communication channel from response text
         msg_channel, msg_targets = _detect_communication_channel(
             response_text, current_character.name, character_names
@@ -915,6 +876,10 @@ async def process_user_message_streaming(
                 allowed_locs = _parse_allowed_locations(chat_locations)
                 old_locs = scene_state.character_locations if scene_state else {}
                 for cname, loc in char_locs_by_name.items():
+                    if cname in detector_confirmed_locs:
+                        # Deterministically confirmed movement this round has
+                        # priority; the LLM extraction must not overwrite it (§12).
+                        continue
                     if cname in name_to_id and loc.strip():
                         new_loc = loc.strip()
                         cid = name_to_id[cname]
@@ -924,7 +889,16 @@ async def process_user_message_streaming(
                                 "[chat_id=%d] Ignoring disallowed location '%s' for %s",
                                 chat_id, new_loc, cname,
                             )
-                        elif _detect_movement_in_text(round_history_text, cname, new_loc, old_loc):
+                        elif (
+                            detect_character_movement(
+                                round_history_text,
+                                cname,
+                                known_locations,
+                                character_locations,
+                                character_names,
+                            ).strip().casefold()
+                            == new_loc.casefold()
+                        ):
                             loc_updates[cid] = new_loc
                             confirmed_locs[cname] = new_loc
                         else:
@@ -944,10 +918,14 @@ async def process_user_message_streaming(
                     schemas.SceneStateUpdate(character_locations=confirmed_locs),
                 )
 
-            # Announce location changes as system messages (Part B1)
+            # Announce location changes as system messages (Part B1).
+            # Moves already announced by the deterministic detector during the
+            # round are skipped here to avoid duplicates (§12).
             old_locations = scene_state.character_locations if scene_state else {}
             name_to_id_rev = {cid: name for cid, name in character_names.items()}
             for cid, new_loc in character_locations.items():
+                if cid in announced_movements:
+                    continue
                 cname = name_to_id_rev.get(cid, "")
                 if not cname:
                     continue
@@ -1957,6 +1935,9 @@ async def regenerate_message_streaming(
     player_location = getattr(chat, "player_location", "") or ""
     chat_locations = getattr(chat, "locations", "") or "[]"
     location_descriptions = await _load_location_descriptions(db, chat_id)
+    known_locations = _parse_known_locations(
+        chat_locations, character_locations, player_location
+    )
 
     scene_state = await crud.get_scene_state_with_presence(db, chat_id)
     stagnation_rounds = 0
@@ -2228,8 +2209,26 @@ async def regenerate_message_streaming(
     if not response_text:
         raise RuntimeError(f"Пустой ответ при перегенерации {character.name}")
 
+    # Deterministic movement detection on the regenerated text (§9-§11, §12).
+    # The world update is applied the same way as in the main round path.
+    movement_target = detect_character_movement(
+        response_text,
+        character.name,
+        known_locations,
+        character_locations,
+        character_names,
+    )
+    if movement_target and movement_target != character_locations.get(
+        character.id, ""
+    ):
+        await crud.update_character_locations_batch(
+            db, chat_id, {character.id: movement_target}
+        )
+        character_locations[character.id] = movement_target
+        character.location = movement_target
+
     # Persist the new reply, then drop the old one
-    char_location = getattr(character, "location", "") or ""
+    char_location = character_locations.get(character.id, "") or ""
     msg_channel, msg_targets = _detect_communication_channel(
         response_text, character.name, character_names
     )

@@ -285,11 +285,11 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] Прогон `pytest tests/test_perception.py`.
 
 ### Спринт 4 — Движение и обновление мира (§9-§12)
-- [ ] `app/movement.py`: `detect_character_movement`.
-- [ ] `chat_engine.py`: вызов детектора в цикле NPC до генерации следующего; обновление БД + in-memory локаций; `message.location` и присутствие с новой локацией; системное сообщение о перемещении; сверка с scene extraction; `regenerate_message_streaming`.
-- [ ] Убрать/заменить `_detect_movement_in_text`.
-- [ ] Тесты: 11-16 из §18 (16 — интеграционный через `process_user_message_streaming`).
-- [ ] Прогон `pytest tests/test_chat_engine.py tests/test_locations_perception.py`.
+- [x] `app/movement.py`: `detect_character_movement`.
+- [x] `chat_engine.py`: вызов детектора в цикле NPC до генерации следующего; обновление БД + in-memory локаций; `message.location` и присутствие с новой локацией; системное сообщение о перемещении; сверка с scene extraction; `regenerate_message_streaming`.
+- [x] Убрать/заменить `_detect_movement_in_text`.
+- [x] Тесты: 11-16 из §18 (16 — интеграционный через `process_user_message_streaming`).
+- [x] Прогон `pytest tests/test_chat_engine.py tests/test_locations_perception.py`.
 
 ### Спринт 5 — Интеграция, обязательная проверка, отчёт (§19)
 - [ ] Полный прогон `pytest`.
@@ -344,10 +344,10 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] 2. Проверено, что cue больше не создаёт поведенческий запрет (движение/обращение/локация).
 - [x] 3. `grep is_isolated` → все места: `is_isolated` влияет только на информационный блок, не на запреты.
 - [x] 4. Удалены ограничения «не покидай локацию», «не иди к игроку», «не обращайся», «играй здесь и сейчас».
-- [ ] 5. События из соседних локаций не исчезают полностью (audible-строка попадает в контекст).
+- [x] 5. События из соседних локаций не исчезают полностью (audible-строка попадает в контекст).
 - [x] 6. AUDIBLE не раскрывает визуальные детали/мысли (тест 10).
-- [ ] 7. Движение действительно обновляет БД (`characters.location`).
-- [ ] 8. Обновлённая локация используется следующим NPC в том же раунде (тест 16).
+- [x] 7. Движение действительно обновляет БД (`characters.location`).
+- [x] 8. Обновлённая локация используется следующим NPC в том же раунде (тест 16).
 - [x] 9. Стимулы не дублируют сообщения (тест 19).
 - [ ] 10. Полный прогон `pytest` — зелёный.
 - [x] Golden-снапшоты обновлены и проходят.
@@ -529,3 +529,54 @@ crud.update_character_location / batch + character_locations[cid] = new
 - Не вводилась обязательная реакция на стимул — персонаж волен игнорировать (тест 24).
 - Стимулы не стали отдельной таблицей БД — остаются метаданными сообщения.
 - `_effective_prior_replies` и scene extraction не менялись (Спринт 4).
+
+---
+
+## 12. Итоговый отчёт — Спринт 4 (заполнено 2026-08-03)
+
+### 1. Какие файлы изменены
+- `app/movement.py` (новый)
+- `app/chat_engine.py`
+- `tests/test_movement_detection.py` (новый)
+- `tests/test_locations_perception.py`
+- `Plans/isolation-fix.md`
+- `docs/locations.md`
+
+### 2. Что изменено в каждом файле
+- `movement.py`: `detect_character_movement(text, character_name, known_locations, character_locations, character_names) -> str | None`. Только совершившийся переход: глаголы прибытия + явная локация из `known_locations` (матчинг по коротким префиксам для склонений, «в/на/к + ключ»). Исключаются намерение/будущее/отрицание/воспоминание/условность (маркеры `хочу`, `собираюсь`, `пойду`, `не пошёл`, `вспоминаю`, `вчера`, `бы`). «Вышел из комнаты» без цели → `None`. «Зашёл/вошёл/пришёл к <персонажу>» → его текущая локация (если известна и непустая). Пустая локация (`""`, общая сцена) → переход не триггерится.
+- `chat_engine.py`:
+  - импорт `detect_character_movement`; удалены `_MOVEMENT_VERBS`, `_get_character_lines`, `_loc_keys`, `_detect_movement_in_text` (заменены новым модулем);
+  - новый `_parse_known_locations(locations_json, character_locations, player_location)` — известные локации для детектора;
+  - в `process_user_message_streaming`: построение `known_locations` и `adjacency_index` (из `crud.get_adjacency_index`); после `response_text` — `detect_character_movement`; при перемещении: `update_character_locations_batch` (БД), обновление `character_locations` + `current_character.location` (in-memory, видно следующему NPC), системное сообщение `*Имя переместился в X*` (global) в `round_messages`/`context_messages` + `yield`, отметки `detector_confirmed_locs`/`announced_movements`;
+  - scene extraction: локации, подтверждённые детектором в раунде, не перезаписываются; валидатор заменён на `detect_character_movement(...) == new_loc` (casefold); блок анонса пропускает уже заявленные перемещения (без дублей);
+  - `_effective_prior_replies` теперь принимает `adjacency_index`; `audible`-реплики попадают как сенсорная строка через `format_line_for_presence`, `mentioned` — как обращение, `absent` — скрыты (полный контент для `present`/`told` без изменений);
+  - `regenerate_message_streaming`: те же движение+обновление локации по новому тексту (без системного сообщения, чтобы не мутировать историю раунда).
+
+### 3. Какие тесты добавлены/изменены
+- Новый `tests/test_movement_detection.py` — тесты §18 11-16:
+  - 11: «Я вошёл в кухню» → `Кухня` (+ варианты: пошёл в, вышел в, направился на, захожу в);
+  - 12: «Я вышел из комнаты» (без цели) → `None`;
+  - 13: «Я хочу пойти в кухню» / «Я пойду в кухню» / «собираюсь» → `None`;
+  - 14: «Я не пошёл в кухню» / «не зашла к Борису» → `None`;
+  - 15: «вспоминаю, как ходил в магазин» / «вчера ходила» → `None`;
+  - 16 (интеграция через `process_user_message_streaming` + fake_generate): Анна из Гостиной входит в Кухню; Борис (уже на Кухне) при генерации в том же раунде получает `character_locations[anna_id] == "Кухня"` и видит реплику Анны в prior replies; после раунда `anna.location == "Кухня"` в БД; системное сообщение о перемещении создано.
+  - Плюс: «зашла к Борису» → локация Бориса, «подошёл к Борису» → `None`, условность → `None`, отсутствие движения → `None`, интеграционный тест «хочу пойти» не меняет локацию и не создаёт system-сообщения.
+- `tests/test_locations_perception.py`: новый `test_audible_prior_reply_reaches_next_npc` — стук из соседней локации (adjacency) попадает в prior replies следующего NPC как сенсорная строка («стук»), полный контент не утекает (§8).
+
+### 4. Результат существующих тестов
+`pytest tests/test_chat_engine.py tests/test_locations_perception.py` → **22 passed** (включая новый audible-тест). Широкий прогон (движение+perception+stimuli+locations+witness) → **92 passed**. Полный `pytest` → **622 passed, 28 failed** — падения pre-existing (context_state, embeddings, memory_perception, memory_service, repetition_detector, stream_disconnect, task_queue, token_counter), подтверждены на базисах Спринтов 1-3; к Спринту 4 не относятся.
+
+### 5. Результат новых тестов
+`tests/test_movement_detection.py` — 13 passed; новый audible-тест в `test_locations_perception.py` — 1 passed.
+
+### 6. Ограничения текущей реализации
+- `detect_character_movement` — детерминированная эвристика (regex + префиксы склонений); возможны ложные срабатывания на нестандартных склонениях; изолирована в модуле для замены на LLM-извлечение.
+- «Зашёл к <персонажу>» без имени («зашла к тебе») не разрешается — требуется явное имя.
+- Движение в `regenerate_message_streaming` не создаёт системное сообщение о перемещении (история раунда не мутируется).
+- LLM-экстракция сцены по-прежнему не перезаписывает перемещения, подтверждённые детектором в этом раунде.
+
+### 7. Что сознательно НЕ внесено
+- Не вводилась обязательная реакция на движение/стимул — персонаж волен игнорировать.
+- Не менялись stop sequences и sanitize-логика авторства.
+- Не менялась система памяти/отношений/эпистемических масок.
+- `_parse_known_locations` не включает локации из scene_state `character_locations` (только таблица локаций + текущие локации персонажей + игрока).

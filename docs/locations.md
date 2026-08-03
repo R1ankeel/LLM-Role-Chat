@@ -329,8 +329,13 @@ OWN_MESSAGE / GLOBAL / PUBLIC / private / targeted / REMOTE_CHANNELS
 user- и character-сообщений (в `chat_engine.process_user_message_streaming`
 и `regenerate_message_streaming`), стимулы сохраняются в `messages.stimuli`
 и читаются perception-слоем через `event_from_message`.
-Передача `adjacency_index` в рантайм-контекст генерации (audible-реплики в
-`_effective_prior_replies`, подключение соседства в `chat_engine`) — Спринт 4.
+
+С Спринта 4 `adjacency_index` загружается в `process_user_message_streaming`
+и передаётся в `_effective_prior_replies`: реплики из соседних локаций с
+громким стимулом (`knock`/`shout`/`call`/`loud_sound`) попадают в контекст
+следующего NPC как сенсорная строка (`format_line_for_presence` →
+`build_audible_line`) без утечки полного контента; `mentioned` — как
+обращение; `absent` — исключаются.
 
 ### Тесты (§18 items 4-10)
 
@@ -355,3 +360,40 @@ user- и character-сообщений (в `chat_engine.process_user_message_stre
 | 18 | «Ольга, ты дома?» → stimulus address | `test_address_stimulus` |
 | 19 | Стимул не создаёт отдельное сообщение | `test_stimuli_do_not_create_extra_messages` |
 | 20 | Стимул доступен perception | `test_stimulus_reaches_perception` |
+
+### Движение и обновление мира (§9-§12, Спринт 4)
+
+Новый модуль `app/movement.py`:
+- `detect_character_movement(text, character_name, known_locations,
+  character_locations, character_names) -> str | None` — возвращает название
+  новой локации (совершившийся переход) или `None`.
+- Только глаголы прибытия + явное название локации из `known_locations`
+  (матчинг «в/на/к + префикс ключа» для склонений).
+- Намерение/будущее/отрицание/воспоминание/условность → `None` (маркеры
+  `хочу`, `собираюсь`, `пойду`, `не пошёл`, `вспоминаю`, `вчера`, `бы`).
+- «Вышел из комнаты» без цели → `None`; «зашёл/вошёл/пришёл к <персонажу>»
+  → его текущая локация (если известна и непустая); пустая локация (`""`,
+  общая сцена) → `None`.
+
+Интеграция в `chat_engine`:
+- В цикле NPC сразу после `response_text` и до генерации следующего NPC:
+  `update_character_locations_batch` (БД) + `character_locations`/ORM
+  in-memory; сообщение персонажа сохраняется с новой локацией; системное
+  сообщение `*Имя переместился в X*` (global) добавляется в
+  `round_messages`/`context_messages`.
+- LLM-экстракция сцены (конец раунда) не перезаписывает перемещения,
+  подтверждённые детектором в этом раунде; анонсы не дублируются.
+- `regenerate_message_streaming` применяет ту же логику по новому тексту.
+
+### Тесты (§18 items 11-16, движение)
+
+| # | проверка | тест |
+|---|---|---|
+| 11 | «Я вошёл в кухню» → location=кухня | `tests/test_movement_detection.py::test_arrival_to_explicit_location` |
+| 12 | «Я вышел из комнаты» (нет цели) → без изменений | `test_departure_without_target_no_change` |
+| 13 | «Я хочу пойти в кухню» → без изменений | `test_intent_no_change` |
+| 14 | «Я не пошёл в кухню» → без изменений | `test_negation_no_change` |
+| 15 | «Я вспоминаю, как ходил в магазин» → без изменений | `test_memory_no_change` |
+| 16 | Перемещение обновляет БД до генерации следующего NPC | `test_movement_updates_db_before_next_npc` |
+
+Audible-prior-reply интеграция: `tests/test_locations_perception.py::test_audible_prior_reply_reaches_next_npc`.
