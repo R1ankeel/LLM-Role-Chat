@@ -228,6 +228,40 @@ tools/JSON-схемы — И4) применяются в round-пути `chat_en
 Откат — выключение флага (движок возвращается к пост-раундовому regex-пути
 движения).
 
+### 4.4. WPE 3.0 Фаза 6: Threads/мессенджер + двухканальное частичное восприятие (Ул.2)
+
+**Threads** (`WORLD_ENGINE_THREADS_ENABLED`): `create_message` для удалённого
+канала (magic/phone/radio/messenger) вызывает
+`crud.ensure_message_thread_delivery` в той же транзакции — создаётся/обновляется
+`Thread` (`threads`) и `ThreadParticipantState` (`thread_participant_states`,
+участники = автор + адресаты), адресатам проставляется
+`last_delivered_message_id` (доставка). `send_message` из
+`apply_character_actions` создаёт тред и участников (И14). `perceive()` читает
+`world_state.thread_deliveries` (источник — `crud.thread_delivery_ids_for_message`):
+адресат удалённого канала получает `visual=full/audio=full` +
+`remote_status=delivered` **независимо от локации** (Golden #6, групповой тред —
+#15). presence-пути (`compute_and_save_presence_for_message`/_for_round) строят
+world-state по событию, включая доставки.
+
+**Частичное восприятие** (`WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`): `perceive()`
+учитывает проницаемость рёбер `visual_permeability`/`audio_permeability`
+(индекс `build_permeability_index`), громкость (стимулы `loud_sound`/`call`/
+`shout` поднимают `muffled→full`) и стимул `invisible` (событие в одной локации
+→ `visual=none`/`audio=full`, Golden #19; стекло — ребро `full/none`, #17; крик
+из-за стены — `none/full`, #18). **Voice familiarity** (§4) — детерминированная
+атрибуция: `witness_model.voice_familiarity` из `CharacterRelationship`
+(голос знаком ↔ есть отношение наблюдателя к автору). Влияние на presence:
+`audio=full` + знакомый голос → `mentioned`, незнакомый → `audible`;
+`muffled` → атрибуция запрещена всегда.
+
+**Renderer (И11)**: при включённых обоих флагах `ContextBuilder` строит
+историю через `perceive()` + `render_perception_line` (канало-зависимые строки:
+стекло — «действия видны, слов не слышно», незнакомый голос — «чей-то голос»),
+не утекая содержание из `muffled`/`none`-каналов; иначе — legacy-лестница
+`format_line_for_presence` (идентичное поведение Фаз 1–5). Откат — флаги
+независимы: треды и частичное восприятие включаются/выключаются раздельно;
+partial → бинарный full/none по каналам.
+
 ### 5. Пост-раунд (в том же запросе)
 
 1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций.

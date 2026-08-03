@@ -19,10 +19,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-STIMULUS_TYPES = ("knock", "call", "shout", "address", "loud_sound")
+STIMULUS_TYPES = ("knock", "call", "shout", "address", "loud_sound", "invisible")
 
 # Stimulus types that are loud enough to be heard from an adjacent location.
 AUDIBLE_STIMULUS_TYPES = frozenset({"knock", "call", "shout", "loud_sound"})
+
+# Невидимость (WPE.md §4/§11, Golden #19): событие в одной локации со стимулом
+# невидимости → `visual=none`, `audio=full`. Стимул задаётся данными, regex-
+# экстракция его не детектирует (не детерминируемо по тексту).
+INVISIBILITY_STIMULUS_TYPE = "invisible"
 
 
 @dataclass

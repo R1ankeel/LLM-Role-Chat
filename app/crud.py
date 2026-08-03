@@ -297,6 +297,8 @@ async def create_message(
     await db.flush()
     if settings.world_engine_events_enabled:
         db.add(_build_world_event(db_message, round_id=round_id))
+    if settings.world_engine_threads_enabled:
+        await ensure_message_thread_delivery(db, db_message)
     await db.commit()
     await db.refresh(db_message)
     if settings.world_engine_events_enabled:
@@ -972,10 +974,16 @@ async def get_presence_map(
 
 def _build_perception_world_state(
     locations: list,
+    thread_deliveries: set[int] | frozenset[int] | None = None,
 ) -> perception.PerceptionWorldState | None:
-    """Build the pure world snapshot for the two-channel cutover (Фаза 4)."""
+    """Build the pure world snapshot for the two-channel cutover (Фаза 4).
+
+    ``thread_deliveries`` (Фаза 6) — id персонажей, которым событие доставлено
+    через тред/удалённый канал; источник ``remote_status=delivered`` (§4).
+    """
     return perception.PerceptionWorldState(
-        adjacency=perception.build_permeability_index(locations or [])
+        adjacency=perception.build_permeability_index(locations or []),
+        thread_deliveries=frozenset(thread_deliveries or ()),
     )
 
 
@@ -996,6 +1004,30 @@ async def _chat_world_state_for_characters(
     return _build_perception_world_state(locations)
 
 
+async def _chat_world_state_for_message(
+    db: AsyncSession, message, characters: list
+) -> perception.PerceptionWorldState | None:
+    """World snapshot scoped to one event (Фаза 6): включает доставки тредов.
+
+    ``thread_deliveries`` события вычисляются из ``ThreadParticipantState``
+    (см. ``thread_delivery_ids_for_message``), чтобы `perceive()` мог отдать
+    ``remote_status=delivered`` адресату независимо от локации (Golden #6).
+    """
+    if not settings.world_engine_perception_enabled:
+        return None
+    chat_id = getattr(message, "chat_id", None)
+    if chat_id is None:
+        for character in characters:
+            chat_id = getattr(character, "chat_id", None)
+            if chat_id is not None:
+                break
+    if chat_id is None:
+        return None
+    locations = await get_chat_locations(db, chat_id)
+    deliveries = await thread_delivery_ids_for_message(db, message)
+    return _build_perception_world_state(locations, thread_deliveries=deliveries)
+
+
 async def compute_and_save_presence_for_message(
     db: AsyncSession,
     message,
@@ -1010,6 +1042,10 @@ async def compute_and_save_presence_for_message(
     presence пишется через двухканальный ``perceive()`` (Renderer
     ``witness_model.perceive_presence_for_character``), а не через legacy
     ``can_character_perceive_event``. Откат — выключить флаг.
+
+    Фаза 6: world-state строится по событию (включая ``thread_deliveries``),
+    а при ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`` голосовая атрибуция
+    ``voice_known`` берётся из отношений наблюдателя (WPE.md §4).
     """
     names = character_names or {c.id: c.name for c in characters}
     locations = {c.id: getattr(c, "location", "") or "" for c in characters}
@@ -1017,14 +1053,26 @@ async def compute_and_save_presence_for_message(
     if message_id is None:
         return {}
 
-    world_state = await _chat_world_state_for_characters(db, characters)
+    world_state = await _chat_world_state_for_message(db, message, characters)
+    known_voices = None
+    if settings.world_engine_partial_perception_enabled:
+        chat_id = getattr(message, "chat_id", None)
+        if chat_id is not None:
+            known_voices = await _known_voices_for_chat(db, chat_id)
 
     records: list[schemas.MessagePresenceCreate] = []
     result: dict[int, str] = {}
     for character in characters:
         if world_state is not None:
             presence = witness_model.perceive_presence_for_character(
-                message, character, world_state
+                message,
+                character,
+                world_state,
+                voice_known=witness_model.voice_familiarity(
+                    character.id,
+                    getattr(message, "character_id", None),
+                    known_voices,
+                ),
             )
         else:
             presence = witness_model.compute_mvp_presence(
@@ -1059,6 +1107,10 @@ async def compute_and_save_presence_for_round(
 
     Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
     presence пишется через ``perceive()`` (см. Фаза 4 / Golden #14).
+
+    Фаза 6: для событий удалённых каналов доставки тредов подставляются
+    по-событийно, voice familiarity — из отношений при включённом
+    ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED``.
     """
     if characters is None:
         characters = []
@@ -1074,12 +1126,20 @@ async def compute_and_save_presence_for_round(
         locations = {cid: "" for cid in character_ids}
 
     world_state = await _chat_world_state_for_characters(db, characters)
+    known_voices = None
+    if settings.world_engine_partial_perception_enabled and characters:
+        chat_id = getattr(characters[0], "chat_id", None)
+        if chat_id is not None:
+            known_voices = await _known_voices_for_chat(db, chat_id)
 
     records: list[schemas.MessagePresenceCreate] = []
     for message in round_messages:
         message_id = getattr(message, "id", None)
         if message_id is None:
             continue
+        deliveries = frozenset()
+        if world_state is not None and settings.world_engine_threads_enabled:
+            deliveries = await thread_delivery_ids_for_message(db, message)
         for character_id in character_ids:
             if world_state is not None:
                 character = next(
@@ -1087,8 +1147,23 @@ async def compute_and_save_presence_for_round(
                 )
                 if character is None:
                     continue
+                message_world_state = (
+                    perception.PerceptionWorldState(
+                        adjacency=world_state.adjacency,
+                        thread_deliveries=deliveries,
+                    )
+                    if deliveries
+                    else world_state
+                )
                 presence = witness_model.perceive_presence_for_character(
-                    message, character, world_state
+                    message,
+                    character,
+                    message_world_state,
+                    voice_known=witness_model.voice_familiarity(
+                        character.id,
+                        getattr(message, "character_id", None),
+                        known_voices,
+                    ),
                 )
             else:
                 presence = witness_model.compute_mvp_presence(
@@ -1291,6 +1366,10 @@ async def apply_character_actions(
                 target_character_ids=perception.serialize_target_ids(targets),
             )
         )
+        if settings.world_engine_threads_enabled:
+            await _ensure_thread_for_action(
+                db, chat_id, action.channel, current_char.id, targets
+            )
         result.applied_messages.append(
             {
                 "action_index": index,
@@ -1320,6 +1399,172 @@ async def apply_character_actions(
 def _locations_same(a: str, b: str) -> bool:
     """Сравнение локаций по каноническому имени (legacy-bridge, как Фаза 1)."""
     return perception.locations_match(a, b)
+
+
+# -------------------- WPE 3.0: Threads / мессенджер (Фаза 6) --------------------
+async def _get_thread(
+    db: AsyncSession, chat_id: int, channel: str
+) -> models.Thread | None:
+    """Существующий тред чата по каналу (без создания)."""
+    stmt = (
+        select(models.Thread)
+        .where(models.Thread.chat_id == chat_id, models.Thread.channel == channel)
+        .order_by(models.Thread.id)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalars().first()
+
+
+async def get_or_create_thread(
+    db: AsyncSession,
+    chat_id: int,
+    channel: str,
+    *,
+    name: str = "",
+) -> models.Thread:
+    """Тред/канал общения чата (мессенджер, звонок и т.д.) (Фаза 6)."""
+    channel = (channel or "messenger").strip().lower()
+    thread = await _get_thread(db, chat_id, channel)
+    if thread is None:
+        thread = models.Thread(chat_id=chat_id, channel=channel, name=name)
+        db.add(thread)
+        await db.flush()
+    return thread
+
+
+async def ensure_thread_participant(
+    db: AsyncSession, thread: models.Thread, character_id: int
+) -> models.ThreadParticipantState:
+    """Гарантировать участие персонажа в треде (создаёт при отсутствии)."""
+    stmt = select(models.ThreadParticipantState).where(
+        models.ThreadParticipantState.thread_id == thread.id,
+        models.ThreadParticipantState.character_id == character_id,
+    )
+    state = (await db.execute(stmt)).scalars().first()
+    if state is None:
+        state = models.ThreadParticipantState(
+            thread_id=thread.id, character_id=character_id
+        )
+        db.add(state)
+        await db.flush()
+    return state
+
+
+async def mark_thread_delivered(
+    db: AsyncSession,
+    thread: models.Thread,
+    character_ids: list[int],
+    message_id: int,
+) -> None:
+    """Отметить доставку сообщения адресатам треда (`remote_status=delivered`)."""
+    for cid in character_ids:
+        state = await ensure_thread_participant(db, thread, cid)
+        if (
+            state.last_delivered_message_id is None
+            or message_id > state.last_delivered_message_id
+        ):
+            state.last_delivered_message_id = message_id
+
+
+async def _ensure_thread_for_action(
+    db: AsyncSession,
+    chat_id: int,
+    channel: str,
+    author_id: int | None,
+    targets: list[int],
+) -> None:
+    """Создать тред и участников по действию ``send_message`` (Фаза 6).
+
+    Доставка (`mark_thread_delivered`) проставляется позже в ``create_message``
+    для реального сообщения с ``message.id``.
+    """
+    if channel not in perception.REMOTE_CHANNELS:
+        return
+    thread = await get_or_create_thread(db, chat_id, channel)
+    members = set(targets)
+    if author_id is not None:
+        members.add(author_id)
+    for cid in members:
+        await ensure_thread_participant(db, thread, cid)
+
+
+async def ensure_message_thread_delivery(db: AsyncSession, message) -> None:
+    """Создать/обновить ``Thread`` + ``ThreadParticipantState`` для события.
+
+    Фаза 6 (WPE.md §4, Golden #6/#15): сообщение по удалённому каналу
+    (magic/phone/radio/messenger) создаёт/обновляет тред; адресат получает
+    ``remote_status=delivered`` независимо от локации. Вызывается из
+    ``create_message`` в той же транзакции (атомарно).
+    """
+    if not settings.world_engine_threads_enabled:
+        return
+    channel = (getattr(message, "channel", None) or "direct").strip().lower()
+    if channel not in perception.REMOTE_CHANNELS:
+        return
+    chat_id = getattr(message, "chat_id", None)
+    message_id = getattr(message, "id", None)
+    if chat_id is None or message_id is None:
+        return
+    thread = await get_or_create_thread(db, chat_id, channel)
+    author_id = getattr(message, "character_id", None)
+    targets = perception.parse_target_ids(
+        getattr(message, "target_character_ids", None)
+    )
+    members = set(targets)
+    if author_id is not None:
+        members.add(author_id)
+    for cid in members:
+        await ensure_thread_participant(db, thread, cid)
+    await mark_thread_delivered(db, thread, targets, message_id)
+
+
+async def thread_delivery_ids_for_message(
+    db: AsyncSession, message
+) -> frozenset[int]:
+    """Id персонажей, которым событие доставлено через тред (Фаза 6).
+
+    Пустое множество, когда Threads выключены или сообщение не по удалённому
+    каналу — тогда ``perceive()`` не отдаёт ``remote_status=delivered``.
+    """
+    if not settings.world_engine_threads_enabled:
+        return frozenset()
+    channel = (getattr(message, "channel", None) or "direct").strip().lower()
+    if channel not in perception.REMOTE_CHANNELS:
+        return frozenset()
+    chat_id = getattr(message, "chat_id", None)
+    message_id = getattr(message, "id", None)
+    if chat_id is None or message_id is None:
+        return frozenset()
+    thread = await _get_thread(db, chat_id, channel)
+    if thread is None:
+        return frozenset()
+    stmt = select(models.ThreadParticipantState).where(
+        models.ThreadParticipantState.thread_id == thread.id,
+        models.ThreadParticipantState.last_delivered_message_id.is_not(None),
+        models.ThreadParticipantState.last_delivered_message_id >= message_id,
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return frozenset(state.character_id for state in rows)
+
+
+async def _known_voices_for_chat(
+    db: AsyncSession, chat_id: int
+) -> dict[int, set[int]]:
+    """``{observer_id: set(author_ids)}`` из отношений (источник voice familiarity).
+
+    Голос автора считается знакомым наблюдателю, если у наблюдателя есть
+    направленное ``CharacterRelationship`` к автору (WPE.md §4, Фаза 6).
+    """
+    stmt = select(models.CharacterRelationship).where(
+        models.CharacterRelationship.chat_id == chat_id
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    result: dict[int, set[int]] = {}
+    for rel in rows:
+        result.setdefault(rel.source_character_id, set()).add(
+            rel.target_character_id
+        )
+    return result
 
 
 # ----------------------------- Location -----------------------------

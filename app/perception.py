@@ -13,7 +13,12 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from .config import settings
-from .stimuli import AUDIBLE_STIMULUS_TYPES, Stimulus, parse_stimuli
+from .stimuli import (
+    AUDIBLE_STIMULUS_TYPES,
+    INVISIBILITY_STIMULUS_TYPE,
+    Stimulus,
+    parse_stimuli,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +661,11 @@ def perceive(
       «одна локация» решается канонически: по `location_id` (Фаза 1) при
       включённом `WORLD_ENGINE_LOCATIONS_ENABLED`, иначе — по строкам
       (legacy-bridge);
+    - удалённый канал (magic/phone/radio/messenger, Фаза 6): адресат из
+      `world_state.thread_deliveries` получает `remote_status=delivered` и
+      content (full/full) независимо от локации (Golden #6/#15);
+    - невидимость (Фаза 6, Golden #19): при `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`
+      событие в одной локации со стимулом `invisible` → `visual=none`, `audio=full`;
     - соседство → проницаемость ребра по каналам; громкий стимул повышает
       ``muffled`` до ``full``;
     - дальняя локация → none/none (И11 — никогда не додумывается);
@@ -670,6 +680,7 @@ def perceive(
     targets = parse_target_ids(event.get("target_character_ids"))
     stimuli = parse_stimuli(event.get("stimuli"))
     author_id = event.get("character_id")
+    channel = (event.get("channel") or "direct").strip().lower()
 
     # Собственная речь всегда полностью известна автору
     if author_id is not None and observer_id is not None:
@@ -681,15 +692,39 @@ def perceive(
         except (TypeError, ValueError):
             pass
 
+    # Удалённый канал (Фаза 6): доставка через Thread/ThreadParticipantState —
+    # адресат получает событие независимо от локации (WPE.md §4, Golden #6/#15).
+    if (
+        channel in REMOTE_CHANNELS
+        and observer_id in world_state.thread_deliveries
+    ):
+        return PerceptionResult(
+            visual_level="full",
+            audio_level="full",
+            addressed=observer_id in targets,
+            remote_status="delivered",
+        )
+
+    invisible = (
+        settings.world_engine_partial_perception_enabled
+        and any(s.type == INVISIBILITY_STIMULUS_TYPE for s in stimuli)
+    )
+
     if is_shared_scene(event_location) or is_shared_scene(observer_location):
-        visual, audio = "full", "full"
+        if invisible:
+            visual, audio = "none", "full"
+        else:
+            visual, audio = "full", "full"
     elif same_canonical_location(
         event_location=event_location,
         observer_location=observer_location,
         event_location_id=event.get("location_id"),
         observer_location_id=observer.get("location_id"),
     ):
-        visual, audio = "full", "full"
+        if invisible:
+            visual, audio = "none", "full"
+        else:
+            visual, audio = "full", "full"
     else:
         edge = None
         if observer_location:

@@ -164,10 +164,32 @@ def perceive_to_presence(result: Any, *, voice_known: bool = True) -> Presence:
     return "absent"
 
 
+def voice_familiarity(
+    observer_id: int,
+    author_id: int | None,
+    known_voices: dict[int, set[int]] | None = None,
+) -> bool:
+    """Детерминированная атрибуция голоса (WPE.md §4, Фаза 6): известен ли
+    автор наблюдателю.
+
+    ``known_voices`` — ``{observer_id: set(author_ids)}``, построенный CRUD из
+    ``CharacterRelationship`` (отношение наблюдателя к автору = голос знаком).
+    ``None`` → True: константа Renderer'а Фазы 4 (голос считается знакомым) —
+    откат при выключенном ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED``.
+    """
+    if author_id is None:
+        return False
+    if known_voices is None:
+        return True
+    return author_id in known_voices.get(observer_id, set())
+
+
 def perceive_presence_for_character(
     message: Any,
     character: Any,
     world_state: PerceptionWorldState,
+    *,
+    voice_known: bool = True,
 ) -> Presence:
     """Two-channel presence for one ORM character (cutover path).
 
@@ -186,7 +208,7 @@ def perceive_presence_for_character(
             "location_id": getattr(character, "location_id", None),
         },
     )
-    return perceive_to_presence(result)
+    return perceive_to_presence(result, voice_known=voice_known)
 
 
 def render_perception_line(

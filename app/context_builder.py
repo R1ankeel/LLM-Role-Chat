@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
 from . import memory_service
+from . import perception
 from . import schemas
 from .config import settings
 from .context_budget import build_budget
@@ -47,7 +48,10 @@ from .witness_model import (
     Presence,
     build_character_recency_tail,
     format_line_for_presence,
+    perceive_to_presence,
+    render_perception_line,
     resolve_presence,
+    voice_familiarity,
 )
 from .perception import parse_target_ids
 
@@ -130,21 +134,73 @@ class ContextBuilder:
         presence_map = await _load_presence_map(db, message_ids, char_id)
 
         filter_enabled = bool(settings.enable_witness_filter)
+        # Renderer (WPE.md §4/§6, Фаза 6): канало-зависимый текст при включённом
+        # двухканальном восприятии + частичном восприятии. Иначе — legacy-лестница
+        # (идентичное поведение Фаз 1–5, откат по флагам).
+        channel_render = bool(
+            settings.world_engine_perception_enabled
+            and settings.world_engine_partial_perception_enabled
+        )
+        world_state = (
+            await crud._chat_world_state_for_characters(db, [character])
+            if channel_render
+            else None
+        )
+        known_voices = (
+            await crud._known_voices_for_chat(db, chat_id)
+            if (channel_render and world_state is not None)
+            else None
+        )
         lines: list[dict[str, Any]] = []
         for message in candidates:
             mid = getattr(message, "id", None)
-            if filter_enabled:
-                presence = resolve_presence(
-                    message,
-                    char_id,
-                    character_names,
-                    presence_map,
-                    viewer_location=viewer_location,
-                    character_locations=character_locations,
+            presence: Presence = "absent"
+            line: str | None = None
+            if channel_render and world_state is not None:
+                ws = world_state
+                if settings.world_engine_threads_enabled:
+                    deliveries = await crud.thread_delivery_ids_for_message(
+                        db, message
+                    )
+                    if deliveries:
+                        ws = perception.PerceptionWorldState(
+                            adjacency=world_state.adjacency,
+                            thread_deliveries=deliveries,
+                        )
+                event = perception.event_from_message(message)
+                result = perception.perceive(
+                    world_state=ws,
+                    event=event,
+                    observer={
+                        "character_id": char_id,
+                        "location": viewer_location,
+                        "location_id": getattr(character, "location_id", None),
+                    },
                 )
-            else:
-                presence = "present"
-            line = format_line_for_presence(message, presence, character_names)
+                known = voice_familiarity(
+                    char_id, event.get("character_id"), known_voices
+                )
+                presence = perceive_to_presence(result, voice_known=known)
+                line = render_perception_line(
+                    message,
+                    result,
+                    character_names,
+                    viewer_name=char_name,
+                    voice_known=known,
+                )
+            if line is None:
+                if filter_enabled:
+                    presence = resolve_presence(
+                        message,
+                        char_id,
+                        character_names,
+                        presence_map,
+                        viewer_location=viewer_location,
+                        character_locations=character_locations,
+                    )
+                else:
+                    presence = "present"
+                line = format_line_for_presence(message, presence, character_names)
             if not line:
                 continue
             lines.append(

@@ -281,6 +281,23 @@ Narrator **без ретрая**) / `contradiction` (ретрай ≤1 внут�
 regex-пути). Тюнинг-настройка `WPE_ACTION_CONSISTENCY_MAX_RETRIES` (по
 умолчанию `1`) ограничивает contradiction-ретраи внутри `generate()`.
 
+Фаза 6 (Threads/мессенджер + двухканальное частичное восприятие) реализована
+08-04; флаги по-прежнему **`false`**. Включение `WORLD_ENGINE_THREADS_ENABLED`
+переводит `create_message` по удалённому каналу
+(magic/phone/radio/messenger) на запись `Thread` + `ThreadParticipantState`
+(участники = автор + адресаты; доставка — только адресатам); адресат получает
+`remote_status=delivered` независимо от локации через
+`world_state.thread_deliveries` в `perceive()` (Golden #6/#15). Включение
+`WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` включает частичное восприятие по
+каналам: проницаемость рёбер `visual_permeability`/`audio_permeability`,
+громкость (loud_sound поднимает muffled→full), невидимость (стимул `invisible`
+→ visual=none/audio=full в одной локации) и voice familiarity (атрибуция по
+голосу из `CharacterRelationship`: знакомый — «голос <имя>», незнакомый —
+«чей-то голос»); Renderer `ContextBuilder` при обоих включённых флагах строит
+канало-зависимые строки (`render_perception_line`), не утекая семантику (И11).
+Флаги независимы; откат — выключить любой из них (partial → бинарный full/none
+по каналам, треды — отдельно).
+
 | ключ | дефолт | описание (фаза) |
 |---|---|---|
 | `WORLD_ENGINE_LOCATIONS_ENABLED` | `false` | канонические локации, сравнение по `location_id` (Фаза 1, реализована) |
@@ -290,6 +307,6 @@ regex-пути). Тюнинг-настройка `WPE_ACTION_CONSISTENCY_MAX_RET
 | `WORLD_ENGINE_RECENCY_TAIL_ENABLED` | `false` | Recency Tail в хвост промпта, P0-адресация (Фаза 4, реализована) |
 | `WORLD_ENGINE_ACTIONS_ENABLED` | `false` | применение действий + System Narrator + Consistency Validator (Фаза 5, Ул.1, реализована) |
 | `WORLD_ENGINE_CONSISTENCY_MAX_RETRIES` | `1` | contradiction-ретраи ≤ N внутри `generate()` (Фаза 5, тюнинг) |
-| `WORLD_ENGINE_THREADS_ENABLED` | `false` | Thread/ThreadParticipantState в проде (Фаза 6) |
-| `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` | `false` | частичное восприятие по каналам (Фаза 6, Ул.2) |
+| `WORLD_ENGINE_THREADS_ENABLED` | `false` | Thread/ThreadParticipantState в проде: доставка по удалённому каналу независимо от локации (Фаза 6, реализована) |
+| `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` | `false` | частичное восприятие по каналам: рёбра + громкость + невидимость + voice familiarity (Фаза 6, Ул.2, реализована) |
 | `WORLD_ENGINE_EVENT_BUS_ENABLED` | `false` | Event Bus / буждение NPC (Фаза 7, Ул.5) |

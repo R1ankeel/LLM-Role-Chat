@@ -1,6 +1,25 @@
 # World & Perception Engine 3.0 — план внедрения (v3)
 
-> Дата: 2026-08-03 · Статус: **Фаза 5 реализована (08-04)**.
+> Дата: 2026-08-03 · Статус: **Фаза 6 реализована (08-04)**.
+> Статус фазы 6 (Threads/мессенджер + двухканальное частичное восприятие):
+> `Thread` + `ThreadParticipantState` пишутся в проде — `create_message`
+> по удалённому каналу (magic/phone/radio/messenger) создаёт/обновляет тред и
+> участников, адресату проставляется `remote_status=delivered` независимо от
+> локации (Golden #6); групповой тред — участники автор+адресаты, доставка
+> только адресатам (Golden #15); `send_message` из `apply_character_actions`
+> создаёт тред (И14); `perceive()` отдаёт full/full+delivered адресату
+> удалённого канала из `world_state.thread_deliveries`. Частичное восприятие:
+> ребро `visual_permeability`/`audio_permeability` + громкость (muffled→full от
+> loud_sound), невидимость (`invisible`-стимул → visual=none/audio=full при
+> `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`, Golden #17/#18/#19); voice
+> familiarity — детерминированная атрибуция из `CharacterRelationship`
+> (знакомый голос → «голос <имя>», незнакомый → «чей-то голос», muffled →
+> атрибуция запрещена); Renderer `ContextBuilder` использует
+> `render_perception_line` при включённых обоих флагах (И11, без утечки
+> семантики). Флаги раздельные (`WORLD_ENGINE_THREADS_ENABLED`,
+> `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`); откат — partial → бинарный
+> full/none по каналам, треды выключаются отдельно. Golden #6/#15/#17/#18/#19
+> + voice familiarity покрыты `tests/test_world_engine_phase6.py` (14 тестов).
 > Статус фазы 5 (Action Resolution): протокол §5 исполнен целиком —
 > действия из native tools (`turn.actions`) применяются атомарно
 > (`crud.apply_character_actions`): `move_to` обновляет `location`+`location_id`
@@ -596,18 +615,34 @@ Tool-схема (OpenAI-совместимая, используется и в O
 - ✅ Откат: флаг выключается — движок возвращается к пост-раундовому
   regex-пути движения (проверено off-тестами).
 
-**Фаза 6 — Thread/мессенджер + двухканальное частичное восприятие** [Ул.2]
-- `Thread` + `ThreadParticipantState` в проде; `send_message` создаёт/обновляет
-  их; адресат получает `remote_status=delivered` независимо от локации.
-- Частичное восприятие по каналам (И13): проницаемость рёбер
-  `visual_permeability`/`audio_permeability` + громкость; Renderer соблюдает
-  И11. **Voice familiarity** для атрибуции при `audio-only`.
-- Флаги: `WORLD_ENGINE_THREADS_ENABLED`,
-  `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` (раздельно).
-- Критерий выхода: golden "сообщение в мессенджер", "групповой тред",
-  "стекло", "крик из-за стены", "невидимость", "подслушивание без утечки
-  семантики" (§11) проходят.
-- Откат: флаги раздельные; partial → бинарный full/none по каналам.
+**✅ Фаза 6 — Thread/мессенджер + двухканальное частичное восприятие** [Ул.2] *(реализована 08-04)*
+- ✅ Threads в проде: `crud.ensure_message_thread_delivery` вызывается из
+  `create_message` для удалённых каналов (magic/phone/radio/messenger) — тред
+  создаётся/обновляется, участники = автор + адресаты, доставка
+  (`last_delivered_message_id`) — только адресатам; Golden #6 (адресат получает
+  `remote_status=delivered` независимо от локации через
+  `thread_delivery_ids_for_message` → `world_state.thread_deliveries` →
+  `perceive()`) и Golden #15 (групповой тред). `send_message` из
+  `apply_character_actions` создаёт тред и участников (И14).
+- ✅ Частичное восприятие по каналам (И13): `perceive()` учитывает проницаемость
+  рёбер `visual_permeability`/`audio_permeability`, громкость (loud_sound
+  повышает muffled→full) и стимул `invisible` (одна локация → visual=none,
+  audio=full). Рендер `render_perception_line` соблюдает И11: стекло (full/none)
+  → «действия видны, слов не слышно», muffled — без содержания.
+- ✅ **Voice familiarity** для атрибуции при audio-only (§4): детерминированный
+  `witness_model.voice_familiarity` из `CharacterRelationship` (знакомый голос →
+  mentioned/«голос <имя>», незнакомый → audible/«чей-то голос», muffled →
+  атрибуция запрещена); подключён в presence (message/round) и в Renderer
+  `ContextBuilder` (канало-зависимая строка при включённых обоих флагах).
+- ✅ Флаги раздельные: `WORLD_ENGINE_THREADS_ENABLED`,
+  `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` (оба default off, инвариант Фазы 0).
+- ✅ Критерий выхода: golden "сообщение в мессенджер" (#6), "групповой тред"
+  (#15), "стекло" (#17), "крик из-за стены" (#18), "невидимость" (#19),
+  "подслушивание без утечки семантики" (#11/#8 — канало-рендер) покрыты
+  `tests/test_world_engine_phase6.py` (14 тестов). Регрессий нет
+  (758 passed; 28 pre-existing падений вне scope, набор идентичен Фазе 5).
+- ✅ Откат: флаги раздельные; partial → бинарный full/none по каналам
+  (проверено off-тестами).
 
 **Фаза 7 — Event Bus / Interrupts** [Ул.5]
 - `round_engine.py` с очередью приоритетов; `chat_engine` делегирует цикл.

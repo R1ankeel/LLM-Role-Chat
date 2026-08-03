@@ -884,10 +884,19 @@ async def process_user_message_streaming(
                 announced_movements[current_character.id] = movement_target
 
         char_location = character_locations.get(current_character.id, "") or ""
-        # Detect remote communication channel from response text
-        msg_channel, msg_targets = _detect_communication_channel(
-            response_text, current_character.name, character_names
-        )
+        # Remote channel: источник истины — `send_message` action (И14); regex
+        # `_detect_communication_channel` остаётся только для отката (actions off).
+        if actions_active and applied.applied_messages:
+            msg_channel = (
+                applied.applied_messages[0].get("channel") or "direct"
+            ).strip().lower()
+            msg_targets = list(
+                applied.applied_messages[0].get("target_character_ids") or []
+            )
+        else:
+            msg_channel, msg_targets = _detect_communication_channel(
+                response_text, current_character.name, character_names
+            )
         msg_visibility = settings.default_event_visibility
         if msg_channel != "direct" and msg_targets:
             msg_visibility = "targeted"
