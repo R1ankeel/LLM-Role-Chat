@@ -278,11 +278,11 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] Прогон `pytest tests/test_perception.py tests/test_locations_perception.py tests/test_witness_filter.py`.
 
 ### Спринт 3 — Стимулы (§13, §14)
-- [ ] `app/stimuli.py`: `Stimulus`, `extract_stimuli`, `has_stimulus`, `build_audible_line`, сериализация.
-- [ ] `chat_engine.py`: `extract_stimuli` при создании сообщений (user + character), сохранение в `messages.stimuli`.
-- [ ] `perception.py`: `get_perception_level` использует стимулы для MENTIONED; убрать «имя в тексте → mentioned» из LOCAL-ветки.
-- [ ] Тесты: 17-20 из §18.
-- [ ] Прогон `pytest tests/test_perception.py`.
+- [x] `app/stimuli.py`: `Stimulus`, `extract_stimuli`, `has_stimulus`, `build_audible_line`, сериализация.
+- [x] `chat_engine.py`: `extract_stimuli` при создании сообщений (user + character), сохранение в `messages.stimuli`.
+- [x] `perception.py`: `get_perception_level` использует стимулы для MENTIONED; убрать «имя в тексте → mentioned» из LOCAL-ветки.
+- [x] Тесты: 17-20 из §18.
+- [x] Прогон `pytest tests/test_perception.py`.
 
 ### Спринт 4 — Движение и обновление мира (§9-§12)
 - [ ] `app/movement.py`: `detect_character_movement`.
@@ -348,7 +348,7 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] 6. AUDIBLE не раскрывает визуальные детали/мысли (тест 10).
 - [ ] 7. Движение действительно обновляет БД (`characters.location`).
 - [ ] 8. Обновлённая локация используется следующим NPC в том же раунде (тест 16).
-- [ ] 9. Стимулы не дублируют сообщения (тест 19).
+- [x] 9. Стимулы не дублируют сообщения (тест 19).
 - [ ] 10. Полный прогон `pytest` — зелёный.
 - [x] Golden-снапшоты обновлены и проходят.
 
@@ -489,3 +489,43 @@ crud.update_character_location / batch + character_locations[cid] = new
 - Не вводилась отдельная таблица стимулов/событий — стимулы остаются метаданными `messages.stimuli`.
 - Не добавлялась иерархия локаций (`parent_id`) — покрыто абстракцией `are_locations_adjacent` + `adjacent_to`.
 - `chat_engine.py` не изменялся (движение/стимулы в рантайме — Спринты 3-4).
+
+---
+
+## 11. Итоговый отчёт — Спринт 3 (заполнено 2026-08-03)
+
+### 1. Какие файлы изменены
+- `app/chat_engine.py`
+- `tests/test_stimuli.py` (новый)
+- `Plans/isolation-fix.md`
+- `docs/locations.md`
+
+### 2. Что изменено в каждом файле
+- `chat_engine.py`:
+  - импорт `extract_stimuli` из `app.stimuli`;
+  - загрузка `all_characters`/`character_names` перенесена до создания user-сообщения (нужна для извлечения address-стимулов);
+  - при создании **user-сообщения**, **NPC-сообщения** (в цикле) и **нового ответа при регенерации** вызывается `extract_stimuli(content, character_names)` и результат сохраняется в `messages.stimuli` (через `MessageCreate.stimuli` → `orm_kwargs` → JSON).
+
+### 3. Какие тесты добавлены/изменены
+- Новый `tests/test_stimuli.py` — тесты §18 17-20:
+  - 17: «стучу в дверь»/«стук»/«постучал» → stimulus `knock`;
+  - 18: «Ольга, ты дома?» → stimulus `address` (target=Ольга);
+  - 19: стимул не создаёт отдельное сообщение (число `messages` = user + NPC-ответы, без доп. строк);
+  - 20: стимул доступен perception (address из соседней локации → `mentioned`, reason `MENTIONED_ADDRESS`).
+  - Плюс unit-тесты: call/shout/loud_sound, отсутствие address при повествовании, сериализация roundtrip, `has_stimulus`, `build_audible_line` без утечки контента, персистентность стимулов user-сообщения через реальный путь генерации.
+
+### 4. Результат существующих тестов
+`pytest tests/test_perception.py tests/test_perception_levels.py tests/test_locations_perception.py tests/test_locations_api.py tests/test_witness_filter.py tests/test_chat_engine.py` → **79 passed**. Широкий прогон (manual_scenarios, role_isolation, prompt_builder, context_builder, ollama_chat, golden) → **159 passed**. Новых падений нет.
+
+### 5. Результат новых тестов
+`tests/test_stimuli.py` — 11 passed.
+
+### 6. Ограничения текущей реализации
+- `extract_stimuli` — regex-эвристики (возможны ложные срабатывания, в т.ч. на уменьшительные имена); изолированы в модуле для замены на LLM.
+- `audible`-реплики в `_effective_prior_replies` и передача `adjacency_index` в рантайм-контекст всё ещё не подключены — это Спринт 4 (движение + полное подключение adjacency в генерации).
+- `_name_mentioned` для REMOTE-ветки без таргета сохранён.
+
+### 7. Что сознательно НЕ внесено
+- Не вводилась обязательная реакция на стимул — персонаж волен игнорировать (тест 24).
+- Стимулы не стали отдельной таблицей БД — остаются метаданными сообщения.
+- `_effective_prior_replies` и scene extraction не менялись (Спринт 4).

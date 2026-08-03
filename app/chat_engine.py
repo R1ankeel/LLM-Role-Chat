@@ -27,6 +27,7 @@ from .database import AsyncSessionLocal
 from .context_state import ctx_state
 from .repetition_detector import analyze_response
 from .role_isolation import get_other_character_names
+from .stimuli import extract_stimuli
 from .witness_model import Presence, resolve_presence
 
 logger = logging.getLogger(__name__)
@@ -456,6 +457,11 @@ async def process_user_message_streaming(
     event_visibility = visibility or settings.default_event_visibility
     event_targets = list(target_character_ids or [])
 
+    # All characters (incl. player) are needed for stimuli extraction and
+    # relationships; loaded before the user message is persisted (Sprint 3).
+    all_characters = await crud.get_characters_by_chat(db, chat_id, include_player=True)
+    character_names = {c.id: c.name for c in all_characters}  # includes player
+
     user_message = await crud.create_message(
         db,
         schemas.MessageCreate(
@@ -465,6 +471,10 @@ async def process_user_message_streaming(
             visibility=event_visibility,
             location=player_location,
             target_character_ids=event_targets,
+            stimuli=[
+                s.to_dict()
+                for s in extract_stimuli(user_text, list(character_names.values()))
+            ],
         ),
     )
 
@@ -482,14 +492,12 @@ async def process_user_message_streaming(
     yield {"type": "message", "message": _message_to_dict(user_message)}
 
     # Load NPCs for generation, all characters (incl. player) for relationships
-    all_characters = await crud.get_characters_by_chat(db, chat_id, include_player=True)
     characters = [c for c in all_characters if not c.is_player]  # NPCs only for generation
 
     if not characters:
         logger.warning("[chat_id=%d] No characters in chat", chat_id)
         return
 
-    character_names = {c.id: c.name for c in all_characters}  # includes player
     character_ids = [c.id for c in characters]  # NPCs only
     character_locations = {
         c.id: getattr(c, "location", "") or "" for c in characters
@@ -830,6 +838,12 @@ async def process_user_message_streaming(
                 location=char_location,
                 target_character_ids=msg_targets,
                 channel=msg_channel,
+                stimuli=[
+                    s.to_dict()
+                    for s in extract_stimuli(
+                        response_text, list(character_names.values())
+                    )
+                ],
             ),
         )
         # Perception for this reply before the next character generates
@@ -2233,6 +2247,10 @@ async def regenerate_message_streaming(
             location=char_location,
             target_character_ids=msg_targets,
             channel=msg_channel,
+            stimuli=[
+                s.to_dict()
+                for s in extract_stimuli(response_text, list(character_names.values()))
+            ],
         ),
     )
     await crud.compute_and_save_presence_for_message(

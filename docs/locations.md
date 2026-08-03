@@ -325,8 +325,12 @@ OWN_MESSAGE / GLOBAL / PUBLIC / private / targeted / REMOTE_CHANNELS
 
 `audible`/`mentioned`-уровни и соседство работают в perception-функциях и
 при передаче `adjacency_index` (в т.ч. через `compute_mvp_presence` и
-`filter_history_*`). Подключение `extract_stimuli` к созданию сообщений и
-`adjacency_index` в рантайме генерации выполняется Спринтами 3-4.
+`filter_history_*`). С Спринта 3 `extract_stimuli` вызывается при создании
+user- и character-сообщений (в `chat_engine.process_user_message_streaming`
+и `regenerate_message_streaming`), стимулы сохраняются в `messages.stimuli`
+и читаются perception-слоем через `event_from_message`.
+Передача `adjacency_index` в рантайм-контекст генерации (audible-реплики в
+`_effective_prior_replies`, подключение соседства в `chat_engine`) — Спринт 4.
 
 ### Тесты (§18 items 4-10)
 
@@ -342,3 +346,12 @@ OWN_MESSAGE / GLOBAL / PUBLIC / private / targeted / REMOTE_CHANNELS
 
 Интеграция CRUD: `test_adjacency_crud_and_perception_integration`,
 `test_rename_updates_adjacency_references`.
+
+### Тесты (§18 items 17-20, стимулы)
+
+| # | проверка | тест |
+|---|---|---|
+| 17 | «стучу в дверь» → stimulus knock | `tests/test_stimuli.py::test_knock_stimulus` |
+| 18 | «Ольга, ты дома?» → stimulus address | `test_address_stimulus` |
+| 19 | Стимул не создаёт отдельное сообщение | `test_stimuli_do_not_create_extra_messages` |
+| 20 | Стимул доступен perception | `test_stimulus_reaches_perception` |
