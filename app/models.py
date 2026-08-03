@@ -58,6 +58,13 @@ class Chat(Base):
     location_records: Mapped[list["Location"]] = relationship(
         back_populates="chat", cascade="all, delete-orphan"
     )
+    # World & Perception Engine 3.0 (Фаза 0): журнал world-событий и треды.
+    world_events: Mapped[list["WorldEvent"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
+    threads: Mapped[list["Thread"]] = relationship(
+        back_populates="chat", cascade="all, delete-orphan"
+    )
 
 
 class Location(Base):
@@ -79,7 +86,11 @@ class Location(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    # JSON list of names of adjacent locations (Sprint 2 — аудиовосприятие соседних)
+    # JSON list of names of adjacent locations (Sprint 2 — аудиовосприятие
+    # соседних). WPE 3.0 (И13): элементы могут быть строками (имена) либо
+    # объектами {"name", "visual_permeability", "audio_permeability"} —
+    # проницаемость ребра по каналам. Ребро без явных значений по умолчанию
+    # visual=none, audio=muffled (обратная совместимость).
     adjacent_to: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -87,6 +98,106 @@ class Location(Base):
     )
 
     chat: Mapped["Chat"] = relationship(back_populates="location_records")
+
+
+class WorldEvent(Base):
+    """Неизменяемый (append-only) журнал world-событий (WPE 3.0, Фаза 0).
+
+    Заведён, но до Фазы 3 не пишется. Иммутабельность после вставки (И9)
+    обеспечивается на уровне кода: нет update-эндпоинтов, значения не
+    меняются постфактум. ``message_id`` связывает речевое событие с
+    ``messages``; для `move` фиксируются ``location_from``/``location_to``.
+    """
+
+    __tablename__ = "world_events"
+    __table_args__ = (
+        Index("ix_world_events_chat_ts", "chat_id", "created_at", "id"),
+        Index("ix_world_events_character_id", "character_id"),
+        Index("ix_world_events_round_id", "round_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL для system/global событий без автора
+    character_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("characters.id", ondelete="SET NULL"), nullable=True
+    )
+    # Привязка к речевому сообщению (NULL для чистых действий/системных)
+    message_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # speech | move | system_narrator | system
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # legacy-bridge: строковая локация события (WPE 3.0 → location_id в Фазе 3)
+    location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    location_from: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    location_to: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_character_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    chat: Mapped["Chat"] = relationship(back_populates="world_events")
+    character: Mapped[Optional["Character"]] = relationship()
+
+
+class Thread(Base):
+    """Тред/канал общения (мессенджер, звонок и т.д.) (WPE 3.0, Фаза 0).
+
+    Заведён, до Фазы 6 не пишется. ``remote_status=delivered`` адресата
+    определяется через ``ThreadParticipantState`` независимо от локации.
+    """
+
+    __tablename__ = "threads"
+    __table_args__ = (Index("ix_threads_chat_id", "chat_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    channel: Mapped[str] = mapped_column(
+        String(20), default="messenger", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    chat: Mapped["Chat"] = relationship(back_populates="threads")
+    participants: Mapped[list["ThreadParticipantState"]] = relationship(
+        back_populates="thread", cascade="all, delete-orphan"
+    )
+
+
+class ThreadParticipantState(Base):
+    """Состояние участника треда (доставка/прочтение) (WPE 3.0, Фаза 0)."""
+
+    __tablename__ = "thread_participant_states"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "character_id", name="uq_thread_participant"),
+        Index("ix_thread_participant_character", "character_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    thread_id: Mapped[int] = mapped_column(
+        ForeignKey("threads.id", ondelete="CASCADE"), nullable=False
+    )
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), nullable=False
+    )
+    last_delivered_message_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    last_read_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    thread: Mapped["Thread"] = relationship(back_populates="participants")
+    character: Mapped["Character"] = relationship()
 
 
 class Character(Base):
@@ -114,6 +225,12 @@ class Character(Base):
     # Пустая строка = кадрирование не задано (стандартное object-fit: cover).
     avatar_crop: Mapped[str] = mapped_column(Text, default="", nullable=False)
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    # WPE 3.0 (Фаза 0): каноническая локация как FK на `locations.id`.
+    # nullable — legacy-чаты до backfill (Фаза 1). `location` (строка)
+    # остаётся read-only legacy-bridge до Фазы 8.
+    location_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     is_player: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

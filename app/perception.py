@@ -35,9 +35,19 @@ VALID_VISIBILITIES = frozenset(
 # Communication channels that bridge location isolation
 REMOTE_CHANNELS = frozenset({"magic", "phone", "radio", "messenger"})
 
+# ---------------------------------------------------------------------------
+# LEGACY-BRIDGE (WPE 3.0, Фаза 1) — строковое сравнение локаций.
+# Существующий движок (witness_model / chat_engine / context_builder) и
+# `can_character_perceive_event` сравнивают локации по нормализованным
+# строкам (`normalize_location` / `locations_match`). Новый read-path
+# `perceive()` (ниже, WPE 3.0) сравнивает канонические `location_id`
+# (Фаза 1), строковый путь остаётся как legacy-bridge до cutover'а Фазы 4
+# и как fallback для legacy-чатов (откат: `WORLD_ENGINE_LOCATIONS_ENABLED`).
+# ---------------------------------------------------------------------------
+
 
 def normalize_location(location: str | None) -> str:
-    """Normalize location labels for comparison."""
+    """Normalize location labels for comparison (legacy-bridge, WPE 3.0 Фаза 1)."""
     text = (location or "").strip()
     if settings.normalize_locations:
         return text.casefold()
@@ -69,8 +79,19 @@ def compute_is_isolated(
     return True
 
 
+def _adjacency_name(item: Any) -> str:
+    """Extract an adjacent location name from a string or a permeability object."""
+    if isinstance(item, dict):
+        return str(item.get("name") or "").strip()
+    return str(item).strip()
+
+
 def _parse_adjacency_list(raw: Any) -> list[str]:
-    """Parse a JSON list of adjacent location names (from ``locations.adjacent_to``)."""
+    """Parse a JSON list of adjacent location names (from ``locations.adjacent_to``).
+
+    Tolerates the WPE 3.0 object form ``{"name": ..., "visual_permeability": ...,
+    "audio_permeability": ...}`` — only the name is used (legacy 1D index).
+    """
     if raw is None or raw == "":
         return []
     if isinstance(raw, str):
@@ -79,10 +100,10 @@ def _parse_adjacency_list(raw: Any) -> list[str]:
         except (json.JSONDecodeError, TypeError):
             return []
         if isinstance(data, list):
-            return [str(x).strip() for x in data if str(x).strip()]
+            return [n for n in (_adjacency_name(x) for x in data) if n]
         return []
     if isinstance(raw, list):
-        return [str(x).strip() for x in raw if str(x).strip()]
+        return [n for n in (_adjacency_name(x) for x in raw) if n]
     return []
 
 
@@ -403,3 +424,296 @@ def build_world_locations(
             continue
         world[str(cid)] = _get_attr(character, "location") or ""
     return world
+
+
+# ---------------------------------------------------------------------------
+# WPE 3.0 — двухканальное восприятие (Plans/WPE.md §2/§4, И13)
+# Фаза 0: чистая функция `perceive` + проницаемость рёбер по каналам.
+# Фаза 1: `perceive` сравнивает канонические `location_id` (включается
+# флагом `WORLD_ENGINE_LOCATIONS_ENABLED`); без флага/без id — строковое
+# сравнение (legacy-bridge, откат).
+# Легаси-1D шкала (visible/audible/mentioned/absent) остаётся над этим блоком
+# до Фазы 4, где `can_character_perceive_event` удаляется (§9).
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass, field as dataclass_field
+
+VisualPermeability = Literal["full", "partial", "none"]
+AudioPermeability = Literal["full", "muffled", "none"]
+
+# Обратная совместимость (WPE.md §2, §13.7): ребро без явных значений —
+# стена между комнатами: visual=none, audio=muffled.
+DEFAULT_EDGE_VISUAL = "none"
+DEFAULT_EDGE_AUDIO = "muffled"
+
+# Каноническая "Общая сцена": пустая строка и явное имя — эквиваленты.
+SHARED_SCENE_NAME = "общая сцена"
+
+# Громкие стимулы повышают audio_level: muffled -> full.
+LOUD_STIMULUS_TYPES = frozenset(AUDIBLE_STIMULUS_TYPES)
+
+_VALID_VISUAL = frozenset({"full", "partial", "none"})
+_VALID_AUDIO = frozenset({"full", "muffled", "none"})
+
+
+@dataclass(frozen=True)
+class EdgePermeability:
+    """Проницаемость ребра локаций по каналам (И13)."""
+
+    visual: VisualPermeability = DEFAULT_EDGE_VISUAL
+    audio: AudioPermeability = DEFAULT_EDGE_AUDIO
+
+
+@dataclass(frozen=True)
+class PerceptionWorldState:
+    """Pure snapshot of the world at event time (no DB, no LLM).
+
+    ``adjacency`` — нормализованный индекс ``loc_norm -> {neighbor_norm:
+    EdgePermeability}`` (см. ``build_permeability_index``).
+    ``thread_deliveries`` — id персонажей, которым событие доставлено через
+    тред/канал (источник ``remote_status``, WPE.md §4).
+    """
+
+    adjacency: Mapping[str, Mapping[str, EdgePermeability]] = dataclass_field(
+        default_factory=dict
+    )
+    thread_deliveries: frozenset[int] = dataclass_field(default_factory=frozenset)
+
+
+def _validate_permeability(
+    value: Any, default: str, allowed: frozenset[str]
+) -> str:
+    text = str(value or "").strip().lower()
+    if text not in allowed:
+        return default
+    return text
+
+
+def _parse_adjacency_items(raw: Any) -> list[Any]:
+    """Parse ``locations.adjacent_to`` into a list of items (str or dict)."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if isinstance(data, list):
+            return data
+        return []
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+def _parse_edge_item(item: Any) -> tuple[str, EdgePermeability] | None:
+    """Parse one adjacency item (string name or permeability object)."""
+    if isinstance(item, dict):
+        name = str(item.get("name") or "").strip()
+        if not name:
+            return None
+        edge = EdgePermeability(
+            visual=_validate_permeability(
+                item.get("visual_permeability"), DEFAULT_EDGE_VISUAL, _VALID_VISUAL
+            ),
+            audio=_validate_permeability(
+                item.get("audio_permeability"), DEFAULT_EDGE_AUDIO, _VALID_AUDIO
+            ),
+        )
+        return name, edge
+    name = str(item).strip()
+    if not name:
+        return None
+    return name, EdgePermeability()
+
+
+def parse_adjacency_edges(raw: Any) -> dict[str, EdgePermeability]:
+    """Parse ``locations.adjacent_to`` into normalized-name -> EdgePermeability."""
+    result: dict[str, EdgePermeability] = {}
+    for item in _parse_adjacency_items(raw):
+        parsed = _parse_edge_item(item)
+        if parsed is None:
+            continue
+        name, edge = parsed
+        result[normalize_location(name)] = edge
+    return result
+
+
+def serialize_adjacency_edges(
+    edges: list[str] | list[dict[str, Any]] | None,
+) -> str:
+    """Serialize an adjacency list (names and/or permeability objects) to JSON.
+
+    Чистые имена сериализуются как строки (обратная совместимость); объекты —
+    в формате ``{"name", "visual_permeability", "audio_permeability"}``.
+    Не подключено к read-path (Фаза 0) — используется тестами и будущим CRUD.
+    """
+    if not edges:
+        return "[]"
+    items: list[Any] = []
+    for entry in edges:
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            item: dict[str, Any] = {"name": name}
+            visual = _validate_permeability(
+                entry.get("visual_permeability"), "", _VALID_VISUAL
+            )
+            audio = _validate_permeability(
+                entry.get("audio_permeability"), "", _VALID_AUDIO
+            )
+            if visual:
+                item["visual_permeability"] = visual
+            if audio:
+                item["audio_permeability"] = audio
+            items.append(item)
+        else:
+            name = str(entry).strip()
+            if name:
+                items.append(name)
+    return json.dumps(items, ensure_ascii=False)
+
+
+def build_permeability_index(
+    locations: list[Any],
+) -> dict[str, dict[str, EdgePermeability]]:
+    """Normalized location -> {neighbor_norm: EdgePermeability}, symmetric.
+
+    Читает ``adjacent_to`` (JSON-строка или список строк/объектов) на каждом
+    объекте локации (ORM или dict). Ребро без явных значений проницаемости —
+    ``visual=none, audio=muffled`` (обратная совместимость).
+    """
+    index: dict[str, dict[str, EdgePermeability]] = {}
+    for loc in locations:
+        name = normalize_location(_get_attr(loc, "name"))
+        if not name:
+            continue
+        for neighbor, edge in parse_adjacency_edges(
+            _get_attr(loc, "adjacent_to")
+        ).items():
+            if not neighbor or neighbor == name:
+                continue
+            index.setdefault(name, {})[neighbor] = edge
+            index.setdefault(neighbor, {})[name] = edge
+    return index
+
+
+def is_shared_scene(location_norm: str) -> bool:
+    """Whether a (normalized) location label is the canonical shared scene."""
+    return location_norm == "" or location_norm == SHARED_SCENE_NAME
+
+
+def same_canonical_location(
+    *,
+    event_location: str,
+    observer_location: str,
+    event_location_id: Any = None,
+    observer_location_id: Any = None,
+) -> bool:
+    """Каноническая проверка «одна локация» (WPE 3.0, Фаза 1).
+
+    При включённом `WORLD_ENGINE_LOCATIONS_ENABLED` и наличии `location_id`
+    с обеих сторон идентичность решается **по id**: синонимичные строки
+    («Кухня» / «кухня» / устаревший алиас) → одна локация; разные id →
+    разные локации даже при совпадении строк (id — источник истины).
+    Если id с какой-либо стороны отсутствует (legacy-чат до backfill) —
+    legacy-bridge: сравнение нормализованных строк (`normalize_location`),
+    как в Фазе 0. Откат Фазы 1 — выключить флаг, вернётся только строковое
+    сравнение.
+    """
+    if settings.world_engine_locations_enabled:
+        if event_location_id is not None and observer_location_id is not None:
+            try:
+                return int(event_location_id) == int(observer_location_id)
+            except (TypeError, ValueError):
+                pass
+    return bool(
+        event_location and observer_location and event_location == observer_location
+    )
+
+
+def perceive(
+    *,
+    world_state: PerceptionWorldState,
+    event: Mapping[str, Any],
+    observer: Mapping[str, Any],
+) -> Any:
+    """Двухканальное восприятие события наблюдателем (WPE.md §4, И13).
+
+    Чистая функция: без БД и LLM. Возвращает ``schemas.PerceptionResult``.
+
+    - ``event``: ``location`` (str), ``location_id`` (int, опц., Фаза 1),
+      ``stimuli`` (list | str | None),
+      ``target_character_ids`` (list[int]), ``character_id`` (автор, опц.).
+    - ``observer``: ``location`` (str), ``location_id`` (int, опц., Фаза 1),
+      ``character_id`` (int).
+    - ``world_state``: ``PerceptionWorldState`` (граф проницаемости +
+      доставки тредов).
+
+    Правила:
+    - собственная речь автора / общая сцена / одна локация → full/full;
+      «одна локация» решается канонически: по `location_id` (Фаза 1) при
+      включённом `WORLD_ENGINE_LOCATIONS_ENABLED`, иначе — по строкам
+      (legacy-bridge);
+    - соседство → проницаемость ребра по каналам; громкий стимул повышает
+      ``muffled`` до ``full``;
+    - дальняя локация → none/none (И11 — никогда не додумывается);
+    - ``addressed`` — только из ``target_character_ids`` (И7);
+    - ``remote_status`` — из ``world_state.thread_deliveries``.
+    """
+    from .schemas import PerceptionResult  # локальный импорт против цикла
+
+    event_location = normalize_location(event.get("location"))
+    observer_location = normalize_location(observer.get("location"))
+    observer_id = observer.get("character_id")
+    targets = parse_target_ids(event.get("target_character_ids"))
+    stimuli = parse_stimuli(event.get("stimuli"))
+    author_id = event.get("character_id")
+
+    # Собственная речь всегда полностью известна автору
+    if author_id is not None and observer_id is not None:
+        try:
+            if int(author_id) == int(observer_id):
+                return PerceptionResult(
+                    visual_level="full", audio_level="full"
+                )
+        except (TypeError, ValueError):
+            pass
+
+    if is_shared_scene(event_location) or is_shared_scene(observer_location):
+        visual, audio = "full", "full"
+    elif same_canonical_location(
+        event_location=event_location,
+        observer_location=observer_location,
+        event_location_id=event.get("location_id"),
+        observer_location_id=observer.get("location_id"),
+    ):
+        visual, audio = "full", "full"
+    else:
+        edge = None
+        if observer_location:
+            edge = (world_state.adjacency or {}).get(
+                observer_location, {}
+            ).get(event_location)
+        if edge is None:
+            visual, audio = "none", "none"
+        else:
+            visual = edge.visual
+            audio = edge.audio
+            if (
+                audio == "muffled"
+                and any(s.type in LOUD_STIMULUS_TYPES for s in stimuli)
+            ):
+                audio = "full"
+
+    addressed = observer_id in targets
+    remote_status = (
+        "delivered" if observer_id in world_state.thread_deliveries else "none"
+    )
+    return PerceptionResult(
+        visual_level=visual,  # type: ignore[arg-type]
+        audio_level=audio,  # type: ignore[arg-type]
+        addressed=addressed,
+        remote_status=remote_status,
+    )

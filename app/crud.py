@@ -3,6 +3,7 @@
 import json
 import logging
 import random
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from typing import Literal, Optional, Tuple
 
@@ -1071,6 +1072,121 @@ async def get_adjacency_index(
 
 async def get_location(db: AsyncSession, location_id: int) -> models.Location | None:
     return await db.get(models.Location, location_id)
+
+
+# -------------------- WPE 3.0: резолвер строка -> location_id (Фаза 1) --------------------
+# Резолвер написан в Фазе 0; с Фазы 1 подключён через backfill
+# `characters.location_id` и каноническое сравнение в `perception.perceive()`.
+
+
+def resolve_location_name(
+    locations: list[models.Location], name: str | None
+) -> models.Location | None:
+    """Чистый резолвер: строковая локация → каноническая ``Location``.
+
+    Регистронезависимый матч через ``perception.locations_match`` (тот же
+    normalize, что и у сравнения строк в движке). "Общая сцена" (пустая
+    строка / каноническое имя) → None: у общей сцены нет id.
+    """
+    needle = (name or "").strip()
+    if not needle:
+        return None
+    if perception.is_shared_scene(perception.normalize_location(needle)):
+        return None
+    for loc in locations:
+        if perception.locations_match(loc.name, needle):
+            return loc
+    return None
+
+
+async def resolve_location_string(
+    db: AsyncSession, chat_id: int, name: str | None
+) -> models.Location | None:
+    """Async-обёртка резолвера над списком локаций чата."""
+    locations = await get_chat_locations(db, chat_id)
+    return resolve_location_name(locations, name)
+
+
+@dataclass
+class LocationBackfillReport:
+    """Результат backfill ``characters.location_id`` (WPE 3.0, Фаза 1).
+
+    ``unresolved`` — персонажи, чья строковая локация не резолвится ни в
+    одну локацию чата и не является общей сценой. Такие случаи НЕ
+    проставляются молча: они требуют ручного разбора и попадают в отчёт.
+    """
+
+    total: int = 0
+    resolved: int = 0
+    shared_scene: int = 0
+    unresolved: list[tuple[int, int, str, str]] = dataclass_field(
+        default_factory=list
+    )  # (chat_id, character_id, character_name, location)
+
+    def lines(self) -> list[str]:
+        """Человекочитаемые строки отчёта (для лога / скрипта)."""
+        out = [
+            f"total={self.total} resolved={self.resolved} "
+            f"shared_scene={self.shared_scene} unresolved={len(self.unresolved)}"
+        ]
+        for chat_id, char_id, name, location in self.unresolved:
+            out.append(f"  UNRESOLVED chat={chat_id} char={char_id} ({name!r}): {location!r}")
+        return out
+
+
+async def backfill_character_location_ids(
+    db: AsyncSession, chat_id: int | None = None
+) -> LocationBackfillReport:
+    """Backfill ``characters.location_id`` из строковой ``characters.location``.
+
+    WPE 3.0 (Plans/WPE.md §10, Фаза 1): для каждого персонажа (включая
+    игрока) резолвит ``location`` через ``resolve_location_name``
+    (регистронезависимо) и проставляет ``location_id``. Идемпотентно:
+    повторный запуск обновляет только изменившиеся значения.
+
+    Случаи, которые нельзя резолвить однозначно, не проставляются и
+    фиксируются в отчёте на ручной разбор:
+    - пустая строка / «Общая сцена» → id сбрасывается в None (у общей
+      сцены нет id);
+    - нерезолвленное имя (нет в ``locations`` чата) → остаётся None,
+      заносится в ``report.unresolved``.
+
+    Запуск — ``scripts/backfill_location_ids.py``.
+    """
+    stmt = select(models.Character)
+    if chat_id is not None:
+        stmt = stmt.where(models.Character.chat_id == chat_id)
+    stmt = stmt.order_by(models.Character.chat_id, models.Character.id)
+    characters = list((await db.execute(stmt)).scalars().all())
+
+    locations_by_chat: dict[int, list[models.Location]] = {}
+    report = LocationBackfillReport(total=len(characters))
+
+    for character in characters:
+        raw = (character.location or "").strip()
+        if not raw or perception.is_shared_scene(
+            perception.normalize_location(raw)
+        ):
+            if character.location_id is not None:
+                character.location_id = None
+            report.shared_scene += 1
+            continue
+        locs = locations_by_chat.get(character.chat_id)
+        if locs is None:
+            locs = await get_chat_locations(db, character.chat_id)
+            locations_by_chat[character.chat_id] = locs
+        loc = resolve_location_name(locs, raw)
+        if loc is None:
+            report.unresolved.append(
+                (character.chat_id, character.id, character.name, raw)
+            )
+            continue
+        if character.location_id != loc.id:
+            character.location_id = loc.id
+        report.resolved += 1
+
+    await db.commit()
+    return report
 
 
 async def _sync_chat_locations_cache(db: AsyncSession, chat_id: int) -> None:

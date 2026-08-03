@@ -33,7 +33,8 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `name` | TEXT(255) | |
 | `personality`, `traits`, `speech_style`, `example_messages`, `boundaries`, `background`, `relationships`, `appearance` | TEXT | текстовая карточка персонажа (`appearance` — внешность, п.19–21 Profile) |
 | `avatar_url` | TEXT(512) | относительный URL аватара (`/static/avatars/...`); пусто = placeholder |
-| `location` | TEXT(255) | текущая локация |
+| `location` | TEXT(255) | текущая локация (строковое имя; read-only legacy-bridge до Фазы 8 WPE 3.0) |
+| `location_id` | INTEGER NULL | FK → `locations.id` ON DELETE SET NULL; каноническая локация (WPE 3.0 Фаза 1 — backfill из `location`; NULL = общая сцена / нерезолвлено) |
 | `temperature` | REAL NULL | переопределение температуры |
 | `order_index` | INTEGER | уникален в чате |
 | `is_player` | BOOLEAN | |
@@ -58,6 +59,50 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `timestamp` | DATETIME | |
 
 Индексы: `ix_messages_chat_ts (chat_id, timestamp, id)`, `ix_messages_character_id (character_id)`.
+
+### `world_events`
+Неизменяемый (append-only) журнал world-событий (WPE 3.0, Фаза 0). Заведён, **не пишется** до Фазы 3.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK → `chats.id` ON DELETE CASCADE | |
+| `character_id` | FK → `characters.id` ON DELETE SET NULL | автор; NULL для system/global |
+| `message_id` | FK → `messages.id` ON DELETE SET NULL | привязка к речевому сообщению |
+| `event_type` | TEXT(50) | `speech` / `move` / `system_narrator` / `system` |
+| `location` | TEXT(255) | строковая локация события (legacy-bridge) |
+| `location_from`, `location_to` | TEXT(255) | для `move` |
+| `round_id` | TEXT(64) NULL | |
+| `target_character_ids` | TEXT | JSON-список |
+| `created_at` | DATETIME | |
+
+Индексы: `ix_world_events_chat_ts`, `ix_world_events_character_id`, `ix_world_events_round_id`.
+
+### `threads`
+Тред/канал общения (WPE 3.0, Фаза 0). Заведён, **не пишется** до Фазы 6.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK → `chats.id` ON DELETE CASCADE | |
+| `name` | TEXT(255) | название треда |
+| `channel` | TEXT(20) | `direct` / `magic` / `phone` / `radio` / `messenger` |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_threads_chat_id`.
+
+### `thread_participant_states`
+Состояние участника треда (доставка/прочтение) — источник `remote_status=delivered` (WPE 3.0, Фаза 0).
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `thread_id` | FK → `threads.id` ON DELETE CASCADE | |
+| `character_id` | FK → `characters.id` ON DELETE CASCADE | |
+| `last_delivered_message_id`, `last_read_message_id` | INTEGER NULL | |
+| `joined_at`, `updated_at` | DATETIME | |
+
+UNIQUE `(thread_id, character_id)`. Индекс `ix_thread_participant_character`.
 
 ### `message_presence`
 Witness-присутствие персонажа для сообщения (кто видел/слышал событие).
@@ -199,3 +244,5 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 - **relationships**: для каждого чата с текстом в `characters.relationships` создаёт рёбра к остальным персонажам; для чатов без player-персонажа создаёт его (`order_index=9999`) и рёбра NPC→Player; удаляет legacy-рёбра Player→NPC.
 - **перевод legacy значений**: англ. типы отношений (`friend`→`друг` и т.д.) и категории памяти (`event`→`событие` и т.д.) → русские.
 - **relationship_issues**: `rounds_since_last_mention`.
+- **WPE 3.0 (Фаза 0)**: `characters.location_id` (nullable FK), таблицы `world_events`/`threads`/`thread_participant_states` (+ индексы). Идемпотентно; новые таблицы read-path не читает (откат тривиален).
+- **WPE 3.0 (Фаза 1)**: backfill `characters.location_id` из строковой `location` — `crud.backfill_character_location_ids` (идемпотентно; «Общая сцена» → NULL, нерезолвленное имя → NULL + отчёт на ручной разбор), запуск `scripts/backfill_location_ids.py`. Сам backfill — обычное обновление данных, не изменение схемы.

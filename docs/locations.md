@@ -28,8 +28,13 @@
 - `UniqueConstraint(chat_id, name)` (`uq_location_chat_name`) + индекс `ix_locations_chat_id (chat_id)`.
 - `chats.locations` **не удаляется** — остаётся кэшем названий для движка и
   автоматически синхронизируется при каждой CRUD-операции (§14).
-- `location_id` в `characters` **не вводится**: `characters.location` остаётся
-  строковым именем (perception/сцена/сообщения сравнивают по имени).
+- **WPE 3.0 (`Plans/WPE.md`):** в `characters` введён nullable
+  `location_id` → `locations.id` (`ON DELETE SET NULL`) — каноническая
+  локация персонажа. Резолвер строкового имени → `location_id`:
+  `crud.resolve_location_name(locations, name)` (чистый) и
+  `crud.resolve_location_string(db, chat_id, name)` (async). Каноническая
+  "Общая сцена" (`""` / `"Общая сцена"`) резолвится в `None` — у общей сцены
+  нет id.
 - Сравнение имён локаций идемпотентно через `perception.locations_match`
   (case-insensitive, если `settings.normalize_locations=True`).
 
@@ -38,6 +43,52 @@
 При старте `ensure_schema` создаёт таблицу `locations` и идемпотентно
 заполняет её из существующих `chats.locations` (`INSERT OR IGNORE`,
 `description = ''`). Повторный запуск не дублирует строки.
+
+## Канонические локации (WPE 3.0, Фаза 1)
+
+Каноническая идентичность локации — `locations.id`. Строковые имена
+(`characters.location`) остаются read-only legacy-bridge до Фазы 8; read-path
+сравнивает `location_id`.
+
+### Backfill `characters.location_id`
+
+`crud.backfill_character_location_ids(db, chat_id=None)` проставляет
+`location_id` каждому персонажу (включая игрока) из его строковой `location`
+через `crud.resolve_location_name` (регистронезависимо). Идемпотентен.
+
+Неоднозначные случаи **не проставляются молча** и попадают в отчёт
+`LocationBackfillReport` (`resolved` / `shared_scene` / `unresolved`) на
+ручной разбор:
+- пустая строка / «Общая сцена» → `None` (у общей сцены нет id);
+- имя отсутствует в таблице `locations` чата → `None`, строка фиксируется в
+  `report.unresolved` (chat_id, character_id, имя, локация).
+
+Запуск:
+
+```
+python scripts/backfill_location_ids.py [--chat-id CHAT_ID]
+```
+
+Скрипт печатает отчёт; при наличии неоднозначных случаев завершается с
+`exit 1`, чтобы не пропустить ручной разбор.
+
+### Сравнение по `location_id`
+
+`perception.perceive()` (двухканальный, WPE 3.0) решает «одна локация»
+канонически: `perception.same_canonical_location(...)`.
+
+- Флаг `WORLD_ENGINE_LOCATIONS_ENABLED` (по умолчанию **выключен**):
+  - включён и `location_id` есть с обеих сторон → идентичность по id
+    (синонимичные строки → одна локация; разные id → разные даже при
+    совпадении строк — id источник истины);
+  - иначе → строковое сравнение (`normalize_location`, legacy-bridge).
+- Старый строковый код (`locations_match`, `get_perception_level`,
+  `can_character_perceive_event`, `build_adjacency_index`) помечен
+  legacy-bridge и работает до cutover'а Фазы 4.
+- **Откат Фазы 1** — выключить флаг: сравнение возвращается к строкам.
+
+Golden #1 «синонимичная локация → одинаковый present» покрыт
+`tests/test_world_engine_phase1.py` (11 тестов).
 
 ## CRUD API
 
@@ -295,6 +346,35 @@ OWN_MESSAGE / GLOBAL / PUBLIC / private / targeted / REMOTE_CHANNELS
 - Опциональный эвристический fallback (общий первый топоним, напр.
   «Квартира Ольги» / «Квартира Бориса») включается флагом
   `ADJACENCY_FALLBACK_ENABLED` (по умолчанию `False`).
+
+### Проницаемость рёбер по каналам (WPE 3.0, Фаза 0, И13)
+
+Формат `adjacent_to` расширен: элемент может быть строкой (имя) **или**
+объектом с проницаемостью по каналам восприятия:
+
+```json
+{ "name": "Кухня", "adjacent_to": [
+    "Гостиная",
+    {"name": "Терраса", "visual_permeability": "full", "audio_permeability": "none"}
+] }
+```
+
+- `visual_permeability`: `full | partial | none`; `audio_permeability`:
+  `full | muffled | none`.
+- Ребро без явных значений по умолчанию `visual=none, audio=muffled`
+  (стена: не видно, приглушённо слышно — обратная совместимость с
+  текущим «audible из соседней комнаты»).
+- Новые хелперы `app/perception.py` (Фаза 0, не подключены к read-path):
+  `parse_adjacency_edges`, `serialize_adjacency_edges`,
+  `build_permeability_index` (симметричный индекс
+  `{локация: {сосед: EdgePermeability}}`).
+- Двухканальная чистая функция восприятия `perception.perceive(...)` →
+  `schemas.PerceptionResult` (`visual_level`, `audio_level`, `addressed`,
+  `remote_status`) — источник уровней для Фаз 4/6; громкий стимул
+  (`loud_sound`/`call`/`shout`/`knock`) повышает `audio_level` с `muffled`
+  до `full`.
+- Легаси-1D уровень (`get_perception_level` / `build_adjacency_index`)
+  читает объекты как имена — поведение старых чатов не меняется.
 
 ### Стимулы
 

@@ -204,6 +204,8 @@ def ensure_schema(db_engine) -> None:
             ("avatar_crop", "TEXT NOT NULL DEFAULT ''"),
             ("temperature", "REAL"),
             ("location", "TEXT NOT NULL DEFAULT ''"),
+            # WPE 3.0 (Фаза 0): каноническая локация, nullable до backfill (Фаза 1)
+            ("location_id", "INTEGER REFERENCES locations(id) ON DELETE SET NULL"),
         ]
         for column_name, column_type in new_character_columns:
             if column_name not in character_columns:
@@ -397,6 +399,91 @@ def ensure_schema(db_engine) -> None:
             logger.info(
                 "Backfilled %d locations from chats.locations", backfilled_locations
             )
+
+        # ----- WPE 3.0 (Фаза 0): WorldEvent / Thread / ThreadParticipantState -----
+        # Заведены, НЕ пишутся до Фаз 3/6 (Plans/WPE.md §10). Откат тривиален:
+        # новые таблицы не читаются ни одним read-path.
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS world_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    character_id INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+                    message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                    event_type TEXT NOT NULL,
+                    location TEXT NOT NULL DEFAULT '',
+                    location_from TEXT NOT NULL DEFAULT '',
+                    location_to TEXT NOT NULL DEFAULT '',
+                    round_id TEXT,
+                    target_character_ids TEXT NOT NULL DEFAULT '[]',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_world_events_chat_ts "
+                "ON world_events (chat_id, created_at, id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_world_events_character_id "
+                "ON world_events (character_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_world_events_round_id "
+                "ON world_events (round_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL DEFAULT '',
+                    channel TEXT NOT NULL DEFAULT 'messenger',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_threads_chat_id "
+                "ON threads (chat_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS thread_participant_states (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+                    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    last_delivered_message_id INTEGER,
+                    last_read_message_id INTEGER,
+                    joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_thread_participant UNIQUE (thread_id, character_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_thread_participant_character "
+                "ON thread_participant_states (character_id)"
+            )
+        )
 
         # ----- Relationship tables -----
         conn.execute(
