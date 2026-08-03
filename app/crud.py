@@ -970,6 +970,32 @@ async def get_presence_map(
     return {row.message_id: row.presence for row in rows}
 
 
+def _build_perception_world_state(
+    locations: list,
+) -> perception.PerceptionWorldState | None:
+    """Build the pure world snapshot for the two-channel cutover (Фаза 4)."""
+    return perception.PerceptionWorldState(
+        adjacency=perception.build_permeability_index(locations or [])
+    )
+
+
+async def _chat_world_state_for_characters(
+    db: AsyncSession, characters: list
+) -> perception.PerceptionWorldState | None:
+    """World snapshot from the chat of ``characters`` (None if flag off / no chat)."""
+    if not settings.world_engine_perception_enabled:
+        return None
+    chat_id = None
+    for character in characters:
+        chat_id = getattr(character, "chat_id", None)
+        if chat_id is not None:
+            break
+    if chat_id is None:
+        return None
+    locations = await get_chat_locations(db, chat_id)
+    return _build_perception_world_state(locations)
+
+
 async def compute_and_save_presence_for_message(
     db: AsyncSession,
     message,
@@ -979,6 +1005,11 @@ async def compute_and_save_presence_for_message(
     """Compute and persist presence for one event for all characters.
 
     Returns {character_id: presence} for the given message.
+
+    Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
+    presence пишется через двухканальный ``perceive()`` (Renderer
+    ``witness_model.perceive_presence_for_character``), а не через legacy
+    ``can_character_perceive_event``. Откат — выключить флаг.
     """
     names = character_names or {c.id: c.name for c in characters}
     locations = {c.id: getattr(c, "location", "") or "" for c in characters}
@@ -986,16 +1017,23 @@ async def compute_and_save_presence_for_message(
     if message_id is None:
         return {}
 
+    world_state = await _chat_world_state_for_characters(db, characters)
+
     records: list[schemas.MessagePresenceCreate] = []
     result: dict[int, str] = {}
     for character in characters:
-        presence = witness_model.compute_mvp_presence(
-            message,
-            character.id,
-            names,
-            viewer_location=locations.get(character.id, ""),
-            character_locations=locations,
-        )
+        if world_state is not None:
+            presence = witness_model.perceive_presence_for_character(
+                message, character, world_state
+            )
+        else:
+            presence = witness_model.compute_mvp_presence(
+                message,
+                character.id,
+                names,
+                viewer_location=locations.get(character.id, ""),
+                character_locations=locations,
+            )
         result[character.id] = presence
         records.append(
             schemas.MessagePresenceCreate(
@@ -1017,7 +1055,11 @@ async def compute_and_save_presence_for_round(
     characters: list | None = None,
     character_locations: dict[int, str] | None = None,
 ) -> None:
-    """Persist perception-based presence for all messages in a completed round."""
+    """Persist perception-based presence for all messages in a completed round.
+
+    Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
+    presence пишется через ``perceive()`` (см. Фаза 4 / Golden #14).
+    """
     if characters is None:
         characters = []
         for cid in character_ids:
@@ -1031,19 +1073,31 @@ async def compute_and_save_presence_for_round(
     if not locations and character_ids:
         locations = {cid: "" for cid in character_ids}
 
+    world_state = await _chat_world_state_for_characters(db, characters)
+
     records: list[schemas.MessagePresenceCreate] = []
     for message in round_messages:
         message_id = getattr(message, "id", None)
         if message_id is None:
             continue
         for character_id in character_ids:
-            presence = witness_model.compute_mvp_presence(
-                message,
-                character_id,
-                character_names,
-                viewer_location=locations.get(character_id, ""),
-                character_locations=locations,
-            )
+            if world_state is not None:
+                character = next(
+                    (c for c in characters if c.id == character_id), None
+                )
+                if character is None:
+                    continue
+                presence = witness_model.perceive_presence_for_character(
+                    message, character, world_state
+                )
+            else:
+                presence = witness_model.compute_mvp_presence(
+                    message,
+                    character_id,
+                    character_names,
+                    viewer_location=locations.get(character_id, ""),
+                    character_locations=locations,
+                )
             records.append(
                 schemas.MessagePresenceCreate(
                     message_id=message_id,

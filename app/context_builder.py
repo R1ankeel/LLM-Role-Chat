@@ -43,7 +43,13 @@ from .role_isolation import (
     build_generation_cue_for_chat,
 )
 from .token_counter import get_token_counter
-from .witness_model import Presence, format_line_for_presence, resolve_presence
+from .witness_model import (
+    Presence,
+    build_character_recency_tail,
+    format_line_for_presence,
+    resolve_presence,
+)
+from .perception import parse_target_ids
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +153,23 @@ class ContextBuilder:
                     "line": line,
                     "presence": presence,
                     "char_id": getattr(message, "character_id", None),
+                    "addressed": char_id
+                    in parse_target_ids(
+                        getattr(message, "target_character_ids", None)
+                    ),
                 }
+            )
+
+        # Recency Tail (WPE.md §6, Ул.3, И15): P0-события этого персонажа в
+        # этом раунде. Добавляется после финальной сборки и исключается из
+        # усечения бюджетом (резерв `context_reserve_tokens`).
+        recency_tail_text = ""
+        if settings.world_engine_recency_tail_enabled:
+            recency_tail_text = build_character_recency_tail(
+                round_messages,
+                char_id,
+                character_names,
+                player_id=None,
             )
 
         # ---- 2. summary frontier split --------------------------------
@@ -218,7 +240,12 @@ class ContextBuilder:
             location_descriptions=location_descriptions,
         )
         instructions_text = self._build_instructions_text(
-            character, scene_state, stagnation_rounds, prior_replies, is_isolated
+            character,
+            scene_state,
+            stagnation_rounds,
+            prior_replies,
+            is_isolated,
+            recency_tail=recency_tail_text,
         )
         system_tokens = counter.count(system_block)
         scene_tokens = counter.count(scene_block)
@@ -367,6 +394,7 @@ class ContextBuilder:
             scene_text=scene_block,
             summary_text=summary_text or None,
             memories=mem_list,
+            recency_tail_text=recency_tail_text,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,
@@ -397,6 +425,7 @@ class ContextBuilder:
             line = line_info["line"]
             cid = line_info.get("char_id")
             is_self = cid is not None and int(cid) == viewer_id
+            addressed = bool(line_info.get("addressed"))
             if (
                 not is_self
                 and max_replies_per_character > 0
@@ -410,12 +439,14 @@ class ContextBuilder:
 
             est = counter.count(line)
             # The newest message is always included (P0); afterwards strict.
-            if first or total + est <= budget_tokens:
+            # Explicit addressing (WPE.md §2/§6) is also P0: addressed events
+            # always survive the soft budget.
+            if first or total + est <= budget_tokens or addressed:
                 selected.append(line_info)
                 total += est
                 first = False
             else:
-                break
+                continue
         selected.reverse()
         return selected, total
 
@@ -495,6 +526,7 @@ class ContextBuilder:
         stagnation_rounds: int,
         prior_replies: list[tuple[str, str]],
         is_isolated: bool,
+        recency_tail: str = "",
     ) -> str:
         parts: list[str] = []
         if settings.enable_anti_mimicry and prior_replies:
@@ -519,6 +551,11 @@ class ContextBuilder:
         if feedback:
             parts.append(feedback)
         parts.append(build_negative_prompting_block())
+        # Recency Tail (И15): P0-события этого персонажа — самый конец
+        # user-сообщения, непосредственно перед generation cue. Часть
+        # фиксированных инструкций: не усекается бюджетом.
+        if recency_tail:
+            parts.append(recency_tail)
         if settings.use_chat_api:
             parts.append(build_generation_cue_for_chat(character.name))
         else:
@@ -594,7 +631,19 @@ class ContextBuilder:
         dropped: list[schemas.DroppedItem],
     ) -> int:
         while overrun > 0 and len(selected) > 1:
-            oldest = selected.pop(0)
+            # P0 (explicitly addressed) lines are never dropped: they are
+            # exempt from budget truncation (WPE.md §2/§6).
+            drop_idx = next(
+                (
+                    i
+                    for i, l in enumerate(selected)
+                    if not l.get("addressed")
+                ),
+                None,
+            )
+            if drop_idx is None:
+                break
+            oldest = selected.pop(drop_idx)
             est = counter.count(oldest["line"])
             overrun -= est
             dropped.append(

@@ -813,6 +813,7 @@ class BuiltContext(BaseModel):
     scene_text: str = ""
     summary_text: Optional[str] = None
     memories: list = Field(default_factory=list)
+    recency_tail_text: str = ""
     total_tokens: int = 0
     token_count_mode: str = "estimated"
     component_tokens: dict[str, int] = Field(default_factory=dict)

@@ -945,6 +945,7 @@ def _build_generation_messages(
     open_issues_block: str = "",
     epistemic_mask_block: str = "",
     directive_block: str = "",
+    recency_tail_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -965,6 +966,7 @@ def _build_generation_messages(
         open_issues_block,
         epistemic_mask_block,
         directive_block,
+        recency_tail_block,
         generation_cue,
         build_negative_prompting_block(),
     )
@@ -1033,10 +1035,19 @@ async def _generate_once(
     proactive_boost: float = 0.0,
     epistemic_mask_block: str = "",
     directive: str | None = None,
+    recency_tail_block: str = "",
 ) -> tuple[str, str, bool, int, list[str]]:
     """One LLM call + isolation sanitize. Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list)."""
     api_mode = "chat" if settings.use_chat_api else "generate"
     thinking = _resolve_thinking(enable_thinking)
+    if settings.world_engine_recency_tail_enabled and not recency_tail_block:
+        recency_tail_block = (
+            built_context.recency_tail_text
+            if built_context is not None
+            else ""
+        )
+    if not settings.world_engine_recency_tail_enabled:
+        recency_tail_block = ""
     system_prompt = build_system_prompt(
         character, general_prompt, strict=strict_isolation,
         relationships_block=relationships_block,
@@ -1151,6 +1162,7 @@ async def _generate_once(
             open_issues_block=open_issues_block,
             epistemic_mask_block=epistemic_mask_block,
             directive_block=directive_block,
+            recency_tail_block=recency_tail_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -1190,6 +1202,8 @@ async def _generate_once(
             context_parts.append(epistemic_mask_block)
         if directive_block:
             context_parts.append(directive_block)
+        if recency_tail_block:
+            context_parts.append(recency_tail_block)
         context_parts.append(generation_cue)
         full_prompt = "\n\n".join(context_parts)
         prompt_len = len(full_prompt)
@@ -1514,6 +1528,7 @@ async def generate(
     proactive_boost: float = 0.0,
     epistemic_mask_block: str = "",
     directive: str | None = None,
+    recency_tail_block: str = "",
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1601,6 +1616,7 @@ async def generate(
             proactive_boost=proactive_boost,
             epistemic_mask_block=epistemic_mask_block,
             directive=directive,
+            recency_tail_block=recency_tail_block,
         )
 
         if not isolation_ok:

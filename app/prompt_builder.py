@@ -331,6 +331,28 @@ def build_take_actions_instruction() -> str:
     )
 
 
+def build_system_intervention_block(lines: list[str] | None) -> str:
+    """Recency Tail (WPE.md §6, Ул.3, И15): render P0-события одного персонажа.
+
+    Рендерит события с `addressed=true`/`remote_status=delivered` (и срочные
+    стимулы-вызовы) в единый блок ``[СИСТЕМНОЕ ВМЕШАТЕЛЬСТВО: ...]``. Блок
+    размещается в **самый конец** пользовательского сообщения, непосредственно
+    перед generation cue (никогда — в system/developer-роль). Пересобирается
+    **для каждого персонажа отдельно**: в хвост конкретного NPC попадают только
+    его собственные P0-события.
+
+    ``lines`` — уже отрендеренные строки вмешательства для этого NPC
+    (см. ``witness_model.build_character_recency_tail``). Пустой список → пустой
+    блок (обратная совместимость).
+    """
+    if not lines:
+        return ""
+    rendered = [str(line).strip() for line in lines if str(line).strip()]
+    if not rendered:
+        return ""
+    return "[СИСТЕМНОЕ ВМЕШАТЕЛЬСТВО: " + " / ".join(rendered) + "]"
+
+
 def build_system_prompt(
     character: Any,
     general_prompt: str,

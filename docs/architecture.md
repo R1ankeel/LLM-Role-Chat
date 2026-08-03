@@ -171,6 +171,30 @@
 - Системный промпт получает инструкцию `build_take_actions_instruction` (по
   гейту флага) — текст реплики и действия в одном ответе.
 
+### 4.2. WPE 3.0 Фаза 4: Cutover на `perceive()` + Recency Tail
+
+При включённом `WORLD_ENGINE_PERCEPTION_ENABLED` presence в
+`crud.compute_and_save_presence_for_message`/`compute_and_save_presence_for_round`
+и в `witness_model.compute_mvp_presence` (когда передан `world_state`) решается
+двухканальным `perceive()` (по `location_id` Фазы 1 / строкам legacy-bridge),
+а результат схлопывается в legacy-лестницу через Renderer
+`witness_model.perceive_to_presence`. Тот же `PerceptionResult` даёт гейт
+адмиссибилити отношений через адаптер `chat_engine.evidence_mode_from_perception`
+(Golden #14 — единый результат для генерации и отношений).
+
+При включённом `WORLD_ENGINE_RECENCY_TAIL_ENABLED` P0-события этого персонажа
+(адресация `target_character_ids` + будущие `remote_status=delivered`)
+рендерятся `witness_model.build_character_recency_tail` → блок
+`[СИСТЕМНОЕ ВМЕШАТЕЛЬСТВО: ...]` (`build_system_intervention_block`) в **самый
+конец** user-сообщения, непосредственно перед generation cue — в обоих путях
+(chat: `_build_generation_messages`; generate: `context_parts`), пересобирается
+для каждого персонажа отдельно. В `context_builder` блок — часть фиксированных
+инструкций, не усекается бюджетом (резерв `context_reserve_tokens`), и
+дублируется в `BuiltContext.recency_tail_text`.
+
+Откат обеих фаз — выключение флагов (legacy `can_character_perceive_event`
+сохранён как fallback).
+
 ### 5. Пост-раунд (в том же запросе)
 
 1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций.

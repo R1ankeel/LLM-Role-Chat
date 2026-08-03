@@ -110,12 +110,19 @@ UNIQUE `(thread_id, character_id)`. Индекс `ix_thread_participant_characte
 ### `message_presence`
 Witness-присутствие персонажа для сообщения (кто видел/слышал событие).
 
+С Фазы 4 (WPE 3.0) при `WORLD_ENGINE_PERCEPTION_ENABLED` значения пишутся
+через двухканальный `perceive()` и Renderer (`witness_model.perceive_to_presence`):
+`present` (полный визуальный контакт), `mentioned` (крик/атрибуция по голосу),
+`audible` (шум из-за стены/соседняя локация), `absent` (И11 — дальняя
+локация не додумывается), `told`. Откат — выключить флаг (legacy
+`can_character_perceive_event`).
+
 | колонка | тип | примечание |
 |---|---|---|
 | `id` | INTEGER PK | |
 | `message_id` | FK → `messages.id` ON DELETE CASCADE | |
 | `character_id` | FK → `characters.id` ON DELETE CASCADE | |
-| `presence` | TEXT(20) | `present` / `mentioned` / `absent` / `told` |
+| `presence` | TEXT(20) | `present` / `mentioned` / `audible` / `absent` / `told` |
 
 UNIQUE `(message_id, character_id)`. Индекс `ix_presence_character_message`.
 

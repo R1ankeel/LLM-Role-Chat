@@ -1,6 +1,18 @@
 # World & Perception Engine 3.0 — план внедрения (v3)
 
-> Дата: 2026-08-03 · Статус: **Фаза 3 реализована (08-04); ожидает ревью перед Фазой 4**.
+> Дата: 2026-08-03 · Статус: **Фаза 4 реализована (08-04); ожидает ревью перед Фазой 5**.
+> Статус фазы 4 (Cutover): `perceive()` подключён к production-путям под
+> флагом `WORLD_ENGINE_PERCEPTION_ENABLED` — presence в
+> `crud.compute_and_save_presence_for_message`/`_for_round` и
+> `witness_model.compute_mvp_presence` пишутся через двухканальный движок,
+> схлопывание в legacy-лестницу — Renderer `perceive_to_presence` (Golden #14
+> идентичности, гейт адмиссибилити `evidence_mode_from_perception`);
+> Recency Tail (И15, флаг `WORLD_ENGINE_RECENCY_TAIL_ENABLED`) —
+> `build_system_intervention_block`/`build_character_recency_tail` в самый
+> конец user-сообщения перед generation cue в chat- и generate-путях,
+> `BuiltContext.recency_tail_text` исключён из усечения бюджетом; явная
+> адресация — P0-приоритет в `context_builder` (Golden #2). Откат — выключить
+> оба флага; legacy `can_character_perceive_event` сохранён как fallback.
 > Статус фазы 3: `WorldEvent` dual-write атомарно с `Message`
 > (`crud.create_message`, флаг `WORLD_ENGINE_EVENTS_ENABLED`), двухканальный
 > `perceive()` в shadow (`app/wpe_shadow.py`): расхождения со старым
@@ -520,15 +532,20 @@ Tool-схема (OpenAI-совместимая, используется и в O
   `unexplained == 0`). Регрессий нет (704 passed; 28 pre-existing падений вне
   scope, набор идентичен Фазе 2).
 
-**Фаза 4 — Cutover: Perception Engine + Recency Tail** [Ул.2, Ул.3]
-- `witness_model`/`context_builder` переходят на `PerceptionResult` через
-  Renderer; старый `perception.can_character_perceive_event` удаляется.
-- `_evidence_mode` — чистый адаптер; `memory_service` фильтрует через
-  `perceive()`. Golden #14 идентичности.
-- Явная адресация (из tools, Фаза 2) — P0-приоритет в `context_builder`.
-- **Recency Tail (И15):** `build_system_intervention_block` в хвост промпта
-  (chat и generate пути), защита от вытеснения бюджетом в `context_builder`.
-  Флаг отдельный: `WORLD_ENGINE_RECENCY_TAIL_ENABLED` (раздельный canary).
+**✅ Фаза 4 — Cutover: Perception Engine + Recency Tail** [Ул.2, Ул.3] *(реализована 08-04)*
+- `witness_model`/`crud.compute_and_save_presence_*` переходят на
+  `PerceptionResult` через Renderer (`perceive_to_presence` / `perceive_presence_for_character`);
+  legacy `perception.can_character_perceive_event` **сохранён** как fallback
+  (откат по флагу), удаляется отдельным PR после стабильности.
+- `_evidence_mode` — чистый адаптер (`evidence_mode_from_perception`, тот же
+  гейт адмиссибилити). Golden #14 идентичности.
+- Явная адресация (из tools, Фаза 2) — P0-приоритет в `context_builder`
+  (addressed-строки не вытесняются бюджетом). Golden #2 (часть Фазы 4).
+- **Recency Tail (И15):** `build_system_intervention_block` +
+  `witness_model.build_character_recency_tail` в хвост промпта (chat и generate
+  пути), защита от вытеснения бюджетом в `context_builder` (блок — часть
+  фиксированных инструкций, не усекается). Флаг отдельный:
+  `WORLD_ENGINE_RECENCY_TAIL_ENABLED` (раздельный canary).
 - Флаги: `WORLD_ENGINE_PERCEPTION_ENABLED` (canary → глобально).
 - Критерий выхода: полный golden-набор §11 (актуальной версии) проходит;
   eval без регресса.

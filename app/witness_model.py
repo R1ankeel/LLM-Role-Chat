@@ -10,11 +10,15 @@ from typing import Any, Literal
 
 from .config import settings
 from .perception import (
+    PerceptionWorldState,
     can_character_perceive_event,
     event_from_message,
     log_perception_decision,
     normalize_visibility,
+    parse_target_ids,
+    perceive,
 )
+from .prompt_builder import build_system_intervention_block
 from .stimuli import build_audible_line, parse_stimuli, stimulus_targets
 
 Presence = Literal["present", "mentioned", "audible", "absent", "told"]
@@ -76,12 +80,19 @@ def compute_mvp_presence(
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
     adjacency_index: dict[str, set[str]] | None = None,
+    world_state: PerceptionWorldState | None = None,
 ) -> Presence:
     """Compute witness presence for one message and one viewer.
 
     Location/visibility-aware. ``same_round_ids`` is ignored for forcing
     visibility (kept only for API compatibility). ``adjacency_index`` enables
     AUDIBLE / MENTIONED presence for events from adjacent locations.
+
+    Cutover (WPE 3.0 Фаза 4): при ``settings.world_engine_perception_enabled``
+    и переданном ``world_state`` решение принимает двухканальный
+    ``perceive()``, а результат схлопывается в legacy-лестницу через
+    ``perceive_to_presence`` (Renderer). Без ``world_state`` (legacy hot-path)
+    решение остаётся на ``can_character_perceive_event`` — откат по флагу.
     """
     del same_round_ids  # no longer forces present — perception decides
 
@@ -95,6 +106,18 @@ def compute_mvp_presence(
     # Legacy messages without visibility metadata still work via defaults
     if not _get_attr(message, "visibility"):
         event["visibility"] = normalize_visibility(None)
+
+    if settings.world_engine_perception_enabled and world_state is not None:
+        result = perceive(
+            world_state=world_state,
+            event=event,
+            observer={
+                "character_id": viewer_character_id,
+                "location": viewer_location or "",
+                "location_id": None,
+            },
+        )
+        return perceive_to_presence(result)
 
     presence, reason = can_character_perceive_event(
         viewer_character_id=viewer_character_id,
@@ -115,6 +138,137 @@ def compute_mvp_presence(
         reason=reason,
     )
     return presence
+
+
+def perceive_to_presence(result: Any, *, voice_known: bool = True) -> Presence:
+    """Renderer (WPE.md §4): collapse a ``PerceptionResult`` to the legacy
+    witness ``Presence`` ladder that drives the presence table and history.
+
+    - visual full (стекло: действия видны, текст не слышен) → "present";
+    - audio full + addressed/знакомый голос → "mentioned" (атрибуция крика);
+    - audio full + незнакомый голос → "audible";
+    - audio muffled → "audible" (шум, без семантики);
+    - иначе → "absent".
+    """
+    visual = _get_attr(result, "visual_level", "none")
+    audio = _get_attr(result, "audio_level", "none")
+    addressed = bool(_get_attr(result, "addressed", False))
+    if visual == "full":
+        return "present"
+    if audio == "full":
+        if addressed or voice_known:
+            return "mentioned"
+        return "audible"
+    if audio == "muffled":
+        return "audible"
+    return "absent"
+
+
+def perceive_presence_for_character(
+    message: Any,
+    character: Any,
+    world_state: PerceptionWorldState,
+) -> Presence:
+    """Two-channel presence for one ORM character (cutover path).
+
+    Uses ``perceive()`` with the character's ``location``/``location_id``
+    (Фаза 1 backfill) and collapses the result to the legacy ladder. No DB/LLM.
+    """
+    event = event_from_message(message)
+    if not _get_attr(message, "visibility"):
+        event["visibility"] = normalize_visibility(None)
+    result = perceive(
+        world_state=world_state,
+        event=event,
+        observer={
+            "character_id": character.id,
+            "location": getattr(character, "location", "") or "",
+            "location_id": getattr(character, "location_id", None),
+        },
+    )
+    return perceive_to_presence(result)
+
+
+def render_perception_line(
+    message: Any,
+    result: Any,
+    character_names: dict[int, str] | None = None,
+    viewer_name: str | None = None,
+    *,
+    voice_known: bool = True,
+) -> str | None:
+    """Renderer (WPE.md §6): канало-зависимый текст строки из ``PerceptionResult``.
+
+    Используется вместо ``format_line_for_presence``, когда есть двухканальный
+    результат. ``None`` — полностью невоспринимаемое событие (шум, И11).
+
+    - full/full → обычная строка «Автор: текст»;
+    - full/none (стекло) → действия видны, слов не слышно;
+    - none/muffled → audible-шум (semantics нет);
+    - none/full (крик/голос из соседней локации) → атрибуция по голосу:
+      знакомый — «голос <имя>», незнакомый — «чей-то голос».
+    """
+    visual = _get_attr(result, "visual_level", "none")
+    audio = _get_attr(result, "audio_level", "none")
+    content = _get_attr(message, "content") or ""
+    role = _get_attr(message, "role")
+
+    if visual == "none" and audio == "none":
+        return None
+
+    if visual == "full" and audio == "full":
+        if role == "user":
+            return f"Игрок: {content}"
+        if role == "system":
+            return f"Система: {content}"
+        if role == "character":
+            return f"{_character_name(message, character_names)}: {content}"
+        return content
+
+    if visual == "full":
+        return "[Что-то происходит за стеклом: слов не слышно]"
+
+    snippet = _truncate_snippet(content)
+    if audio == "muffled":
+        template = _WITNESS_TEMPLATES.get(
+            "audible", "[Ты слышишь: {snippet}]"
+        )
+        return template.format(snippet=build_audible_line(message))
+
+    if voice_known:
+        author = _character_name(message, character_names)
+        return f"[Ты слышишь голос {author}: {snippet}]"
+    return f"[Чей-то голос: {snippet}]"
+
+
+def build_character_recency_tail(
+    messages: list,
+    viewer_character_id: int,
+    character_names: dict[int, str],
+    *,
+    player_id: int | None = None,
+) -> str:
+    """Recency Tail (WPE.md §6, Ул.3, И15): P0-события одного персонажа.
+
+    Собирает события, адресованные данному зрителю (addressed=true /
+    remote_status=delivered), включая срочные вызовы из стимулов, и рендерит
+    их блоком ``build_system_intervention_block``. Пересобирается отдельно для
+    каждого персонажа: в хвост конкретного NPC попадают только его события.
+    """
+    lines: list[str] = []
+    for message in messages:
+        targets = parse_target_ids(_get_attr(message, "target_character_ids"))
+        if viewer_character_id not in targets:
+            continue
+        author_id = _get_attr(message, "character_id")
+        if author_id is not None and author_id == player_id:
+            author = "Игрок"
+        elif author_id is not None:
+            author = character_names.get(author_id, "Персонаж")
+        else:
+            author = "Игрок"
+        lines.append(f"{author} обращается к тебе прямо сейчас. Отреагируй!")
+    return build_system_intervention_block(lines)
 
 
 def resolve_presence(

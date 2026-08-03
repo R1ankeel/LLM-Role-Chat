@@ -259,13 +259,22 @@ tools/format в генерации: действия извлекаются в `
 **не применяются**; откат — выключение флага (генерация текст-only).
 Каждая фаза включает свой флаг отдельным canary'ем.
 
+Фаза 3 (dual-write + shadow) и Фаза 4 (Cutover + Recency Tail) реализованы
+08-04; их флаги по-прежнему **`false`**. Включение `WORLD_ENGINE_PERCEPTION_ENABLED`
+переводит presence (таблица `MessagePresence` + witness-фильтрация) на
+двухканальный `perceive()` с Renderer (`witness_model.perceive_to_presence`);
+включение `WORLD_ENGINE_RECENCY_TAIL_ENABLED` добавляет блок
+`[СИСТЕМНОЕ ВМЕШАТЕЛЬСТВО: ...]` (P0-события: адресация) в самый конец
+user-сообщения перед generation cue, защищённый от усечения бюджетом.
+Флаги независимы (раздельные canary'и); откат — выключить оба.
+
 | ключ | дефолт | описание (фаза) |
 |---|---|---|
 | `WORLD_ENGINE_LOCATIONS_ENABLED` | `false` | канонические локации, сравнение по `location_id` (Фаза 1, реализована) |
 | `WORLD_ENGINE_TOOLS_ENABLED` | `false` | tool-calling `take_actions` в shadow: извлечение, логирование, не применяются (Фаза 2, реализована) |
 | `WORLD_ENGINE_EVENTS_ENABLED` | `false` | `WorldEvent` dual-write атомарно с `Message` + shadow `perceive()` 2 канала, классификация расхождений (Фаза 3, реализована) |
-| `WORLD_ENGINE_PERCEPTION_ENABLED` | `false` | cutover на `PerceptionResult`/Renderer (Фаза 4, Ул.2) |
-| `WORLD_ENGINE_RECENCY_TAIL_ENABLED` | `false` | Recency Tail в хвост промпта (Фаза 4, Ул.3) |
+| `WORLD_ENGINE_PERCEPTION_ENABLED` | `false` | cutover на `PerceptionResult`/Renderer: presence пишется через `perceive()` (Фаза 4, реализована) |
+| `WORLD_ENGINE_RECENCY_TAIL_ENABLED` | `false` | Recency Tail в хвост промпта, P0-адресация (Фаза 4, реализована) |
 | `WORLD_ENGINE_ACTIONS_ENABLED` | `false` | применение действий + System Narrator (Фаза 5, Ул.1) |
 | `WORLD_ENGINE_THREADS_ENABLED` | `false` | Thread/ThreadParticipantState в проде (Фаза 6) |
 | `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` | `false` | частичное восприятие по каналам (Фаза 6, Ул.2) |

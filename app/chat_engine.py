@@ -30,6 +30,7 @@ from .role_isolation import get_other_character_names
 from .stimuli import extract_stimuli
 from .movement import detect_character_movement
 from .witness_model import Presence, resolve_presence
+from . import witness_model
 
 logger = logging.getLogger(__name__)
 
@@ -727,6 +728,16 @@ async def process_user_message_streaming(
                 built_context=built_context,
                 epistemic_mask_block=epistemic_mask_block,
                 directive=directive,
+                recency_tail_block=(
+                    built_context.recency_tail_text
+                    if built_context is not None
+                    else witness_model.build_character_recency_tail(
+                        round_messages,
+                        current_character.id,
+                        character_names,
+                        player_id=player_id,
+                    )
+                ),
             ):
                 if event["type"] == "token":
                     # Forward token to SSE with character_id for frontend avatar
@@ -1696,6 +1707,35 @@ def _evidence_mode(pair_ctx: dict) -> str:
     return "none"
 
 
+def evidence_mode_from_perception(result) -> str:
+    """Perception adapter (WPE.md §4, Golden #14): `PerceptionResult` → evidence.
+
+    Identity rule: the mode derived from the two-channel perception result is
+    the same evidence gate the relationship layer applies via ``_evidence_mode``
+    on pair context. ``perceive()`` and the pair layer must never disagree about
+    admissibility (direct ≥ observed ≥ hearsay ≥ none).
+
+    - visual full + audio full (одна локация / общая сцена) → "direct";
+    - addressed или remote delivered → "direct" (явная адресация = прямой контакт);
+    - visual full (стекло: действия видны, текст не слышен) → "observed";
+    - audio full/muffled (соседство, шум) → "hearsay";
+    - none/none (И11) → "none".
+    """
+    visual = getattr(result, "visual_level", "none") or "none"
+    audio = getattr(result, "audio_level", "none") or "none"
+    addressed = bool(getattr(result, "addressed", False))
+    remote = str(getattr(result, "remote_status", "none")) == "delivered"
+    if visual == "full" and audio == "full":
+        return "direct"
+    if addressed or remote:
+        return "direct"
+    if visual == "full":
+        return "observed"
+    if audio in ("full", "muffled"):
+        return "hearsay"
+    return "none"
+
+
 def _build_batch_scene_summary(
     round_snapshots: list[dict],
     character_names: dict[int, str],
@@ -2189,6 +2229,16 @@ async def regenerate_message_streaming(
             built_context=built_context,
             epistemic_mask_block=epistemic_mask_block,
             directive=directive,
+            recency_tail_block=(
+                built_context.recency_tail_text
+                if built_context is not None
+                else witness_model.build_character_recency_tail(
+                    round_messages,
+                    character.id,
+                    character_names,
+                    player_id=player_id,
+                )
+            ),
         ):
             if event["type"] == "token":
                 yield {
