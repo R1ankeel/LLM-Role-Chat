@@ -153,10 +153,10 @@
 ### 5. Пост-раунд (в том же запросе)
 
 1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций.
-2. **Извлечение сцены** (`extract_scene_state`): один LLM-вызов с structured output (`format` JSON-схема), определяет `time_of_day` и локации персонажей.
+2. **Извлечение сцены** (`extract_scene_state`): один LLM-вызов с structured output (`format` JSON-схема), определяет локации персонажей. `time_of_day` из ответа LLM игнорируется — движок никогда не меняет время суток автоматически, его устанавливает только пользователь через `PATCH /chats/{id}/scene`.
    - Локации принимаются только если: имя в списке разрешённых локаций И есть текстовое свидетельство перемещения (`_detect_movement_in_text`).
    - Перемещения объявляются системными сообщениями `role="system"` с `visibility="global"`.
-3. **Стагнация**: каждый ответ NPC прогоняется через repetition-анализ; инкремент `round_count`, накопление `stagnation_rounds`; принудительный сдвиг времени суток каждые `time_advance_interval` раундов.
+3. **Стагнация**: каждый ответ NPC прогоняется через repetition-анализ; инкремент `round_count`, накопление `stagnation_rounds`. Время суток при этом не сдвигается автоматически (см. п. 2).
 4. **Фоновая задача отношений** (если `relationship_analyzer_enabled`): `asyncio.create_task(_analyze_and_update_relationships(...))` — отдельная сессия БД.
 5. **Фоновая задача памяти**: `asyncio.create_task(memory_service.process_post_round(...))`.
 

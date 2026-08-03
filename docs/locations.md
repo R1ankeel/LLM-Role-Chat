@@ -172,7 +172,75 @@ Filtered messages=<M>
 сообщение из другой локации попало в контекст». Реализовано в
 `chat_engine._log_generation_diagnostics`.
 
-## Дальнейшие спринты
+## Персональный view истории и `effective_prior_replies` (спринт 4, §2–§4, §8–§11)
 
-- Спринты 4, 7 — персональная фильтрация истории, полная регрессия и ручные
-  сценарии.
+### Принцип
+
+Общая история чата — единая. Для каждого NPC из неё строится **персональное
+представление** через единый «фильтр восприятия» (`can_character_perceive_event` +
+`locations_match` + `REMOTE_CHANNELS`):
+
+- **Одна локация** → NPC видят реплики друг друга как `present` (общий
+  локальный контекст, §8). «Другой NPC в моей сцене» ≠ «чужой контекст».
+- **Разные локации** → события другой локации не попадают в view без
+  допустимого remote-канала (§9).
+- Перемещение (§19): view пересчитывается автоматически при построении
+  контекста по текущей локации персонажа — история не переписывается,
+  меняется только результат фильтрации.
+
+### Исправление `effective_prior_replies` (§10)
+
+Битый lookup `presence_map.get(character_id, "present")` (где `presence_map`
+индексирован по `message_id`) убран. Вместо него:
+
+- `process_user_message_streaming` накапливает **события** ответов текущего
+  раунда (`prior_reply_events`), а для каждого следующего NPC доступность
+  каждого ответа определяется тем же механизмом, что и для обычной истории:
+  `can_character_perceive_event(viewer, event)`.
+- Включено только то, что персонаж мог воспринять полностью (presence
+  `present`/`told`); `absent`/`mentioned` скрываются.
+- `regenerate_message_streaming` использует тот же фильтр для ответов раунда.
+- Единое правило для истории, `prior_replies` и sequential generation (§11):
+  никаких отдельных несовместимых фильтров.
+
+### Тесты (§22)
+
+| # | проверка | тест |
+|---|---|---|
+| 1 | A+B одна локация → B видит ответ A (в `prior_replies`) | `test_locations_perception.py::test_same_location_sees_alt_reply_prior_reply` |
+| 2 | A+B+C одна локация → все видят допустимые ответы | `test_three_same_location_all_see_valid` |
+| 3 | C в другой локации не видит события/ответы A+B | `test_cross_location_hidden_from_prior_replies` |
+| 4 | Перемещение A пересчитывает view | `test_move_recalculates_perception` |
+| 5 | `is_isolated` точная | `test_chat_engine.py::test_compute_is_isolated_engine_applied` |
+| 7 | Sequential generation | `test_perception.py::test_sequential_generation_respects_locations` |
+| 8 | Memory attribution | `test_memory_perception.py::test_memory_attribution_speaker_preserved_same_room` |
+| 9 | Remote-канал через локации | `test_remote_channel_bridges_locations` |
+| 10 | `compute_is_isolated` + CRUD | `test_perception.py` / `test_locations_api.py` |
+
+Ручные сценарии §23 (1–5) автоматизированы в `tests/test_manual_scenarios.py`
+(4 passed): общая гостиная + изолированный NPC на кухне (1–2), сцена NPC
+продолжается без игрока (3), удалённый канал в другую локацию (4), speaker
+isolation (5).
+
+Speaker isolation (§12, тест 6 §22) не затронут: NPC одной локации видят друг
+друга, но каждый отвечает только от своего имени; роль `role_isolation`,
+stop sequences и `sanitize_and_validate_response` работают независимо.
+
+## Регрессия (спринт 7)
+
+Полный прогон `pytest`: **570 passed, 28 failed**. Набор из 28 падений —
+**pre-existing** и идентичен спринтам 1–2–4–5–6 (task_queue `MemoryJobQueue`,
+context_state, embeddings, memory_service, memory_perception, repetition,
+stream_disconnect, token_counter); в изменённых для локаций файлах новых
+падений нет. Старый Vanilla JS SPA (`app/static/`) не изменялся.
+
+Ручные сценарии §23 (1–5) переведены в автотесты `tests/test_manual_scenarios.py`
+(общая гостиная + изолированный NPC на кухне; сцена NPC продолжается без
+игрока; удалённый канал в другую локацию; speaker isolation) — 4 passed,
+прогоняют реальный путь генерации с фейковым LLM.
+
+Критически важные инварианты (§24) подтверждены автоматическими тестами
+(см. таблицу выше): одна локация → общий контекст; разные локации → разные
+view; общая история хранится одна; `is_isolated` ≠ фильтр истории;
+`player_location` не единственный источник локальной сцены; remote-канал
+может сделать событие доступным независимо от локации.

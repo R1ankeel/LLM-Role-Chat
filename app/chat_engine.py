@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import random
 from collections.abc import AsyncIterator
 from datetime import datetime
 from types import SimpleNamespace
@@ -87,6 +86,41 @@ def _character_is_isolated(
         [character_locations[c.id] for c in characters if c.id != character_id],
         player_location,
     )
+
+
+def _effective_prior_replies(
+    prior_reply_events: list,
+    viewer_character_id: int,
+    viewer_location: str,
+    viewer_name: str,
+    character_names: dict[int, str],
+) -> list[tuple[str, str]]:
+    """Per-viewer filter of this round's prior replies (§10).
+
+    Each prior reply is a real message event; availability is decided by the
+    same perception mechanism as ordinary history — ``can_character_perceive_event``.
+    A reply is available only when it can be fully perceived (presence ``present``
+    or ``told``); ``absent``/``mentioned`` replies are hidden.
+    """
+    effective: list[tuple[str, str]] = []
+    for event in prior_reply_events:
+        author_id = getattr(event, "character_id", None)
+        if author_id is None:
+            continue
+        try:
+            author_id = int(author_id)
+        except (TypeError, ValueError):
+            continue
+        presence, _ = perception.can_character_perceive_event(
+            viewer_character_id=viewer_character_id,
+            viewer_location=viewer_location,
+            event=event,
+            viewer_name=viewer_name,
+        )
+        if presence in ("present", "told"):
+            content = getattr(event, "content", "") or ""
+            effective.append((character_names.get(author_id, ""), content))
+    return effective
 
 
 def _log_generation_diagnostics(
@@ -602,8 +636,10 @@ async def process_user_message_streaming(
         logger.warning("[chat_id=%d] Failed to compute proactive boost: %s", chat_id, exc)
         proactive_boosts = {c.id: 0.0 for c in characters}
 
-    # Track prior replies in this round for anti-mimicry (P2)
-    prior_replies: list[tuple[str, str]] = []
+    # Track prior replies in this round for anti-mimicry (P2).
+    # We keep the underlying Message events (not just name/text) so that
+    # availability of each reply can be decided per viewer via perception (§10).
+    prior_reply_events: list = []
 
     # Reusable token-aware context builder (per-character contexts A ≠ B)
     context_builder = ContextBuilder()
@@ -635,13 +671,15 @@ async def process_user_message_streaming(
             presence_map=presence_map,
         )
 
-        # Determine effective prior replies based on character's presence
-        # Characters with presence "absent" or "mentioned" cannot perceive prior replies
-        current_presence = presence_map.get(current_character.id, "present")
-        if current_presence in ("present", "told"):
-            effective_prior_replies = prior_replies
-        else:
-            effective_prior_replies = []
+        # Effective prior replies for this viewer: availability of each reply
+        # is decided by the same perception mechanism as ordinary history (§10).
+        effective_prior_replies = _effective_prior_replies(
+            prior_reply_events,
+            current_character.id,
+            character_locations.get(current_character.id, "") or "",
+            current_character.name,
+            character_names,
+        )
 
         # MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10): a
         # character learns how another treats it only from this round's
@@ -802,10 +840,10 @@ async def process_user_message_streaming(
             character_names,
         )
 
-        # Add this character's reply to prior_replies for subsequent characters
-        # Only if they can be perceived (present or told)
-        if response_text and current_presence in ("present", "told"):
-            prior_replies.append((current_character.name, response_text))
+        # Track this reply's event for subsequent characters. Availability for
+        # each subsequent viewer is decided later via perception (§10).
+        if response_text:
+            prior_reply_events.append(char_message)
 
         round_messages.append(char_message)
         context_messages.append(char_message)
@@ -843,9 +881,13 @@ async def process_user_message_streaming(
             num_ctx=ctx_state.get(chat_id),
         )
         if scene_update:
-            # Save time-related data first (without character_locations — confirmed later)
+            # Save location-related data first (without character_locations — confirmed later).
+            # time_of_day is intentionally excluded: the engine never changes the time of day
+            # automatically — it is set only by the user via PATCH /chats/{chat_id}/scene.
             scene_update_no_locs = {
-                k: v for k, v in scene_update.items() if k != "character_locations"
+                k: v
+                for k, v in scene_update.items()
+                if k not in ("character_locations", "time_of_day")
             }
             if scene_update_no_locs:
                 await crud.upsert_scene_state(db, chat_id, schemas.SceneStateUpdate(**scene_update_no_locs))
@@ -983,33 +1025,17 @@ async def process_user_message_streaming(
         else:
             stagnation_rounds = 0
 
-        # Force time advance every N rounds (use LLM-updated time if available)
-        updated_time = (scene_update or {}).get("time_of_day", "")
-        if not updated_time and scene_state:
-            updated_time = scene_state.time_of_day
-        time_of_day = updated_time or ""
-        if (
-            settings.scene_advancement_enabled
-            and round_count > 1
-            and round_count % settings.time_advance_interval == 0
-        ):
-            time_options = ["Утро", "День", "Вечер", "Ночь"]
-            if time_of_day and time_of_day in time_options:
-                idx = time_options.index(time_of_day)
-                time_of_day = time_options[(idx + 1) % len(time_options)]
-            else:
-                time_of_day = random.choice(time_options)
-
-        # Build custom_state updates
+        # Track stagnation and round count only (no automatic time advance).
+        # NOTE: time of day is intentionally NOT advanced automatically — the engine
+        # only tracks stagnation/round_count. The user sets the time themselves via
+        # PATCH /chats/{chat_id}/scene.
         custom_state_raw["stagnation_rounds"] = stagnation_rounds
         custom_state_raw["round_count"] = round_count
         custom_state_update = schemas.SceneCustomState(**custom_state_raw)
 
-        update_kwargs: dict = {"custom_state": custom_state_update}
-        if time_of_day:
-            update_kwargs["time_of_day"] = time_of_day
-
-        await crud.upsert_scene_state(db, chat_id, schemas.SceneStateUpdate(**update_kwargs))
+        await crud.upsert_scene_state(
+            db, chat_id, schemas.SceneStateUpdate(custom_state=custom_state_update)
+        )
     except Exception as exc:
         logger.warning("[chat_id=%d] Stagnation tracking failed: %s", chat_id, exc)
 
@@ -2043,7 +2069,6 @@ async def regenerate_message_streaming(
     # Presence & prior replies visible to this character
     history_message_ids = [m.id for m in context_messages if m.id is not None]
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
-    current_presence = presence_map.get(character.id, "present")
 
     _log_generation_diagnostics(
         character_id=character.id,
@@ -2057,19 +2082,23 @@ async def regenerate_message_streaming(
         presence_map=presence_map,
     )
 
+    # Prior replies from this round visible to this character (§10): availability
+    # is decided by the same perception mechanism as ordinary history.
     prior_replies: list[tuple[str, str]] = []
-    if current_presence in ("present", "told"):
-        for prior in round_messages:
-            if prior.role != "character" or prior.id == message_id:
-                continue
-            prior_char = char_by_id.get(prior.character_id)
-            if prior_char is None:
-                continue
-            prior_presence = await crud.get_presence_map(
-                db, [user_message.id], prior.character_id
-            )
-            if prior_presence.get(user_message.id, "present") in ("present", "told"):
-                prior_replies.append((prior_char.name, prior.content))
+    for prior in round_messages:
+        if prior.role != "character" or prior.id == message_id:
+            continue
+        prior_char = char_by_id.get(prior.character_id)
+        if prior_char is None:
+            continue
+        presence, _ = perception.can_character_perceive_event(
+            viewer_character_id=character.id,
+            viewer_location=character_locations.get(character.id, "") or "",
+            event=prior,
+            viewer_name=character.name,
+        )
+        if presence in ("present", "told"):
+            prior_replies.append((prior_char.name, prior.content))
 
     # Token-aware context for this character (same assembly as the round)
     built_context = None

@@ -119,7 +119,7 @@
 | `SCENE_ADVANCEMENT_ENABLED` | `true` | включено |
 | `STAGNATION_MAX_ROUNDS` | `3` | раундов стагнации до твиста |
 | `PROACTIVE_ACTION_CHANCE` | `0.15` | шанс проактивного действия |
-| `TIME_ADVANCE_INTERVAL` | `5` | интервал смены времени |
+| `TIME_ADVANCE_INTERVAL` | `5` | не используется: движок не меняет время автоматически (время задаёт пользователь через `PATCH /chats/{id}/scene`) |
 | `SCENE_TWIST_RETRY_BONUS` | `0.15` | бонус шанса твиста при ретрае |
 
 ## Context Builder (токен-ориентированный контекст)

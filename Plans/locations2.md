@@ -1,6 +1,6 @@
 # Локации 2.0 и исправление изоляции NPC — план реализации
 
-> **Статус:** Спринты 1-3 выполнены (2026-08-03). Спринт 3 «UI вкладки Локации» выполнен (2026-08-03): CRUD в UI, обработка 409, сборка/типы прошли. Спринт 5 «compute_is_isolated» выполнен (2026-08-03). Спринт 6 «Scene block с описанием + память + логирование» выполнен (2026-08-03). Спринты 4, 7 — впереди.
+> **Статус:** Спринты 1-3 выполнены (2026-08-03). Спринт 3 «UI вкладки Локации» выполнен (2026-08-03): CRUD в UI, обработка 409, сборка/типы прошли. Спринт 4 «Персональная фильтрация истории (perception)» выполнен (2026-08-03). Спринт 5 «compute_is_isolated» выполнен (2026-08-03). Спринт 6 «Scene block с описанием + память + логирование» выполнен (2026-08-03). Спринт 7 «Полный прогон тестов и ручные сценарии» выполнен (2026-08-03).
 > **Дата:** 2026-08-03
 > **Цель:** реализовать систему «Локации 2.0» (локации как самостоятельная сущность с CRUD и UI) и исправить чрезмерную изоляцию NPC.
 > **Главный принцип:** общая история чата остаётся единой. Для каждого NPC из неё формируется персональное представление истории на основании того, какие события этот NPC мог воспринимать. Локация — главный фактор восприятия, но не единственный. NPC одной локации полноценно взаимодействуют друг с другом.
@@ -276,16 +276,16 @@ Filtered messages=<M>
 6. Миграция/backfill (§15).
 7. CRUD API (§16).
 8. UI вкладки «Локации» (§17).
-9. Персональная фильтрация истории через perception (§2-4, §8-9).
+9. Персональная фильтрация истории через perception (§2-4, §8-9). (выполнено, Спринт 4)
 10. `compute_is_isolated` (§6). (выполнено, Спринт 5)
-11. `effective_prior_replies` (§10).
-12. Проверка sequential generation (§11).
+11. `effective_prior_replies` (§10). (выполнено, Спринт 4)
+12. Проверка sequential generation (§11). (выполнено, Спринт 4)
 13. Описание локации в scene block (§18). (выполнено, Спринт 6)
 14. Проверка memory attribution (§20). (выполнено, Спринт 6)
 15. Диагностическое логирование (§21). (выполнено, Спринт 6)
-16. Автотесты (§22).
-17. Ручные сценарии (§23).
-18. Проверка, что существующие тесты role isolation не сломаны (§12).
+16. Автотесты (§22). (выполнено, Спринт 7)
+17. Ручные сценарии (§23). (выполнено, Спринт 7)
+18. Проверка, что существующие тесты role isolation не сломаны (§12). (выполнено, Спринт 7)
 
 ## 27. Итоговая архитектура
 
@@ -381,7 +381,7 @@ Filtered messages=<M>
 - Синхронизация `chat.locations` в сторе `chats.ts` не требуется: поле нигде не читается в UI, mock и backend синхронизируют его на каждый CRUD.
 **Проверка:** `npx vue-tsc -b` без ошибок; `npm run build` собран (366ms); `pytest tests/test_locations_api.py` — 8 passed. `frontend/dist` в gitignore.
 
-## Спринт 4 — Персональная фильтрация истории (perception)
+## Спринт 4 — Персональная фильтрация истории (perception) — ВЫПОЛНЕН (2026-08-03)
 **Цель:** корректные персональные view истории NPC (§2-4, §8-9).
 **Задачи:**
 1. Аудит пути «общая история → witness-фильтр → контекст NPC» в `chat_engine`/`context_builder`/`witness_model`; убедиться, что `can_character_perceive_event` + `locations_match` + `REMOTE_CHANNELS` дают правильный view.
@@ -389,6 +389,21 @@ Filtered messages=<M>
 3. Исправить `effective_prior_replies` (§10): убрать битый lookup, доступность каждого ответа решать через `can_character_perceive_event(viewer, event)`.
 4. Проверить sequential generation (§11) и перемещение между локациями (§19) — view пересчитывается по текущей локации.
 **Критерий готовности:** тесты 1-4, 7, 9 (§22) проходят; единый фильтр для истории, `prior_replies`, sequential generation.
+
+**Что сделано:**
+- Аудит подтвердил, что история и witness-фильтр уже строят персональный view через `resolve_presence` (§2-4, §8-9) — ср. `app/witness_model.py`, `app/crud.py::get_presence_map` / `compute_and_save_presence_for_message`.
+- §10 был **не выполнен** несмотря на прежние метки: в обоих путях генерации (`process_user_message_streaming`, `regenerate_message_streaming`) использовался битый lookup `presence_map.get(character_id, "present")`, где `presence_map` индексирован по `message_id`, а не по `character_id`; присутствие любого NPC в ранних раундах по умолчанию засчитывалось как `present`.
+- Исправление §10:
+  - `effective_prior_replies` реализован как `_effective_prior_replies(prior_reply_events, viewer_character_id, viewer_location, viewer_name, character_names)`: для каждого события `char_message` решение принимается через `can_character_perceive_event(viewer, event)` → `present`/`told` включаются, `absent`/`mentioned` скрываются.
+  - Накопление событий: `prior_reply_events: list = []` вместо старого списка строк `prior_replies`; событие добавляется сразу после успешной генерации реплики NPC (порядок: устаревшая reply-строка по-прежнему пишется в историю как `char_message`).
+  - `current_presence` и вложенный `get_presence_map` в регенерации удалены; регенерация фильтрует `round_messages` тем же `_effective_prior_replies`.
+- Sequential generation (§11) и перемещение (§19): фильтр пересчитывается на каждой итерации по текущим `viewer_location`/`character_locations` (тесты 4, 7 — см. ниже).
+- Новые тесты: `tests/test_locations_perception.py` (тесты 1-4, 9 §22) — 5 passed.
+- `docs/locations.md`: раздел «Персональный view истории и `effective_prior_replies` (спринт 4)».
+
+**Проверка:**
+- `pytest tests/test_perception.py tests/test_witness_filter.py tests/test_chat_engine.py tests/test_role_isolation.py tests/test_locations_api.py tests/test_prompt_builder.py tests/test_context_builder.py tests/test_locations_perception.py`: 120 passed.
+- Полный прогон `pytest`: 566 passed, 28 failed — набор падений идентичен pre-existing (task_queue `MemoryJobQueue`, context_state, embeddings, memory, repetition, stream_disconnect, token_counter; в изменённых файлах новых падений нет).
 
 ## Спринт 5 — `compute_is_isolated` — ВЫПОЛНЕН (2026-08-03)
 **Цель:** точная изоляция (§5-6).
@@ -430,10 +445,25 @@ Filtered messages=<M>
 - Затронутые файлы (`test_chat_engine`, `test_context_builder`, `test_ollama_chat`, `test_prompt_builder`, `test_perception`, `test_locations_api`, `test_witness_filter`): 107 passed.
 - Полный прогон `pytest`: 561 passed, 28 failed — набор падений идентичен pre-existing из Спринтов 1-2-5 (task_queue `MemoryJobQueue`, context_state, embeddings, memory_service, memory_perception ×6, repetition, stream_disconnect, token_counter; в изменённых файлах новых падений нет).
 
-## Спринт 7 — Полный прогон тестов и ручные сценарии
+## Спринт 7 — Полный прогон тестов и ручные сценарии — ВЫПОЛНЕН (2026-08-03)
 **Цель:** регрессия и верификация всего.
 **Задачи:**
 1. Все автотесты §22 (1-10) + существующие тесты role isolation (§26 п.18).
 2. Ручные сценарии §23 (1-5).
 3. Прогон `pytest` целиком, проверка, что старый SPA и существующее поведение не сломаны.
 **Критерий готовности:** все тесты зелёные, ручные сценарии подтверждают инварианты §24, ограничения §25 соблюдены.
+
+**Что сделано:**
+- **Ручные сценарии §23 (1-5)** переведены в автоматические тесты `tests/test_manual_scenarios.py` (прогоняют реальный путь `process_user_message_streaming` с детерминированным фейковым LLM; проверяют наблюдаемое поведение, которое человек проверил бы в UI):
+  1. §23.1 «общая гостиная» + §23.2 «Виктор на кухне изолирован»: `test_scenario_1_2_same_room_interact_and_kitchen_hidden` — Анна и Борис видят игрока и друг друга (`prior_replies`), Виктор не видит ни игрока, ни реплик гостиной.
+  2. §23.3 «сцена NPC продолжается без игрока»: `test_scenario_3_npc_scene_continues_without_player` — после перемещения игрока на кухню NPC гостиной продолжают общаться между собой (не изолированы), Виктор перестаёт быть изолированным.
+  3. §23.4 «сообщение в другой локации через удалённый канал»: `test_scenario_4_remote_message_across_locations` — таргетированное событие `messenger` видно Василию в другой локации (`REMOTE_CHANNEL_MESSENGER`).
+  4. §23.5 «speaker isolation»: `test_scenario_5_speaker_isolation` — реплика, начинающаяся с чужого speaker marker, обрезается до пустой и помечается невалидной; реплика со своим префиксом сохраняется.
+- **Инварианты §24** подтверждены автотестами: §10.1 `effective_prior_replies` = единый фильтр для обоих путей генерации; §10.2 `prior_reply_events` пишутся в историю после каждой успешной генерации; §19 view пересчитывается при перемещении; §20 attribution говорящего сохранена (спринт 6); §23.1-5 см. выше.
+- **Ограничения §25** соблюдены: старый Vanilla JS SPA (`app/static/`) не изменялся — `git diff --stat -- app/static/` пуст; `effective_prior_replies` использует `can_character_perceive_event` (единый фильтр); промпты добавлены только на русском.
+- **Ручной скрипт** (`verify_manual.py`) не используется: standalone-прогон зависает на фоновом сетевом вызове, не замоканном вне pytest; те же кодовые пути полностью покрыты pytest-тестами с паттерном `_run_round` (patch `ollama_client.generate`, `asyncio.create_task`, `asyncio.to_thread`).
+- `docs/locations.md`: раздел «Регрессия (спринт 7)».
+
+**Проверка:**
+- Новые тесты: `tests/test_manual_scenarios.py` — 4 passed.
+- Полный прогон `pytest`: 570 passed, 28 failed — набор падений идентичен pre-existing из Спринтов 1-2-4-5-6 (task_queue `MemoryJobQueue`, context_state, embeddings, memory_service, memory_perception ×6, repetition, stream_disconnect, token_counter; в изменённых файлах новых падений нет). Критерий «все тесты зелёные» формально не достигнут из-за 28 pre-existing падений вне scope спринтов локаций (они были красными до их начала).
