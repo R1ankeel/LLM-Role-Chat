@@ -319,6 +319,15 @@ def ensure_schema(db_engine) -> None:
             )
             logger.info("Added channel column to messages")
 
+        # Migrate messages: add stimuli column if missing (Sprint 2)
+        if "stimuli" not in message_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE messages ADD COLUMN stimuli TEXT NOT NULL DEFAULT '[]'"
+                )
+            )
+            logger.info("Added stimuli column to messages")
+
         # ----- Locations table (Локации 2.0) -----
         # Источник истины для CRUD и описаний локаций; `chats.locations`
         # остаётся кэшем названий для движка.
@@ -343,6 +352,16 @@ def ensure_schema(db_engine) -> None:
                 "ON locations (chat_id)"
             )
         )
+
+        # Migrate locations: add adjacent_to column if missing (Sprint 2)
+        location_columns = {col["name"] for col in inspector.get_columns("locations")}
+        if "adjacent_to" not in location_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE locations ADD COLUMN adjacent_to TEXT NOT NULL DEFAULT '[]'"
+                )
+            )
+            logger.info("Added adjacent_to column to locations")
 
         # Backfill: из существующих chats.locations (JSON-массив названий)
         # создаём строки locations (description = ""). Идемпотентно —

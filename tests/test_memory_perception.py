@@ -52,7 +52,8 @@ def test_memory_filter_excludes_mentioned_includes_present():
         _msg(1, "character", "Алина, где ты?", character_id=1, location="street"),
         _msg(2, "character", "Я на улице с Катей.", character_id=1, location="street"),
     ]
-    # Alina is remote — first line is mentioned, second absent
+    # Alina is remote — both lines are absent (address without reachability is
+    # NOT mentioned per ТЗ §14); nothing becomes a hard memory.
     ctx = witness_model.filter_history_for_memory_extraction(
         messages,
         viewer_character_id=2,
@@ -62,7 +63,7 @@ def test_memory_filter_excludes_mentioned_includes_present():
     )
     assert not ctx.has_observable_events
     assert "улице" not in ctx.text
-    assert any(s["reason"] == "soft_mention_only" for s in ctx.skipped)
+    assert all(s["reason"] == "not_visible" for s in ctx.skipped)
 
     # Maxim sees his own lines
     ctx_m = witness_model.filter_history_for_memory_extraction(

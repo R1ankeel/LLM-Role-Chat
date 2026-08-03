@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     witness_mentioned_snippet_len: int = Field(default=120, alias="WITNESS_MENTIONED_SNIPPET_LEN")
     default_event_visibility: str = Field(default="local", alias="DEFAULT_EVENT_VISIBILITY")
     normalize_locations: bool = Field(default=True, alias="NORMALIZE_LOCATIONS")
+    # Heuristic adjacency fallback (shared toponym prefix). Off by default:
+    # adjacency uses only explicit `locations.adjacent_to` links (Sprint 2).
+    adjacency_fallback_enabled: bool = Field(default=False, alias="ADJACENCY_FALLBACK_ENABLED")
 
     # Witness-based memory filtering (Phase 4)
     enable_witness_memory_filter: bool = Field(default=True, alias="ENABLE_WITNESS_MEMORY_FILTER")

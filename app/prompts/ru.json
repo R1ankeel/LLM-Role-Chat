@@ -34,7 +34,9 @@
   },
   "witness": {
     "mentioned": "[Тебя упомянули: {snippet}]",
+    "address": "{author} обращается к тебе: «{snippet}»",
     "told": "[Тебе рассказали: {snippet}]",
+    "audible": "[Ты слышишь: {snippet}]",
     "absent_placeholder": "[Пока тебя не было, что-то произошло]"
   },
   "negative": [

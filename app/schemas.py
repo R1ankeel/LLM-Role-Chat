@@ -7,10 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .config import settings
 from .perception import parse_target_ids, serialize_target_ids
+from .stimuli import parse_stimuli, serialize_stimuli
 
 # Допустимые роли сообщений
 Role = Literal["user", "character", "system"]
-PresenceType = Literal["present", "mentioned", "absent", "told"]
+PresenceType = Literal["present", "mentioned", "audible", "absent", "told"]
 MemoryCategory = Literal["отношения", "событие", "локация", "предмет", "другое"]
 EventVisibility = Literal["private", "local", "targeted", "public", "global"]
 CommunicationChannel = Literal["direct", "magic", "phone", "radio", "messenger"]
@@ -205,6 +206,7 @@ def _strip_location_name(value: object) -> object:
 class LocationBase(BaseModel):
     name: str = Field(min_length=1)
     description: str = ""
+    adjacent_to: list[str] = Field(default_factory=list)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -218,6 +220,25 @@ class LocationBase(BaseModel):
             return ""
         return str(value).strip()
 
+    @field_validator("adjacent_to", mode="before")
+    @classmethod
+    def _adjacent_to(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            import json
+
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return []
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+            return []
+        if isinstance(value, list):
+            return [str(x).strip() for x in value if str(x).strip()]
+        return []
+
 
 class LocationCreate(LocationBase):
     """Локация создаётся внутри чата (chat_id берётся из пути)."""
@@ -226,6 +247,7 @@ class LocationCreate(LocationBase):
 class LocationUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1)
     description: Optional[str] = None
+    adjacent_to: Optional[list[str]] = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -240,6 +262,25 @@ class LocationUpdate(BaseModel):
         if value is None:
             return None
         return str(value).strip()
+
+    @field_validator("adjacent_to", mode="before")
+    @classmethod
+    def _adjacent_to(cls, value: object) -> Optional[list[str]]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            import json
+
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+            return None
+        if isinstance(value, list):
+            return [str(x).strip() for x in value if str(x).strip()]
+        return None
 
 
 class LocationRead(LocationBase):
@@ -264,6 +305,7 @@ class MessageCreate(MessageBase):
     location: str = ""
     target_character_ids: list[int] = Field(default_factory=list)
     channel: CommunicationChannel = "direct"
+    stimuli: list[dict] = Field(default_factory=list)
 
     @field_validator("visibility", mode="before")
     @classmethod
@@ -284,6 +326,7 @@ class MessageCreate(MessageBase):
         data["visibility"] = _normalize_visibility(data.get("visibility"))
         data["location"] = data.get("location") or ""
         data["channel"] = data.get("channel") or "direct"
+        data["stimuli"] = serialize_stimuli(data.get("stimuli") or [])
         return data
 
 
@@ -297,6 +340,7 @@ class MessageRead(MessageBase):
     location: str = ""
     target_character_ids: list[int] = Field(default_factory=list)
     channel: str = "direct"
+    stimuli: list[dict] = Field(default_factory=list)
     timestamp: datetime
 
     @model_validator(mode="before")
@@ -315,6 +359,7 @@ class MessageRead(MessageBase):
                 "location": getattr(data, "location", "") or "",
                 "target_character_ids": getattr(data, "target_character_ids", "[]"),
                 "channel": getattr(data, "channel", "direct") or "direct",
+                "stimuli": getattr(data, "stimuli", "[]"),
                 "timestamp": getattr(data, "timestamp", None),
             }
         payload["target_character_ids"] = parse_target_ids(
@@ -323,6 +368,7 @@ class MessageRead(MessageBase):
         payload["visibility"] = _normalize_visibility(payload.get("visibility"))
         payload["location"] = payload.get("location") or ""
         payload["channel"] = payload.get("channel") or "direct"
+        payload["stimuli"] = [s.to_dict() for s in parse_stimuli(payload.get("stimuli"))]
         return payload
 
 

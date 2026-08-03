@@ -24,6 +24,7 @@ def _msg(
     location: str = "",
     visibility: str = "local",
     target_character_ids: str | list | None = "[]",
+    stimuli: str | list | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=message_id,
@@ -33,6 +34,7 @@ def _msg(
         location=location,
         visibility=visibility,
         target_character_ids=target_character_ids if target_character_ids is not None else "[]",
+        stimuli=stimuli if stimuli is not None else "[]",
     )
 
 
@@ -102,7 +104,8 @@ def test_same_round_no_longer_forces_visibility(character_names):
     assert filtered == ""
 
 
-def test_mentioned_when_name_in_content_remote(character_names):
+def test_remote_name_mention_no_longer_mentioned(character_names):
+    """ТЗ §6: без address/call-стимула обращение из недостижимой локации → absent."""
     message = _msg(
         5,
         "character",
@@ -116,13 +119,37 @@ def test_mentioned_when_name_in_content_remote(character_names):
         character_names,
         viewer_location="street",
     )
+    assert presence == "absent"
+    assert (
+        witness_model.format_line_for_presence(message, "absent", character_names)
+        is None
+    )
+
+
+def test_mentioned_when_addressed_from_adjacent(character_names):
+    """ТЗ §6: address-стимул из соседней локации → MENTIONED (обращение к тебе)."""
+    message = _msg(
+        5,
+        "character",
+        "Character B, come here quickly!",
+        character_id=1,
+        location="room",
+        stimuli=[{"type": "address", "target_character": "Character B"}],
+    )
+    presence = witness_model.compute_mvp_presence(
+        message,
+        2,
+        character_names,
+        viewer_location="hall",
+        adjacency_index={"hall": {"room"}},
+    )
     assert presence == "mentioned"
 
     line = witness_model.format_line_for_presence(
-        message, "mentioned", character_names
+        message, "mentioned", character_names, viewer_name="Character B"
     )
     assert line is not None
-    assert line.startswith("[Тебя упомянули:")
+    assert line.startswith("Character A обращается к тебе:")
     assert "Character B" in line
 
 

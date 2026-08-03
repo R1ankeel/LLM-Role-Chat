@@ -269,13 +269,13 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] Прогон `pytest tests/test_role_isolation.py tests/golden/`.
 
 ### Спринт 2 — Уровни восприятия + соседство (§6, §7, §8)
-- [ ] `perception.py`: `PerceptionLevel`, `get_perception_level`, `are_locations_adjacent`, `build_adjacency_index`, переработка `can_character_perceive_event`, `event_from_message` + stimuli.
-- [ ] `models.py` + `schemas.py` + `database.ensure_schema`: `messages.stimuli`, `locations.adjacent_to`.
-- [ ] `crud.py`: `get_adjacency_index`, поддержка `adjacent_to` в CRUD локаций.
-- [ ] `witness_model.py`: `Presence += "audible"`, `format_line_for_presence` (audible/mentioned-address), `compute_mvp_presence`.
-- [ ] `routers/locations.py`: `adjacent_to` в API.
-- [ ] Тесты: 4-10 из §18.
-- [ ] Прогон `pytest tests/test_perception.py tests/test_locations_perception.py tests/test_witness_filter.py`.
+- [x] `perception.py`: `PerceptionLevel`, `get_perception_level`, `are_locations_adjacent`, `build_adjacency_index`, переработка `can_character_perceive_event`, `event_from_message` + stimuli.
+- [x] `models.py` + `schemas.py` + `database.ensure_schema`: `messages.stimuli`, `locations.adjacent_to`.
+- [x] `crud.py`: `get_adjacency_index`, поддержка `adjacent_to` в CRUD локаций.
+- [x] `witness_model.py`: `Presence += "audible"`, `format_line_for_presence` (audible/mentioned-address), `compute_mvp_presence`.
+- [x] `routers/locations.py`: `adjacent_to` в API.
+- [x] Тесты: 4-10 из §18.
+- [x] Прогон `pytest tests/test_perception.py tests/test_locations_perception.py tests/test_witness_filter.py`.
 
 ### Спринт 3 — Стимулы (§13, §14)
 - [ ] `app/stimuli.py`: `Stimulus`, `extract_stimuli`, `has_stimulus`, `build_audible_line`, сериализация.
@@ -345,7 +345,7 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] 3. `grep is_isolated` → все места: `is_isolated` влияет только на информационный блок, не на запреты.
 - [x] 4. Удалены ограничения «не покидай локацию», «не иди к игроку», «не обращайся», «играй здесь и сейчас».
 - [ ] 5. События из соседних локаций не исчезают полностью (audible-строка попадает в контекст).
-- [ ] 6. AUDIBLE не раскрывает визуальные детали/мысли (тест 10).
+- [x] 6. AUDIBLE не раскрывает визуальные детали/мысли (тест 10).
 - [ ] 7. Движение действительно обновляет БД (`characters.location`).
 - [ ] 8. Обновлённая локация используется следующим NPC в том же раунде (тест 16).
 - [ ] 9. Стимулы не дублируют сообщения (тест 19).
@@ -434,3 +434,58 @@ crud.update_character_location / batch + character_locations[cid] = new
 - Не вводилась «обязательная реакция на стимул».
 - Запрет «не выдумывай действия других» сохранён как защита авторства.
 - Спринты 2-5 (восприятие, стимулы, движение) не начинали — по плану.
+
+---
+
+## 10. Итоговый отчёт — Спринт 2 (заполнено 2026-08-03)
+
+### 1. Какие файлы изменены
+- `app/stimuli.py` (новый)
+- `app/perception.py`
+- `app/witness_model.py`
+- `app/models.py`
+- `app/schemas.py`
+- `app/database.py`
+- `app/crud.py`
+- `app/config.py`
+- `app/prompts/ru.json`
+- `app/routers/locations.py` (без правок кода — `adjacent_to` прокидывается схемами)
+- `tests/test_perception_levels.py` (новый)
+- `tests/test_witness_filter.py`
+- `tests/test_memory_perception.py`
+
+### 2. Что изменено в каждом файле
+- `stimuli.py`: `Stimulus` dataclass (type/target_character/audibility), `parse_stimuli`/`serialize_stimuli` (JSON-метаданные), `has_stimulus`, `stimulus_targets`, `extract_stimuli` (regex-эвристики knock/call/shout/loud_sound/address, изолированы для замены на LLM), `build_audible_line` (рендер AUDIBLE без утечки визуальных деталей: стук/крик/зов/громкий звук/голос + generic-строка для легаси без стимулов).
+- `perception.py`: `PerceptionLevel` (`visible|audible|mentioned|absent`) + `_LEVEL_TO_PRESENCE`; `are_locations_adjacent` (+ опциональный `_toponym_prefix_fallback` под флагом), `build_adjacency_index` (симметричный индекс из `locations.adjacent_to`), `serialize_adjacency`; `get_perception_level` (одна локация → visible; address/call на зрителя из соседней → mentioned, из недостижимой → absent; громкий стимул из соседней → audible; тихие/далёкие → absent); `can_character_perceive_event` переписан на `get_perception_level` с сохранением веток OWN_MESSAGE/GLOBAL/PUBLIC/private/targeted/REMOTE_CHANNELS, добавлен параметр `adjacency_index`; убрано правило «имя в тексте → mentioned» из LOCAL-ветки (ТЗ §6); `event_from_message` теперь извлекает `stimuli`.
+- `witness_model.py`: `Presence` += `"audible"`; `MEMORY_OBSERVABLE_PRESENCES` остаётся `{present, told}`; `format_line_for_presence`: `audible` → `build_audible_line` + шаблон `witness.audible`, `mentioned` с address/call-стимулом на зрителя → `{author} обращается к тебе: «…»` (шаблон `witness.address`); `compute_mvp_presence`/`resolve_presence` и все `filter_history_*` принимают `adjacency_index`; фильтр-функции прокидывают `viewer_name` в форматтер.
+- `models.py`: `Message.stimuli` (Text, default `[]`), `Location.adjacent_to` (Text, default `[]`).
+- `schemas.py`: `PresenceType` += `"audible"`; `LocationBase`/`LocationUpdate`/`LocationRead` — поле `adjacent_to` (+валидаторы из JSON-строки); `MessageCreate`/`MessageRead` — поле `stimuli` (сериализация в `orm_kwargs`, десериализация в `_coerce_from_orm`).
+- `database.py`: `ensure_schema` — миграции `messages.stimuli TEXT NOT NULL DEFAULT '[]'` и `locations.adjacent_to TEXT NOT NULL DEFAULT '[]'` (паттерн инспектора).
+- `crud.py`: `get_adjacency_index(db, chat_id)`; `create_location`/`update_location` сериализуют `adjacent_to`; `_rename_location_references` обновляет `adjacent_to` соседей при переименовании локации.
+- `config.py`: флаг `adjacency_fallback_enabled` (`ADJACENCY_FALLBACK_ENABLED`, default `False`).
+- `ru.json`: `witness.audible` и `witness.address` шаблоны.
+- `routers/locations.py`: без изменений — `adjacent_to` попадает в create/update/read через схемы.
+
+### 3. Какие тесты добавлены/изменены
+- Новый `tests/test_perception_levels.py` — тесты §18 4-10 (VISIBLE/AUDIBLE/MENTIONED/ABSENT, AUDIBLE без утечки визуала, отсутствие mentioned за простое упоминание), плюс `build_adjacency_index`/`are_locations_adjacent`, CRUD+perception интеграция (`adjacent_to` → `get_adjacency_index` → `audible` presence), переименование обновляет ссылки. 20 passed.
+- `tests/test_witness_filter.py`: `test_mentioned_when_name_in_content_remote` переписан в `test_remote_name_mention_no_longer_mentioned` (простое упоминание без достижимости → `absent`) + новый `test_mentioned_when_addressed_from_adjacent` (address-стимул из соседней → mentioned с формой «обращается к тебе»).
+- `tests/test_memory_perception.py`: `test_memory_filter_excludes_mentioned_includes_present` — обращение без достижимости теперь `absent` (reason `not_visible`), а не `mentioned` (`soft_mention_only`).
+
+### 4. Результат существующих тестов
+`pytest tests/test_perception.py tests/test_locations_perception.py tests/test_witness_filter.py tests/test_locations_api.py` → **59 passed**. Широкий прогон (включая `test_role_isolation`, `test_prompt_builder`, `test_context_builder`, `test_ollama_chat`, `tests/golden/`) → **212 passed**. `test_memory_perception.py`: 6 падений **pre-existing** (не-awaited coroutines в самих тестах — подтверждено прогоном на базисе `c562ec4`), к Спринту 2 не относятся.
+
+### 5. Результат новых тестов
+`tests/test_perception_levels.py` — 20 passed.
+
+### 6. Ограничения текущей реализации
+- Соседство на этом этапе — только явные связи `locations.adjacent_to`; без связей локации не соседние (консервативно, без регрессий для существующих чатов). Эвристический fallback выключен по умолчанию.
+- Аудио-восприятие из соседних локаций не подключено в рантайм `chat_engine`/`context_builder` (не передаётся `adjacency_index`) — это сделает Спринт 3/4. Сейчас `audible`/`mentioned` работают в perception-функциях и при явной передаче индекса.
+- `extract_stimuli` реализован (regex), но ещё не вызывается при создании сообщений — подключение в Спринте 3.
+- `_name_mentioned` сохранён только в REMOTE-ветке без таргета; решение о замене на стимулы — в Спринте 3.
+
+### 7. Что сознательно НЕ внесено
+- Не менялись stop sequences и sanitize-логика авторства.
+- Не вводилась «обязательная реакция на стимул».
+- Не вводилась отдельная таблица стимулов/событий — стимулы остаются метаданными `messages.stimuli`.
+- Не добавлялась иерархия локаций (`parent_id`) — покрыто абстракцией `are_locations_adjacent` + `adjacent_to`.
+- `chat_engine.py` не изменялся (движение/стимулы в рантайме — Спринты 3-4).

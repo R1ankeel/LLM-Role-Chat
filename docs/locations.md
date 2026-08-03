@@ -244,3 +244,101 @@ stream_disconnect, token_counter); в изменённых для локаций
 view; общая история хранится одна; `is_isolated` ≠ фильтр истории;
 `player_location` не единственный источник локальной сцены; remote-канал
 может сделать событие доступным независимо от локации.
+
+## Уровни восприятия и соседство (Isolation FIS, Спринт 2)
+
+### Уровни восприятия
+
+Введено разделение VISIBLE / AUDIBLE / MENTIONED / ABSENT
+(`perception.PerceptionLevel`), отображаемое в presence:
+
+| Уровень | Presence | Что получает персонаж |
+|---|---|---|
+| VISIBLE | `present` | Полное событие |
+| AUDIBLE | `audible` (новое) | Только слышимое (без визуальных деталей и мыслей автора) |
+| MENTIONED | `mentioned` | Непосредственное обращение (стимул `address`/`call` на зрителя) |
+| ABSENT | `absent` | Ничего |
+
+Центральная функция `perception.get_perception_level(...)`:
+
+- одна локация → `visible` (вне зависимости от стимулов);
+- `address`/`call` на зрителя из **соседней** локации → `mentioned`; из
+  далёкой недостижимой локации → `absent` (ТЗ §14);
+- громкий стимул (`knock`/`shout`/`loud_sound`/`call`) из соседней → `audible`;
+- тихое событие из соседней без стимула → `absent` (ТЗ §7: слышны только
+  достаточно громкие звуки).
+
+Простое упоминание имени в повествовании («Вчера Антон ходил в магазин»)
+**больше не даёт** `mentioned` (ТЗ §6) — правило «имя в тексте → mentioned»
+убрано из LOCAL-ветки `can_character_perceive_event`.
+
+`can_character_perceive_event` принимает опциональный `adjacency_index` и
+переводит уровень в presence через `_LEVEL_TO_PRESENCE`. Ветки
+OWN_MESSAGE / GLOBAL / PUBLIC / private / targeted / REMOTE_CHANNELS
+сохранены без изменений.
+
+### Соседство локаций
+
+Новая колонка `locations.adjacent_to` — JSON-массив имён соседних локаций:
+
+```json
+{ "name": "Кухня", "adjacent_to": ["Гостиная", "Коридор"] }
+```
+
+- `perception.build_adjacency_index(locations)` строит нормализованный
+  симметричный индекс `{имя: {соседи}}` (связь A→B автоматически даёт B→A).
+- `perception.are_locations_adjacent(a, b, index)` — проверка соседства по
+  явным связям. Без связей локации НЕ соседние (консервативно).
+- `crud.get_adjacency_index(db, chat_id)` — индекс для чата из таблицы.
+- При переименовании локации ссылки в `adjacent_to` других локаций
+  обновляются синхронно.
+- Опциональный эвристический fallback (общий первый топоним, напр.
+  «Квартира Ольги» / «Квартира Бориса») включается флагом
+  `ADJACENCY_FALLBACK_ENABLED` (по умолчанию `False`).
+
+### Стимулы
+
+Стимулы — **метаданные события**, не отдельная сущность БД. Хранятся в
+`messages.stimuli` (JSON). Модуль `app/stimuli.py`:
+
+- `Stimulus(type, target_character, audibility)` — `knock | call | shout | address | loud_sound`;
+- `extract_stimuli(text, character_names)` — regex-эвристики (заменяемы на LLM без изменения остального кода);
+- `build_audible_line(event)` — рендер AUDIBLE **без утечки визуальных деталей**:
+  стук → «Ты слышишь стук в дверь из соседней локации.», крик → «…крик…», зов,
+  громкий звук, голос; легаси-сообщения без стимулов → generic «Из соседней
+  локации доносится звук.» — полный контент никогда не возвращается;
+- `parse_stimuli`/`serialize_stimuli` — JSON-сериализация.
+
+### Рендер в истории
+
+`witness_model.format_line_for_presence`:
+
+- `audible` → `[Ты слышишь: {snippet}]`, где `snippet` — строка от `build_audible_line`;
+- `mentioned` с address/call-стимулом на зрителя → `{Автор} обращается к тебе: «…»`;
+  иначе — прежний `[Тебя упомянули: {snippet}]`;
+- `present`/`told`/`absent` — без изменений.
+
+`MEMORY_OBSERVABLE_PRESENCES = {present, told}` — `audible`/`mentioned`
+не попадают в извлечение памяти/сводки (частичная инфа не выдаётся как полная).
+
+### Активация на этом этапе
+
+`audible`/`mentioned`-уровни и соседство работают в perception-функциях и
+при передаче `adjacency_index` (в т.ч. через `compute_mvp_presence` и
+`filter_history_*`). Подключение `extract_stimuli` к созданию сообщений и
+`adjacency_index` в рантайме генерации выполняется Спринтами 3-4.
+
+### Тесты (§18 items 4-10)
+
+| # | проверка | тест |
+|---|---|---|
+| 4 | Та же локация → VISIBLE | `tests/test_perception_levels.py::test_same_location_visible*` |
+| 5 | Соседняя + стук → AUDIBLE | `test_adjacent_knock_audible` / `test_can_perceive_adjacent_knock_audible_presence` |
+| 6 | Соседняя + крик → AUDIBLE | `test_adjacent_shout_audible` |
+| 7 | Обращение по имени → MENTIONED | `test_address_by_name_mentioned` / `test_call_by_name_mentioned` |
+| 8 | Простое упоминание → НЕ MENTIONED | `test_simple_mention_not_mentioned` / `test_local_branch_name_mention_no_longer_mentioned` |
+| 9 | Далёкая несвязанная → ABSENT | `test_far_location_absent` / `test_far_unrelated_location_absent_even_when_addressed` |
+| 10 | AUDIBLE без визуальных деталей | `test_audible_line_does_not_reveal_visual_details` / `test_format_audible_line_uses_template` |
+
+Интеграция CRUD: `test_adjacency_crud_and_perception_integration`,
+`test_rename_updates_adjacency_references`.

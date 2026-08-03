@@ -15,8 +15,9 @@ from .perception import (
     log_perception_decision,
     normalize_visibility,
 )
+from .stimuli import build_audible_line, parse_stimuli, stimulus_targets
 
-Presence = Literal["present", "mentioned", "absent", "told"]
+Presence = Literal["present", "mentioned", "audible", "absent", "told"]
 
 # Presence values that count as real observation for memory / summary extraction.
 MEMORY_OBSERVABLE_PRESENCES: frozenset[str] = frozenset({"present", "told"})
@@ -74,11 +75,13 @@ def compute_mvp_presence(
     same_round_ids: set[int] | None = None,
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
+    adjacency_index: dict[str, set[str]] | None = None,
 ) -> Presence:
     """Compute witness presence for one message and one viewer.
 
     Location/visibility-aware. ``same_round_ids`` is ignored for forcing
-    visibility (kept only for API compatibility).
+    visibility (kept only for API compatibility). ``adjacency_index`` enables
+    AUDIBLE / MENTIONED presence for events from adjacent locations.
     """
     del same_round_ids  # no longer forces present — perception decides
 
@@ -98,6 +101,7 @@ def compute_mvp_presence(
         viewer_location=viewer_location or "",
         event=event,
         viewer_name=viewer_name,
+        adjacency_index=adjacency_index,
     )
 
     log_perception_decision(
@@ -122,6 +126,7 @@ def resolve_presence(
     same_round_ids: set[int] | None = None,
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
+    adjacency_index: dict[str, set[str]] | None = None,
 ) -> Presence:
     """Use stored presence when available, otherwise compute from perception rules."""
     message_id = _message_id(message)
@@ -134,6 +139,7 @@ def resolve_presence(
         same_round_ids=same_round_ids,
         viewer_location=viewer_location,
         character_locations=character_locations,
+        adjacency_index=adjacency_index,
     )
 
 
@@ -142,6 +148,7 @@ def format_line_for_presence(
     presence: Presence,
     character_names: dict[int, str] | None = None,
     templates: dict[str, str] | None = None,
+    viewer_name: str | None = None,
 ) -> str | None:
     """Format one history line according to witness presence."""
     tpl = templates or _WITNESS_TEMPLATES
@@ -162,8 +169,20 @@ def format_line_for_presence(
 
     snippet = _truncate_snippet(content)
     if presence == "mentioned":
+        # Direct address (address/call stimulus aimed at the viewer) → a
+        # first-person form; otherwise the generic mention placeholder.
+        if viewer_name and stimulus_targets(
+            parse_stimuli(_get_attr(message, "stimuli")), viewer_name
+        ):
+            author = _character_name(message, character_names)
+            template = tpl.get("address", "{author} обращается к тебе: «{snippet}»")
+            return template.format(author=author, snippet=snippet)
         template = tpl.get("mentioned", "[Тебя упомянули: {snippet}]")
         return template.format(snippet=snippet)
+
+    if presence == "audible":
+        template = tpl.get("audible", "[Ты слышишь: {snippet}]")
+        return template.format(snippet=build_audible_line(message))
 
     if presence == "told":
         template = tpl.get("told", "[Тебе рассказали: {snippet}]")
@@ -183,6 +202,7 @@ def filter_history_for_character(
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
     max_replies_per_character: int = 0,
+    adjacency_index: dict[str, set[str]] | None = None,
 ) -> str:
     """Build witness-filtered dialogue text for one character (RP generation).
 
@@ -194,6 +214,7 @@ def filter_history_for_character(
     recent = messages[-max_len:] if len(messages) > max_len else messages
     lines: list[str] = []
     char_count: dict[int, int] = {}
+    viewer_name = character_names.get(viewer_character_id, "")
     for message in reversed(recent):
         presence = resolve_presence(
             message,
@@ -203,9 +224,10 @@ def filter_history_for_character(
             same_round_ids=same_round_ids,
             viewer_location=viewer_location,
             character_locations=character_locations,
+            adjacency_index=adjacency_index,
         )
         line = format_line_for_presence(
-            message, presence, character_names
+            message, presence, character_names, viewer_name=viewer_name
         )
         if not line:
             continue
@@ -238,6 +260,7 @@ def filter_history_for_character_with_presence(
     character_locations: dict[int, str] | None = None,
     max_replies_per_character: int = 0,
     max_len: int | None = None,
+    adjacency_index: dict[str, set[str]] | None = None,
 ) -> list:
     """Return a list of message objects filtered by witness perception.
 
@@ -264,6 +287,7 @@ def filter_history_for_character_with_presence(
             same_round_ids=same_round_ids,
             viewer_location=viewer_location,
             character_locations=character_locations,
+            adjacency_index=adjacency_index,
         )
 
         # Skip absent messages
@@ -322,12 +346,13 @@ def filter_history_for_memory_extraction(
     max_len: int | None = None,
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
+    adjacency_index: dict[str, set[str]] | None = None,
 ) -> ObservableContext:
     """Build memory-safe observable dialogue for one character.
 
     Reuses the same presence/perception rules as RP generation, but only
-    includes ``present`` and ``told`` events. Soft ``mentioned`` snippets are
-    excluded so remote name-drops cannot become hard memories.
+    includes ``present`` and ``told`` events. Soft ``mentioned``/``audible``
+    snippets are excluded so remote name-drops cannot become hard memories.
     """
     if max_len is None:
         max_len = len(messages) or 1
@@ -335,6 +360,7 @@ def filter_history_for_memory_extraction(
 
     included: list[ObservableEventLine] = []
     skipped: list[dict[str, Any]] = []
+    viewer_name = character_names.get(viewer_character_id, "")
 
     for message in recent:
         presence = resolve_presence(
@@ -345,6 +371,7 @@ def filter_history_for_memory_extraction(
             same_round_ids=same_round_ids,
             viewer_location=viewer_location,
             character_locations=character_locations,
+            adjacency_index=adjacency_index,
         )
         mid = _message_id(message)
         location = str(_get_attr(message, "location") or "")
@@ -368,7 +395,9 @@ def filter_history_for_memory_extraction(
             continue
 
         # For memory: use full present content; for told keep the told template.
-        line = format_line_for_presence(message, presence, character_names)
+        line = format_line_for_presence(
+            message, presence, character_names, viewer_name=viewer_name
+        )
         if not line:
             skipped.append(
                 {

@@ -79,6 +79,8 @@ class Location(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # JSON list of names of adjacent locations (Sprint 2 — аудиовосприятие соседних)
+    adjacent_to: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -157,6 +159,8 @@ class Message(Base):
     target_character_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     # Communication channel: direct | magic | phone | radio | messenger
     channel: Mapped[str] = mapped_column(String(20), default="direct", nullable=False)
+    # JSON list of world-event stimuli (knock/call/shout/address/loud_sound)
+    stimuli: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     chat: Mapped["Chat"] = relationship(back_populates="messages")

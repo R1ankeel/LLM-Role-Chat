@@ -1058,6 +1058,17 @@ async def get_chat_locations(
     return list(result.scalars().all())
 
 
+async def get_adjacency_index(
+    db: AsyncSession, chat_id: int
+) -> dict[str, set[str]]:
+    """Build a normalized location -> {neighbors} index from ``locations.adjacent_to``.
+
+    Used by the perception layer for AUDIBLE / MENTIONED levels (§6, Sprint 2).
+    """
+    locations = await get_chat_locations(db, chat_id)
+    return perception.build_adjacency_index(locations)
+
+
 async def get_location(db: AsyncSession, location_id: int) -> models.Location | None:
     return await db.get(models.Location, location_id)
 
@@ -1105,6 +1116,9 @@ async def create_location(
         chat_id=chat_id,
         name=name,
         description=(location.description or ""),
+        adjacent_to=perception.serialize_adjacency(
+            getattr(location, "adjacent_to", None)
+        ),
     )
     db.add(db_location)
     try:
@@ -1138,6 +1152,8 @@ async def update_location(
             if conflict is not None:
                 raise ValueError(f"Локация «{conflict.name}» уже существует")
     for field, value in update_data.items():
+        if field == "adjacent_to":
+            value = perception.serialize_adjacency(value)
         setattr(db_location, field, value)
     try:
         await db.commit()
@@ -1204,6 +1220,28 @@ async def _rename_location_references(
         }
         if updated != raw:
             scene.character_locations = json.dumps(updated, ensure_ascii=False)
+            changed = True
+
+    # locations.adjacent_to (JSON-массив имён): заменить old_name на new_name
+    # в соседях других локаций (Спринт 2, аудиосвязь локаций).
+    loc_rows = await db.execute(
+        select(models.Location.id, models.Location.adjacent_to).where(
+            models.Location.chat_id == chat_id
+        )
+    )
+    for loc_id, adjacent_json in loc_rows.all():
+        neighbors = perception._parse_adjacency_list(adjacent_json)
+        replaced = False
+        for i, neighbor in enumerate(neighbors):
+            if perception.locations_match(neighbor, old_name):
+                neighbors[i] = new_name
+                replaced = True
+        if replaced:
+            await db.execute(
+                update(models.Location)
+                .where(models.Location.id == loc_id)
+                .values(adjacent_to=perception.serialize_adjacency(neighbors))
+            )
             changed = True
 
     if changed:
