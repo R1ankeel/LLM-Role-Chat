@@ -12,6 +12,8 @@ import type {
 import type { SceneState } from '@/types/scene'
 import type { MessageStream } from '@/api/sse'
 
+export type ClearScope = 'messages' | 'messages_memories' | 'full'
+
 export interface CreateChatInput {
   name: string
   general_prompt: string
@@ -176,6 +178,7 @@ export interface Api {
   stopGeneration(chatId: number): Promise<void>
   getGenerationStatus(chatId: number): Promise<boolean>
   deleteMessage(chatId: number, messageId: number): Promise<void>
+  clearMessages(chatId: number, scope?: ClearScope): Promise<void>
   getIntervention(chatId: number): Promise<InterventionRead | null>
   setIntervention(chatId: number, instruction: string): Promise<InterventionRead>
   deleteIntervention(chatId: number): Promise<void>

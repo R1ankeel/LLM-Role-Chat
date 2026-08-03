@@ -60,3 +60,9 @@ export async function getGenerationStatus(chatId: number): Promise<boolean> {
 export function deleteMessage(chatId: number, messageId: number): Promise<void> {
   return request(`/chats/${chatId}/messages/${messageId}`, { method: 'DELETE' })
 }
+
+export type ClearScope = 'messages' | 'messages_memories' | 'full'
+
+export function clearMessages(chatId: number, scope: ClearScope = 'messages_memories'): Promise<void> {
+  return request(`/chats/${chatId}/messages`, { method: 'DELETE', query: { scope } })
+}

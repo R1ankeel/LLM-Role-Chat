@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
 import { useChatsStore } from '@/stores/chats'
+import { useMessagesStore } from '@/stores/messages'
 import { useUiStore } from '@/stores/ui'
 
 const chats = useChatsStore()
+const messages = useMessagesStore()
 const ui = useUiStore()
 
 const saving = ref(false)
+const clearing = ref(false)
+const confirmClear = ref(false)
 
 const form = reactive({
   name: '',
@@ -51,6 +55,24 @@ async function save() {
     saving.value = false
   }
 }
+
+async function onClearChat() {
+  if (!chats.currentChatId || clearing.value) return
+  if (!confirmClear.value) {
+    confirmClear.value = true
+    return
+  }
+  clearing.value = true
+  try {
+    await messages.clearMessages()
+    ui.toast('Чат очищен', 'success')
+    confirmClear.value = false
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось очистить чат.', 'error')
+  } finally {
+    clearing.value = false
+  }
+}
 </script>
 
 <template>
@@ -86,6 +108,22 @@ async function save() {
           <span class="toggle__track" aria-hidden="true"><span class="toggle__thumb" /></span>
           <span class="toggle__label">Thinking</span>
         </label>
+      </div>
+
+      <div class="general-settings__danger">
+        <div class="general-settings__danger-text">
+          <span class="general-settings__danger-title">Очистить чат</span>
+          <span class="general-settings__danger-hint">
+            Удаляет все сообщения и воспоминания. Персонажи и локации сохранятся.
+          </span>
+        </div>
+        <button
+          class="button button--danger"
+          :disabled="clearing"
+          @click="onClearChat"
+        >
+          {{ clearing ? 'Очистка…' : confirmClear ? 'Точно очистить?' : 'Очистить' }}
+        </button>
       </div>
 
       <label class="field">
@@ -135,6 +173,35 @@ async function save() {
 
 .general-settings__row .field {
   flex: 1;
+}
+
+.general-settings__danger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+}
+
+.general-settings__danger-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.general-settings__danger-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.general-settings__danger-hint {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
 }
 
 .general-settings__footer {

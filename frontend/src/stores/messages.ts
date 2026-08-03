@@ -297,6 +297,40 @@ export const useMessagesStore = defineStore('messages', () => {
     if (index !== -1) messages.value.splice(index, 1)
   }
 
+  async function clearMessages() {
+    const id = chatId()
+    if (!id || isGenerating.value) return
+    try {
+      await api.clearMessages(id, 'messages_memories')
+    } catch (e) {
+      throw e
+    }
+    clearRestoreTimer()
+    setStatus('idle')
+    generationError.value = null
+    loadError.value = null
+    restoringGeneration.value = false
+    messages.value = []
+    lastUserContent.value = ''
+
+    const characters = useCharactersStore()
+    characters.memories = []
+    characters.summary = null
+
+    const scene = useSceneStore()
+    scene.worldEvents = []
+    await Promise.all([
+      scene.loadForChat(id).catch(() => null),
+      useChatsStore().openChat(id).catch(() => null),
+      useInterventionStore().reset(),
+    ])
+    try {
+      await api.deleteIntervention(id)
+    } catch {
+      // best-effort cleanup
+    }
+  }
+
   async function refreshScene(id: number) {
     await Promise.all([
       useChatsStore().openChat(id).catch(() => null),
@@ -330,6 +364,7 @@ export const useMessagesStore = defineStore('messages', () => {
     regenerateMessage,
     stopGeneration,
     deleteMessage,
+    clearMessages,
     retryLast,
     dismissError,
   }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useSceneStore } from '@/stores/scene'
 import { useChatsStore } from '@/stores/chats'
 import { useUiStore } from '@/stores/ui'
 import ProgressBar from '@/components/common/ProgressBar.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
+import LocationSelect from '@/components/common/LocationSelect.vue'
 import WorldEditModal from '@/components/scene/WorldEditModal.vue'
 
 const scene = useSceneStore()
@@ -21,29 +22,29 @@ const tension = computed(() =>
 const weather = computed(() => scene.scene?.custom_state?.weather || '—')
 const mood = computed(() => scene.scene?.custom_state?.mood || '—')
 const timeOfDay = computed(() => scene.scene?.time_of_day || '—')
-const playerLocation = computed(() => scene.scene?.player_location || '—')
 const activeGoal = computed(() => scene.scene?.custom_state?.active_goal || '')
 const activeEvents = computed(() => scene.scene?.custom_state?.active_events ?? [])
 const importantObjects = computed(() => scene.scene?.custom_state?.important_objects ?? [])
 
-function focusLocation() {
-  locationDraft.value = scene.scene?.player_location ?? ''
-}
+watch(
+  () => scene.scene?.player_location,
+  (value) => {
+    locationDraft.value = value ?? ''
+  },
+  { immediate: true },
+)
 
 async function saveLocation() {
   const chatId = chats.currentChatId
   if (!chatId) return
   const value = locationDraft.value.trim()
-  if (!value || value === scene.scene?.player_location) {
-    locationDraft.value = ''
-    return
-  }
+  if (!value || value === scene.scene?.player_location) return
   saving.value = true
   try {
     await scene.updatePlayerLocation(chatId, value)
-    locationDraft.value = ''
     ui.toast('Локация игрока обновлена', 'success')
   } catch (e) {
+    locationDraft.value = scene.scene?.player_location ?? ''
     ui.toast(e instanceof Error ? e.message : 'Не удалось обновить локацию.', 'error')
   } finally {
     saving.value = false
@@ -126,16 +127,11 @@ async function saveLocation() {
     <div class="world-state__block">
       <span class="world-state__label">Локация игрока</span>
       <div class="world-state__location">
-        <input
+        <LocationSelect
           v-model="locationDraft"
-          class="world-state__input"
-          :placeholder="playerLocation"
-          @focus="focusLocation"
-          @keydown.enter="saveLocation"
+          :disabled="saving"
+          @change="saveLocation"
         />
-        <button class="world-state__save" :disabled="saving || !locationDraft" @click="saveLocation">
-          Сохранить
-        </button>
       </div>
     </div>
     </template>
@@ -235,45 +231,5 @@ async function saveLocation() {
 .world-state__location {
   display: flex;
   gap: var(--space-2);
-}
-
-.world-state__input {
-  flex: 1;
-  min-width: 0;
-  height: 32px;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  font-size: var(--text-sm);
-  transition: border-color var(--transition-fast);
-}
-
-.world-state__input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.world-state__save {
-  height: 32px;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  color: var(--text-primary);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.world-state__save:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--text-muted);
-}
-
-.world-state__save:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

@@ -132,6 +132,19 @@ function onDelete() {
         <div class="message-item__bubble message-item__bubble--user">
           <p class="message-item__text">{{ message.content }}</p>
         </div>
+        <div v-if="!isStreaming" class="message-item__actions">
+          <button
+            class="icon-button icon-button--xs"
+            title="Удалить"
+            aria-label="Удалить сообщение"
+            :disabled="messages.isGenerating"
+            @click="onDelete"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
       </div>
       <button
         v-if="characters.player"

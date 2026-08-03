@@ -45,6 +45,7 @@ export const api: Api = useMocks
       stopGeneration: messagesApi.stopGeneration,
       getGenerationStatus: messagesApi.getGenerationStatus,
       deleteMessage: messagesApi.deleteMessage,
+      clearMessages: messagesApi.clearMessages,
       getIntervention: interventionApi.getIntervention,
       setIntervention: interventionApi.setIntervention,
       deleteIntervention: interventionApi.deleteIntervention,

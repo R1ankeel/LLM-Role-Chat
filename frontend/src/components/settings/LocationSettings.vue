@@ -4,15 +4,15 @@ import { api } from '@/api'
 import { ApiError } from '@/api/client'
 import type { Location } from '@/types/location'
 import { useChatsStore } from '@/stores/chats'
+import { useLocationsStore } from '@/stores/locations'
 import { useUiStore } from '@/stores/ui'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
 
 const chats = useChatsStore()
+const locations = useLocationsStore()
 const ui = useUiStore()
 
-const locations = ref<Location[]>([])
-const loading = ref(false)
 const saving = ref(false)
 
 const showForm = ref(false)
@@ -24,27 +24,11 @@ function chatId(): number | null {
   return chats.currentChatId
 }
 
-async function load() {
-  const id = chatId()
-  if (!id) {
-    locations.value = []
-    return
-  }
-  loading.value = true
-  try {
-    locations.value = await api.fetchLocations(id)
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : 'Не удалось загрузить локации.', 'error')
-  } finally {
-    loading.value = false
-  }
-}
-
 watch(
   () => chats.currentChatId,
-  () => {
+  (id) => {
     closeForm()
-    load()
+    if (id != null) void locations.loadForChat(id)
   },
   { immediate: true },
 )
@@ -72,6 +56,10 @@ function closeForm() {
 
 const formValid = computed(() => formName.value.trim().length > 0 && !saving.value)
 
+async function refresh(id: number) {
+  await locations.forceReload(id)
+}
+
 async function save() {
   const id = chatId()
   if (!id || !formValid.value) return
@@ -91,7 +79,7 @@ async function save() {
       ui.toast('Локация обновлена', 'success')
     }
     closeForm()
-    await load()
+    await refresh(id)
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : 'Не удалось сохранить локацию.', 'error')
   } finally {
@@ -106,7 +94,7 @@ async function remove(loc: Location) {
   try {
     await api.deleteLocation(id, loc.id)
     ui.toast('Локация удалена', 'info')
-    await load()
+    await refresh(id)
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
       const data = e.detailData as { characters?: string[] } | undefined
@@ -169,20 +157,20 @@ async function remove(loc: Location) {
       </div>
     </form>
 
-    <template v-if="loading && !locations.length">
+    <template v-if="locations.loading && !locations.locations.length">
       <div class="location-settings__skeleton" aria-hidden="true">
         <Skeleton v-for="i in 3" :key="i" width="100%" height="48px" radius="10px" />
       </div>
     </template>
 
     <EmptyState
-      v-else-if="!locations.length"
+      v-else-if="!locations.locations.length"
       title="Нет локаций"
       description="Нажмите «Добавить», чтобы создать первую локацию."
     />
 
     <ul v-else class="location-settings__list">
-      <li v-for="loc in locations" :key="loc.id" class="location-settings__row">
+      <li v-for="loc in locations.locations" :key="loc.id" class="location-settings__row">
         <div class="location-settings__info">
           <span class="location-settings__name">{{ loc.name }}</span>
           <span v-if="loc.description" class="location-settings__desc">{{ loc.description }}</span>

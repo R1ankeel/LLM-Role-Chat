@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { useRelationshipsStore } from '@/stores/relationships'
@@ -12,6 +12,7 @@ import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import Skeleton from '@/components/common/Skeleton.vue'
+import LocationSelect from '@/components/common/LocationSelect.vue'
 
 const characters = useCharactersStore()
 const ui = useUiStore()
@@ -21,6 +22,14 @@ const locationDraft = ref('')
 const saving = ref(false)
 
 const selected = computed(() => characters.selected)
+
+watch(
+  () => selected.value?.id,
+  () => {
+    locationDraft.value = selected.value?.location ?? ''
+  },
+  { immediate: true },
+)
 
 const accent = computed(() => (selected.value ? accentForName(selected.value.name) : '#000'))
 
@@ -57,24 +66,18 @@ async function saveLocation() {
   const c = selected.value
   if (!c) return
   const value = locationDraft.value.trim()
-  if (!value || value === c.location) {
-    locationDraft.value = c.location
-    return
-  }
+  if (!value || value === c.location) return
   saving.value = true
   try {
     await characters.updateLocation(c.id, value)
-    locationDraft.value = ''
+    locationDraft.value = value
     ui.toast('Локация сохранена', 'success')
   } catch (e) {
+    locationDraft.value = c.location
     ui.toast(e instanceof Error ? e.message : 'Не удалось сохранить локацию.', 'error')
   } finally {
     saving.value = false
   }
-}
-
-function focusLocation() {
-  locationDraft.value = selected.value?.location ?? ''
 }
 </script>
 
@@ -101,16 +104,11 @@ function focusLocation() {
     <div class="character-details__section">
       <span class="character-details__label">Локация</span>
       <div class="character-details__location">
-        <input
+        <LocationSelect
           v-model="locationDraft"
-          class="character-details__location-input"
-          :placeholder="selected.location || 'Неизвестно'"
-          @focus="focusLocation"
-          @keydown.enter="saveLocation"
+          :disabled="saving"
+          @change="saveLocation"
         />
-        <button class="button button--secondary" :disabled="saving || !locationDraft" @click="saveLocation">
-          Сохранить
-        </button>
       </div>
     </div>
 
@@ -265,24 +263,6 @@ function focusLocation() {
 .character-details__location {
   display: flex;
   gap: var(--space-2);
-}
-
-.character-details__location-input {
-  flex: 1;
-  min-width: 0;
-  height: 34px;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  font-size: var(--text-sm);
-  transition: border-color var(--transition-fast);
-}
-
-.character-details__location-input:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 .character-details__rel-btn {

@@ -10,6 +10,7 @@ import AvatarCropEditor from '@/components/settings/AvatarCropEditor.vue'
 import Badge from '@/components/common/Badge.vue'
 import Modal from '@/components/common/Modal.vue'
 import CharacterFormFields from '@/components/settings/CharacterFormFields.vue'
+import LocationSelect from '@/components/common/LocationSelect.vue'
 
 const characters = useCharactersStore()
 const ui = useUiStore()
@@ -234,12 +235,7 @@ async function submit() {
 
           <label class="field">
             <span class="field__label">Локация</span>
-            <input
-              v-model="form.location"
-              class="field__input"
-              type="text"
-              placeholder="Где находится персонаж"
-            />
+            <LocationSelect v-model="form.location" />
           </label>
 
           <label class="field">

@@ -18,6 +18,7 @@ import type {
   ChatUpdateInput,
   CharacterCreateInput,
   CharacterUpdateInput,
+  ClearScope,
   CreateChatInput,
   LocationCreateInput,
   LocationUpdateInput,
@@ -500,6 +501,16 @@ export const mockApi: Api = {
     const list = mockMessages[chatId] ?? []
     const index = list.findIndex((m) => m.id === messageId)
     if (index !== -1) list.splice(index, 1)
+    return delay(undefined)
+  },
+
+  clearMessages(chatId: number, scope: ClearScope = 'messages_memories'): Promise<void> {
+    delete mockMessages[chatId]
+    delete mockWorldEvents[chatId]
+    if (scope === 'messages_memories' || scope === 'full') {
+      delete mockMemories[chatId]
+      delete mockSummaries[chatId]
+    }
     return delay(undefined)
   },
 

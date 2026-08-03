@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useSceneStore } from '@/stores/scene'
 import { useChatsStore } from '@/stores/chats'
 import { useUiStore } from '@/stores/ui'
@@ -12,11 +12,20 @@ const ui = useUiStore()
 const saving = ref(false)
 
 const weatherOptions = ['Ясно', 'Облачно', 'Дождь', 'Снег', 'Гроза']
+const timeOptions = ['Утро', 'День', 'Вечер', 'Ночь', 'Рассвет', 'Закат']
 
 const form = reactive({
   time_of_day: '',
   weather: '',
   active_goal: '',
+})
+
+const timeOptionsWithCurrent = computed(() => {
+  const set = new Set(timeOptions)
+  if (form.time_of_day && !set.has(form.time_of_day)) {
+    return [...timeOptions, form.time_of_day]
+  }
+  return timeOptions
 })
 
 watch(
@@ -65,12 +74,10 @@ async function save() {
     <div class="world-edit">
       <label class="field">
         <span class="field__label">Время суток</span>
-        <input
-          v-model="form.time_of_day"
-          class="field__input"
-          type="text"
-          placeholder="Например, поздний вечер"
-        />
+        <select v-model="form.time_of_day" class="field__input">
+          <option value="" disabled>Выберите время суток</option>
+          <option v-for="opt in timeOptionsWithCurrent" :key="opt" :value="opt">{{ opt }}</option>
+        </select>
       </label>
 
       <label class="field">

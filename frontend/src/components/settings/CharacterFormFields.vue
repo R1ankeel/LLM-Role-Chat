@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CharacterForm } from '@/types/character'
+import LocationSelect from '@/components/common/LocationSelect.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -40,12 +41,7 @@ const temperature = {
 
       <label class="field">
         <span class="field__label">Локация</span>
-        <input
-          v-model="model.location"
-          class="field__input"
-          type="text"
-          placeholder="Где находится персонаж"
-        />
+        <LocationSelect v-model="model.location" />
       </label>
 
       <label class="field">
