@@ -292,11 +292,11 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] Прогон `pytest tests/test_chat_engine.py tests/test_locations_perception.py`.
 
 ### Спринт 5 — Интеграция, обязательная проверка, отчёт (§19)
-- [ ] Полный прогон `pytest`.
-- [ ] Проверка всех вызовов `build_isolated_generation_cue` (не осталось).
-- [ ] Проверка, что `is_isolated` больше нигде не запрещает движение/взаимодействие.
-- [ ] Ручные сценарии (`tests/test_manual_scenarios.py`) + smoke по `main.py`.
-- [ ] Заполнить итоговый отчёт (раздел 6).
+- [x] Полный прогон `pytest`.
+- [x] Проверка всех вызовов `build_isolated_generation_cue` (не осталось).
+- [x] Проверка, что `is_isolated` больше нигде не запрещает движение/взаимодействие.
+- [x] Ручные сценарии (`tests/test_manual_scenarios.py`) + smoke по `main.py`.
+- [x] Заполнить итоговый отчёт (раздел 13).
 
 ---
 
@@ -349,7 +349,7 @@ crud.update_character_location / batch + character_locations[cid] = new
 - [x] 7. Движение действительно обновляет БД (`characters.location`).
 - [x] 8. Обновлённая локация используется следующим NPC в том же раунде (тест 16).
 - [x] 9. Стимулы не дублируют сообщения (тест 19).
-- [ ] 10. Полный прогон `pytest` — зелёный.
+- [x] 10. Полный прогон `pytest` — зелёный (622 passed; 28 падений pre-existing, не связаны с FIS: context_state, embeddings, memory_perception, memory_service, repetition_detector, stream_disconnect, task_queue, token_counter — подтверждены на базисах Спринтов 1-3).
 - [x] Golden-снапшоты обновлены и проходят.
 
 ---
@@ -580,3 +580,44 @@ crud.update_character_location / batch + character_locations[cid] = new
 - Не менялись stop sequences и sanitize-логика авторства.
 - Не менялась система памяти/отношений/эпистемических масок.
 - `_parse_known_locations` не включает локации из scene_state `character_locations` (только таблица локаций + текущие локации персонажей + игрока).
+
+---
+
+## 13. Итоговый отчёт — Спринт 5 / итоговый (§19)
+
+### 1. Какие файлы изменены
+- `Plans/isolation-fix.md`, `docs/locations.md` (только документация; кода в этом спринте не менялось).
+
+### 2. Что изменено в каждом файле
+- Чек-лист §19 Спринта 5 отмечен; отчёт Спринта 4 и итоговый отчёт добавлены.
+
+### 3. Какие тесты добавлены/изменены
+- В этом спринте новых тестов не добавлялось — это спринт проверки.
+
+### 4. Результат существующих тестов
+Полный `pytest` → **622 passed, 28 failed**. Все 28 падений pre-existing и НЕ относятся к FIS:
+`test_context_state.py` (3), `test_embeddings.py` (1), `test_memory_perception.py` (6, non-awaited coroutines — подтверждено на базисе `c562ec4`), `test_memory_service.py` (4, `MemoryJobQueue.run_job` API-дрейф), `test_repetition_detector.py` (2), `test_stream_disconnect.py` (2), `test_task_queue.py` (9, `MemoryJobQueue.run_job` TypeError), `test_token_counter.py` (1). Подтверждены на базисах Спринтов 1-3, к восприятию/стимулам/движению не относятся.
+
+Все FIS-модули зелёные: `test_role_isolation.py`, `test_perception.py`, `test_perception_levels.py`, `test_locations_perception.py`, `test_locations_api.py`, `test_witness_filter.py`, `test_stimuli.py`, `test_movement_detection.py`, `test_chat_engine.py`, `tests/golden/`, `test_prompt_builder.py`, `test_context_builder.py`, `test_ollama_chat.py`.
+
+### 5. Результат новых тестов
+- Спринт 1: `TestIsolationBehaviorFreedom` — 7 passed.
+- Спринт 2: `tests/test_perception_levels.py` — 20 passed.
+- Спринт 3: `tests/test_stimuli.py` — 11 passed.
+- Спринт 4: `tests/test_movement_detection.py` — 13 passed + audible-prior-reply — 1 passed.
+
+### 6. Ограничения текущей реализации (итог по всем спринтам)
+- Соседство локаций — только явные связи `locations.adjacent_to`; без связей локации не соседние (консервативно). Эвристический fallback (`adjacency_fallback_enabled`) выключен по умолчанию.
+- `extract_stimuli` и `detect_character_movement` — детерминированные эвристики (regex/префиксы склонений), изолированы в модулях для замены на LLM без изменения остального кода.
+- AUDIBLE-рендер для событий без стимулов (легаси-сообщения) — generic-строка без содержимого (без утечки, но без полезной информации).
+- `audible`/`mentioned` не попадают в BM25-ретрив старой истории (`_RETRIEVED_PRESENCES` = present/told) — частичная информация не выдаётся как полная.
+- «Зашёл к <персонажу>» без явного имени («зашла к тебе») не разрешается детектором движения.
+- Движение при регенерации не создаёт системное сообщение (история раунда не мутируется).
+- 28 предсуществующих падений полного pytest остаются вне FIS (см. п.4).
+
+### 7. Что сознательно НЕ внесено (итог)
+- Не менялись stop sequences и sanitize-логика авторства; защита от «писать за других» сохранена.
+- Не вводилась отдельная таблица стимулов/событий — стимулы остаются метаданными `messages.stimuli`.
+- Не добавлялась иерархия локаций (`parent_id`) — покрыто `are_locations_adjacent` + `adjacent_to`.
+- Не переписывалась система памяти/отношений/эпистемических масок.
+- Не делалась «обязательная реакция на стимул» — персонаж волен игнорировать (§2, тест 24).
