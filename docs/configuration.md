@@ -253,12 +253,16 @@
 Фаза 1 (канонические локации, read-path) реализована 08-04; флаг
 `WORLD_ENGINE_LOCATIONS_ENABLED` по-прежнему **`false`** — включает сравнение
 локаций по `location_id`, откат — выключение флага (возврат к строкам).
+Фаза 2 (tool-calling `take_actions`, shadow) реализована 08-04; флаг
+`WORLD_ENGINE_TOOLS_ENABLED` по-прежнему **`false`** — включает ветку
+tools/format в генерации: действия извлекаются в `TurnOutput`, логируются,
+**не применяются**; откат — выключение флага (генерация текст-only).
 Каждая фаза включает свой флаг отдельным canary'ем.
 
 | ключ | дефолт | описание (фаза) |
 |---|---|---|
 | `WORLD_ENGINE_LOCATIONS_ENABLED` | `false` | канонические локации, сравнение по `location_id` (Фаза 1, реализована) |
-| `WORLD_ENGINE_TOOLS_ENABLED` | `false` | tool-calling `take_actions` в shadow (Фаза 2, Ул.4) |
+| `WORLD_ENGINE_TOOLS_ENABLED` | `false` | tool-calling `take_actions` в shadow: извлечение, логирование, не применяются (Фаза 2, реализована) |
 | `WORLD_ENGINE_EVENTS_ENABLED` | `false` | `WorldEvent` dual-write + shadow восприятие (Фаза 3) |
 | `WORLD_ENGINE_PERCEPTION_ENABLED` | `false` | cutover на `PerceptionResult`/Renderer (Фаза 4, Ул.2) |
 | `WORLD_ENGINE_RECENCY_TAIL_ENABLED` | `false` | Recency Tail в хвост промпта (Фаза 4, Ул.3) |

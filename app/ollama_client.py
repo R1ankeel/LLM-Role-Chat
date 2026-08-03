@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import re
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -33,6 +34,7 @@ from .prompt_builder import (
     build_summary_system,
     build_summary_user,
     build_system_prompt,
+    build_take_actions_instruction,
     build_user_context_message,
     build_vocabulary_block,
     format_character_descriptor,
@@ -62,6 +64,165 @@ OLLAMA_BASE_URL = settings.ollama_base_url
 DEFAULT_TEMPERATURE = settings.default_temperature
 MEMORY_EXTRACTION_TEMP = 0.3
 SUMMARY_TEMP = 0.3
+
+# ---------------------------------------------------------------------------
+# WPE 3.0 Фаза 2 (Plans/WPE.md §8, Ул.4): tool-calling take_actions (shadow).
+# Действия извлекаются из tool_calls/JSON-Schema, логируются, НЕ применяются.
+# Кэш возможностей модели (один раз на имя модели, §12) + shadow-метрики для
+# критерия выхода §10 (доля move_to/send_message/адресации, латентность).
+# ---------------------------------------------------------------------------
+
+# model_name -> "tools" | "format" | "text" (лучший поддерживаемый режим)
+_MODEL_TOOL_MODE_CACHE: dict[str, str] = {}
+
+WPE_TOOLS_STATS: dict[str, Any] = {
+    "calls": 0,
+    "by_mode": {},
+    "schema_valid": 0,
+    "with_move_to": 0,
+    "with_send_message": 0,
+    "with_addressing": 0,
+    "latency_ms": [],
+}
+
+
+def _tool_mode_chain(model_name: str, preferred: str) -> list[str]:
+    """Порядок попыток для модели: tools → format → text (§8), с кэшем (§12)."""
+    cached = _MODEL_TOOL_MODE_CACHE.get(model_name)
+    if cached == "tools":
+        return ["tools"]
+    if cached == "format":
+        return ["format"]
+    if cached == "text":
+        return ["text"]
+    return {
+        "tools": ["tools", "format", "text"],
+        "format": ["format", "text"],
+        "text": ["text"],
+    }.get(preferred, ["text"])
+
+
+def _next_tool_mode(model_name: str, current: str, wants_format: bool) -> str:
+    """Понизить режим tools→format→text и запомнить в кэш (после 400 от Ollama)."""
+    if current == "tools":
+        nxt = "format" if wants_format else "text"
+    elif current == "format":
+        nxt = "text"
+    else:
+        nxt = current
+    _MODEL_TOOL_MODE_CACHE[model_name] = nxt
+    return nxt
+
+
+def _tools_unsupported_error(body: str) -> bool:
+    lowered = body.lower()
+    return "tool" in lowered and any(
+        k in lowered for k in ("not support", "unsupported", "unknown field", "no tool")
+    )
+
+
+def _format_unsupported_error(body: str) -> bool:
+    lowered = body.lower()
+    if "format" in lowered and any(
+        k in lowered for k in ("not support", "unsupported", "unknown field")
+    ):
+        return True
+    return "failed to parse" in lowered or "unexpected json" in lowered
+
+
+def wpe_tools_stats_snapshot() -> dict[str, Any]:
+    """Снимок shadow-метрик WPE Фазы 2 для canary-измерений (§10, §12)."""
+    lats = list(WPE_TOOLS_STATS["latency_ms"])
+    return {
+        "calls": WPE_TOOLS_STATS["calls"],
+        "by_mode": dict(WPE_TOOLS_STATS["by_mode"]),
+        "schema_valid": WPE_TOOLS_STATS["schema_valid"],
+        "with_move_to": WPE_TOOLS_STATS["with_move_to"],
+        "with_send_message": WPE_TOOLS_STATS["with_send_message"],
+        "with_addressing": WPE_TOOLS_STATS["with_addressing"],
+        "latency_ms": lats,
+        "latency_avg_ms": sum(lats) / len(lats) if lats else 0.0,
+        "latency_max_ms": max(lats) if lats else 0.0,
+    }
+
+
+def _record_shadow_turn(
+    chat_id: int,
+    character_name: str,
+    mode: str,
+    turn_output: schemas.TurnOutput | None,
+    latency_ms: float,
+) -> None:
+    """Логирует и накапливает shadow-результат хода (Фаза 2). Действия не применяются."""
+    stats = WPE_TOOLS_STATS
+    stats["calls"] += 1
+    stats["by_mode"][mode] = stats["by_mode"].get(mode, 0) + 1
+    stats["latency_ms"].append(latency_ms)
+
+    if turn_output is None:
+        logger.warning(
+            "[WPE-P2] shadow chat_id=%d character=%s mode=%s: схема-невалидно/нет "
+            "tool_calls, действия не извлечены (латентность %.1f ms)",
+            chat_id,
+            character_name,
+            mode,
+            latency_ms,
+        )
+        return
+
+    stats["schema_valid"] += 1
+    actions = turn_output.actions
+    targets = turn_output.reply_target_character_ids
+    if any(a.type == "move_to" for a in actions):
+        stats["with_move_to"] += 1
+    if any(a.type == "send_message" for a in actions):
+        stats["with_send_message"] += 1
+    if targets:
+        stats["with_addressing"] += 1
+
+    logger.info(
+        "[WPE-P2] shadow chat_id=%d character=%s mode=%s schema_valid=yes "
+        "targets=%s actions=%s (латентность %.1f ms)",
+        chat_id,
+        character_name,
+        mode,
+        targets,
+        [a.model_dump(exclude_none=True) for a in actions],
+        latency_ms,
+    )
+
+
+def _parse_tool_calls(raw: list) -> schemas.TurnOutput | None:
+    """Разобрать `message.tool_calls` (Ollama chat) в TurnOutput. И14: только нативно."""
+    for call in raw or []:
+        fn = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(fn, dict) or fn.get("name") != "take_actions":
+            continue
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(args, dict):
+            try:
+                return schemas.TurnOutput.model_validate(args)
+            except Exception as exc:
+                logger.warning("[WPE-P2] невалидные take_actions аргументы: %s (%s)", args, exc)
+                return None
+    return None
+
+
+def _parse_turn_output_json(text: str) -> schemas.TurnOutput | None:
+    """Разобрать JSON-ответ формат-пути (Ollama `format` / response_format) в TurnOutput."""
+    payload = _extract_json_payload(text)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return schemas.TurnOutput.model_validate(payload)
+    except Exception as exc:
+        logger.warning("[WPE-P2] невалидный take_actions JSON: %s (%s)", payload, exc)
+        return None
 
 # Backward compatibility for tests and external patches - use properties to read from settings dynamically
 class _ConfigProxy:
@@ -346,6 +507,7 @@ def _build_generate_payload(
     stream: bool,
     enable_thinking: bool | None = None,
     num_ctx: int | None = None,
+    format_schema: dict | None = None,
 ) -> dict:
     options: dict = {"temperature": temperature}
     if stop:
@@ -361,6 +523,8 @@ def _build_generate_payload(
     }
     if _resolve_thinking(enable_thinking) and stream:
         payload["think"] = True
+    if format_schema:
+        payload["format"] = format_schema
     return payload
 
 
@@ -373,6 +537,8 @@ def _build_chat_payload(
     stream: bool,
     enable_thinking: bool | None = None,
     num_ctx: int | None = None,
+    tools: list | None = None,
+    format_schema: dict | None = None,
 ) -> dict:
     options: dict = {"temperature": temperature}
     if stop:
@@ -388,6 +554,10 @@ def _build_chat_payload(
     }
     if _resolve_thinking(enable_thinking) and stream:
         payload["think"] = True
+    if tools:
+        payload["tools"] = tools
+    if format_schema:
+        payload["format"] = format_schema
     return payload
 
 
@@ -511,9 +681,12 @@ async def _stream_ollama_generate(
     *,
     enable_thinking: bool | None = None,
     num_ctx: int | None = None,
+    format_schema: dict | None = None,
 ) -> AsyncIterator[dict]:
     think_sent = _resolve_thinking(enable_thinking)
     last_error = None
+    mode_chain = _tool_mode_chain(model_name, "format" if format_schema else "text")
+    current_mode = mode_chain[0]
     for attempt in range(1, MAX_RETRIES + 1):
         full_response = ""
         full_thinking = ""
@@ -525,6 +698,7 @@ async def _stream_ollama_generate(
             stream=True,
             enable_thinking=think_sent,
             num_ctx=num_ctx,
+            format_schema=(format_schema if current_mode == "format" else None),
         )
 
         try:
@@ -539,6 +713,15 @@ async def _stream_ollama_generate(
                             model_name,
                         )
                         think_sent = False
+                        continue
+                    if current_mode == "format" and _format_unsupported_error(body):
+                        nxt = _next_tool_mode(model_name, current_mode, wants_format=True)
+                        logger.warning(
+                            "Ollama: модель не поддерживает format, повторяю в режиме %s (%s)",
+                            nxt,
+                            model_name,
+                        )
+                        current_mode = nxt
                         continue
                     raise RuntimeError(
                         f"Ollama вернула ошибку {response.status_code}: {body}"
@@ -569,6 +752,8 @@ async def _stream_ollama_generate(
                 "type": "complete",
                 "text": full_response,
                 "thinking_len": len(full_thinking),
+                "tool_calls": [],
+                "tool_mode": current_mode,
             }
             return
 
@@ -603,9 +788,16 @@ async def _stream_ollama_chat(
     *,
     enable_thinking: bool | None = None,
     num_ctx: int | None = None,
+    tools: list | None = None,
+    format_schema: dict | None = None,
 ) -> AsyncIterator[dict]:
     think_sent = _resolve_thinking(enable_thinking)
     last_error = None
+    mode_chain = _tool_mode_chain(
+        model_name, "tools" if tools else ("format" if format_schema else "text")
+    )
+    current_mode = mode_chain[0]
+    tool_calls: list[dict[str, Any]] = []
     for attempt in range(1, MAX_RETRIES + 1):
         full_response = ""
         full_thinking = ""
@@ -617,6 +809,8 @@ async def _stream_ollama_chat(
             stream=True,
             enable_thinking=think_sent,
             num_ctx=num_ctx,
+            tools=(tools if current_mode == "tools" else None),
+            format_schema=(format_schema if current_mode == "format" else None),
         )
 
         try:
@@ -631,6 +825,26 @@ async def _stream_ollama_chat(
                             model_name,
                         )
                         think_sent = False
+                        continue
+                    if current_mode == "tools" and _tools_unsupported_error(body):
+                        nxt = _next_tool_mode(
+                            model_name, current_mode, wants_format=bool(format_schema)
+                        )
+                        logger.warning(
+                            "Ollama: модель не поддерживает tools, повторяю в режиме %s (%s)",
+                            nxt,
+                            model_name,
+                        )
+                        current_mode = nxt
+                        continue
+                    if current_mode == "format" and _format_unsupported_error(body):
+                        nxt = _next_tool_mode(model_name, current_mode, wants_format=True)
+                        logger.warning(
+                            "Ollama: модель не поддерживает format, повторяю в режиме %s (%s)",
+                            nxt,
+                            model_name,
+                        )
+                        current_mode = nxt
                         continue
                     raise RuntimeError(
                         f"Ollama вернула ошибку {response.status_code}: {body}"
@@ -650,6 +864,8 @@ async def _stream_ollama_chat(
                     if chunk := message.get("content"):
                         full_response += chunk
                         yield {"type": "token", "content": chunk}
+                    if message.get("tool_calls"):
+                        tool_calls.extend(message["tool_calls"])
 
             if full_thinking and not full_response:
                 logger.warning(
@@ -661,6 +877,8 @@ async def _stream_ollama_chat(
                 "type": "complete",
                 "text": full_response,
                 "thinking_len": len(full_thinking),
+                "tool_calls": tool_calls,
+                "tool_mode": current_mode,
             }
             return
 
@@ -822,6 +1040,11 @@ async def _generate_once(
     system_prompt = build_system_prompt(
         character, general_prompt, strict=strict_isolation,
         relationships_block=relationships_block,
+        take_actions_instruction=(
+            build_take_actions_instruction()
+            if settings.world_engine_tools_enabled
+            else ""
+        ),
     )
 
     if built_context is not None:
@@ -998,8 +1221,76 @@ async def _generate_once(
 
     generated = ""
     thinking_len = 0
+    tools_enabled = settings.world_engine_tools_enabled
+    shadow_turn_output: schemas.TurnOutput | None = None
+    shadow_tool_mode = "text"
 
-    if settings.use_chat_api:
+    if tools_enabled:
+        # WPE 3.0 Фаза 2: tool-calling take_actions (shadow). Токены стримятся
+        # как раньше, tool_calls в терминальном сообщении не рендерятся (§8).
+        shadow_tool_mode = "tools" if settings.use_chat_api else "format"
+        _t0 = time.perf_counter()
+        if settings.use_chat_api:
+            tool_calls: list[dict[str, Any]] = []
+            token_buffer = ""
+            async for event in _stream_ollama_chat(
+                client,
+                model_name,
+                chat_messages,
+                temperature=temperature,
+                stop=stop,
+                enable_thinking=thinking,
+                num_ctx=num_ctx,
+                tools=[schemas.build_take_actions_tool()],
+                format_schema=schemas.build_take_actions_json_schema(),
+            ):
+                if event.get("content"):
+                    token_buffer += event["content"]
+                    if len(token_buffer) >= 10:
+                        tokens_collected.append(token_buffer)
+                        token_buffer = ""
+                elif event["type"] == "complete":
+                    if token_buffer:
+                        tokens_collected.append(token_buffer)
+                        token_buffer = ""
+                    generated = event["text"]
+                    thinking_len = event.get("thinking_len", 0)
+                    shadow_tool_mode = event.get("tool_mode", "tools")
+                    tool_calls = event.get("tool_calls") or []
+            shadow_turn_output = _parse_tool_calls(tool_calls)
+        else:
+            token_buffer = ""
+            async for event in _stream_ollama_generate(
+                client,
+                model_name,
+                full_prompt,
+                temperature=temperature,
+                stop=stop,
+                enable_thinking=thinking,
+                num_ctx=num_ctx,
+                format_schema=schemas.build_take_actions_json_schema(),
+            ):
+                if event.get("content"):
+                    token_buffer += event["content"]
+                    if len(token_buffer) >= 10:
+                        tokens_collected.append(token_buffer)
+                        token_buffer = ""
+                elif event["type"] == "complete":
+                    if token_buffer:
+                        tokens_collected.append(token_buffer)
+                        token_buffer = ""
+                    generated = event["text"]
+                    thinking_len = event.get("thinking_len", 0)
+                    shadow_tool_mode = event.get("tool_mode", "format")
+            shadow_turn_output = _parse_turn_output_json(generated)
+        _record_shadow_turn(
+            chat_id,
+            character.name,
+            shadow_tool_mode,
+            shadow_turn_output,
+            (time.perf_counter() - _t0) * 1000.0,
+        )
+    elif settings.use_chat_api:
         if thinking:
             token_buffer = ""
             async for event in _stream_ollama_chat(

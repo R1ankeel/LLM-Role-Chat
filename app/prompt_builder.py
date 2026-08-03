@@ -317,11 +317,26 @@ def build_user_context_message(*blocks: str) -> str:
     return "\n\n".join(parts)
 
 
+def build_take_actions_instruction() -> str:
+    """Инструкция tool-calling `take_actions` (WPE.md §8, Ул.4, Фаза 2).
+
+    Добавляется в системный промпт генерации при включённом флаге
+    `WORLD_ENGINE_TOOLS_ENABLED`: текст реплики и действия — в одном ответе,
+    действия передаются только через вызов функции (И14).
+    """
+    return (
+        "Ты должен использовать вызов функции `take_actions` с массивом действий, "
+        "если твой персонаж перемещается или отправляет сообщение. "
+        "Текст реплики и действия — в одном ответе."
+    )
+
+
 def build_system_prompt(
     character: Any,
     general_prompt: str,
     strict: bool = False,
     relationships_block: str = "",
+    take_actions_instruction: str = "",
 ) -> str:
     """Assemble full system prompt: card → examples → rules (with negative) → isolation (per 3.5 full localization)."""
     parts = [build_character_card(character)]
@@ -335,6 +350,9 @@ def build_system_prompt(
 
     parts.append(build_rules_block())
     parts.append(build_role_isolation_block(character.name, strict=strict))
+
+    if take_actions_instruction:
+        parts.append(take_actions_instruction)
 
     return "\n\n".join(parts)
 

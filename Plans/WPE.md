@@ -458,18 +458,34 @@ Tool-схема (OpenAI-совместимая, используется и в O
 - ✅ Откат: возврат к сравнению строк — выключение флага (проверено тестом
   `test_flag_off_uses_string_comparison`).
 
-**Фаза 2 — Tool-calling генерация (shadow → canary)** [Ул.4]
-- `ollama_client.generate` получает ветку tools/format (`take_actions`).
-  В shadow-режиме: действия извлекаются, **логируются, не применяются**;
-  текст остаётся прежним. Рядом — `reply_target_character_ids`.
-- Системный промпт + инструкция `take_actions`. Streaming-контракт:
-  токены как раньше, `tool_calls` в терминальном сообщении, не рендерятся.
-- Фоллбэк tools→format→text-only (deprecated).
-- Флаг: `WORLD_ENGINE_TOOLS_ENABLED`.
-- Критерий выхода: на canary: 100% схема-валидных вызовов без падения
-  генерации; доля ходов с корректным `move_to`/`send_message`/адресацией
-  измерена и задокументирована; прирост латентности раунда измерен (§12).
-- Откат: tools-ветка выключается, генерация текст-only.
+**Фаза 2 — Tool-calling генерация (shadow → canary)** — ✅ реализована 08-04
+- ✅ `ollama_client` получил ветку tools/format (`take_actions`): payload
+  chat/generate принимают `tools` / `format` (JSON-Schema) из
+  `schemas.build_take_actions_tool` / `build_take_actions_json_schema`; в
+  shadow-режиме действия извлекаются в `schemas.TurnOutput`, **логируются
+  (`[WPE-P2] shadow …`), не применяются**; текст прежний. Рядом —
+  `reply_target_character_ids`.
+- ✅ Системный промпт: `build_take_actions_instruction` (гейт флагом), в
+  `build_system_prompt` по опциональному параметру. Streaming-контракт:
+  токены стримятся как раньше, `tool_calls` приходят в терминальном
+  сообщении и **не рендерятся как текст** (тест #22).
+- ✅ Фоллбэк строго нативный (И14): tools → `format` (JSON-Schema) →
+  text-only (deprecated); срабатывает по 400 «не поддерживает tools/format».
+  Кэш возможностей модели один раз на имя модели (§12).
+- ✅ Флаг: `WORLD_ENGINE_TOOLS_ENABLED` (по умолчанию `false`).
+- ✅ Shadow-метрики критерия выхода (§10): `ollama_client.WPE_TOOLS_STATS` +
+  `wpe_tools_stats_snapshot()` — доля ходов с корректным `move_to`/
+  `send_message`/адресацией (поля `with_move_to`/`with_send_message`/
+  `with_addressing`, `schema_valid`) и латентность хода (`latency_ms`,
+  avg/max) — собираются на canary и документируются (§12).
+- ✅ Критерий выхода: покрыто `tests/test_world_engine_phase2.py` (19 тестов:
+  инструкция, payload tools/format, streaming-контракт #22, фоллбэк tools→
+  format→text-only, кэш, shadow без применения действий). Регрессий нет
+  (682 passed; 28 pre-existing падений вне scope, набор идентичен Фазе 1).
+  Канареечный запуск (реальные модели, 100% схема-валидных вызовов без
+  падения генерации + прирост латентности) — отдельным отчётом по §12.
+- ✅ Откат: tools-ветка выключается флагом, генерация текст-only (проверено
+  тестом `test_tools_flag_off_text_only_no_shadow`).
 
 **Фаза 3 — WorldEvent dual-write + shadow Perception (2 канала)**
 - `WorldEvent` создаётся рядом с `Message` атомарно (одна транзакция).

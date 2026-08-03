@@ -150,6 +150,27 @@
 3. При исчерпании бюджета изоляции и `FALLBACK_ON_ISOLATION_FAILURE` — fallback-промпт с температурой 0.6.
 4. Стриминг токенов идёт по мере получения; финальный санитизированный текст отдаётся событием `response`.
 
+### 4.1. WPE 3.0 Фаза 2: tool-calling `take_actions` (shadow)
+
+При включённом флаге `WORLD_ENGINE_TOOLS_ENABLED` `_generate_once` использует
+ветку tools/format вместо обычного вызова (подробности: `Plans/WPE.md` §8, §10):
+
+- **Chat-путь**: в `/api/chat` уходит `tools: [take_actions]` (OpenAI-схема из
+  `schemas.build_take_actions_tool`); `tool_calls` приходят в терминальном
+  сообщении, **не рендерятся как текст** (тест #22) и парсятся в
+  `schemas.TurnOutput` (`reply_target_character_ids` + `actions[]`).
+- **Generate-путь**: `/api/generate` с `format: <JSON-Schema>`
+  (`build_take_actions_json_schema`); выходной JSON парсится в `TurnOutput`.
+- **Shadow**: действия извлекаются, логируются (`[WPE-P2] shadow …`), метрики
+  копятся в `ollama_client.WPE_TOOLS_STATS` (`wpe_tools_stats_snapshot()`);
+  **не применяются** — текст реплики остаётся прежним.
+- **Фоллбэк** строго нативный (И14): tools → `format` → text-only (deprecated),
+  срабатывает по HTTP 400 «не поддерживает tools/format»; возможности модели
+  кэшируются один раз на имя модели (§12).
+- **Откат**: выключение флага возвращает генерацию текст-only.
+- Системный промпт получает инструкцию `build_take_actions_instruction` (по
+  гейту флага) — текст реплики и действия в одном ответе.
+
 ### 5. Пост-раунд (в том же запросе)
 
 1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций.
