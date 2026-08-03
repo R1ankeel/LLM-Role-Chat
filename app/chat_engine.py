@@ -772,6 +772,7 @@ async def process_user_message_streaming(
                     content=loc_msg_text,
                     visibility="global",
                 ),
+                round_id=round_id,
             )
             yield {"type": "message", "message": _message_to_dict(loc_message)}
             round_messages.append(loc_message)
@@ -806,6 +807,7 @@ async def process_user_message_streaming(
                     )
                 ],
             ),
+            round_id=round_id,
         )
         # Perception for this reply before the next character generates
         await crud.compute_and_save_presence_for_message(
@@ -940,6 +942,7 @@ async def process_user_message_streaming(
                             content=loc_msg_text,
                             visibility="global",
                         ),
+                        round_id=round_id,
                     )
                     yield {"type": "message", "message": _message_to_dict(loc_message)}
                     round_messages.append(loc_message)

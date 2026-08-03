@@ -263,7 +263,7 @@ tools/format в генерации: действия извлекаются в `
 |---|---|---|
 | `WORLD_ENGINE_LOCATIONS_ENABLED` | `false` | канонические локации, сравнение по `location_id` (Фаза 1, реализована) |
 | `WORLD_ENGINE_TOOLS_ENABLED` | `false` | tool-calling `take_actions` в shadow: извлечение, логирование, не применяются (Фаза 2, реализована) |
-| `WORLD_ENGINE_EVENTS_ENABLED` | `false` | `WorldEvent` dual-write + shadow восприятие (Фаза 3) |
+| `WORLD_ENGINE_EVENTS_ENABLED` | `false` | `WorldEvent` dual-write атомарно с `Message` + shadow `perceive()` 2 канала, классификация расхождений (Фаза 3, реализована) |
 | `WORLD_ENGINE_PERCEPTION_ENABLED` | `false` | cutover на `PerceptionResult`/Renderer (Фаза 4, Ул.2) |
 | `WORLD_ENGINE_RECENCY_TAIL_ENABLED` | `false` | Recency Tail в хвост промпта (Фаза 4, Ул.3) |
 | `WORLD_ENGINE_ACTIONS_ENABLED` | `false` | применение действий + System Narrator (Фаза 5, Ул.1) |

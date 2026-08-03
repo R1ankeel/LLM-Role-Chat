@@ -1,6 +1,14 @@
 # World & Perception Engine 3.0 — план внедрения (v3)
 
-> Дата: 2026-08-03 · Статус: **Фаза 1 завершена (08-04); ожидает ревью перед Фазой 2**.
+> Дата: 2026-08-03 · Статус: **Фаза 3 реализована (08-04); ожидает ревью перед Фазой 4**.
+> Статус фазы 3: `WorldEvent` dual-write атомарно с `Message`
+> (`crud.create_message`, флаг `WORLD_ENGINE_EVENTS_ENABLED`), двухканальный
+> `perceive()` в shadow (`app/wpe_shadow.py`): расхождения со старым
+> `can_character_perceive_event` классифицируются по 4 категориям v2 + И13
+> (`GLASS`/`SHOUT_THROUGH_WALL`/`INVISIBLE`/`WALL`), логируются (`[WPE-P3]`),
+> в контекст не идут; метрики `WPE_SHADOW_STATS`; откат — выключение флага.
+> Статус фазы 2: tool-calling `take_actions` в shadow (`WORLD_ENGINE_TOOLS_ENABLED`),
+> `TurnOutput` + фоллбэк tools→format→text-only, метрики `WPE_TOOLS_STATS`.
 > Статус фазы 1: канонические локации в read-path — backfill
 > `characters.location_id` (`crud.backfill_character_location_ids`,
 > `scripts/backfill_location_ids.py`), `perceive()` сравнивает `location_id`
@@ -487,17 +495,30 @@ Tool-схема (OpenAI-совместимая, используется и в O
 - ✅ Откат: tools-ветка выключается флагом, генерация текст-only (проверено
   тестом `test_tools_flag_off_text_only_no_shadow`).
 
-**Фаза 3 — WorldEvent dual-write + shadow Perception (2 канала)**
-- `WorldEvent` создаётся рядом с `Message` атомарно (одна транзакция).
-- Новый двухканальный `perceive()` и Address Resolution запускаются в shadow:
-  результат логируется, в сборку контекста не идёт.
-- Классификация расхождений со старым `can_character_perceive_event` по
-  четырём категориям v2 (§7 Фаза 2), плюс новые `expected_model_change`
-  категории от И13: "стекло", "крик из-за стены", "невидимость".
-- Флаг: `WORLD_ENGINE_EVENTS_ENABLED`.
-- Критерий выхода: все существенные классы расхождений выявлены, каждый
-  закреплён golden-тестом, необъяснимых расхождений нет.
-- Откат: shadow выключается, dual-write можно оставить.
+**Фаза 3 — WorldEvent dual-write + shadow Perception (2 канала)** — ✅ реализована 08-04
+- ✅ Dual-write: `WorldEvent` создаётся рядом с `Message` атомарно (одна
+  транзакция: `db.flush` → добавление `WorldEvent` → один `commit`) в
+  `crud.create_message` (`_build_world_event`, event_type `speech`/`system`,
+  `round_id` для user выводится `r{chat_id}-m{message_id}`; в round-пути
+  chat_engine пробрасывает `round_id` явно).
+- ✅ Shadow `perceive()` (2 канала, И13): новый `app/wpe_shadow.py` —
+  `classify_shadow_discrepancy` (4 категории v2: `regression`/`fix`/
+  `expected_expansion`/`expected_model_change` + И13-подкатегории `GLASS`/
+  `SHOUT_THROUGH_WALL`/`INVISIBLE`/`WALL`/`ADDRESSED_PARTIAL`) и
+  `run_shadow_perception` — прогон по наблюдателям после коммита; результат
+  логируется (`[WPE-P3] shadow …`), **в сборку контекста не идёт**. Ошибки
+  shadow не ломают сохранение сообщения.
+- ✅ Флаг: `WORLD_ENGINE_EVENTS_ENABLED` (по умолчанию `false`; off → dual-write
+  и shadow не выполняются). Откат: shadow выключается флагом, dual-write можно
+  оставить.
+- ✅ Shadow-метрики критерия выхода (§10): `WPE_SHADOW_STATS` +
+  `wpe_shadow_stats_snapshot()` — события/наблюдатели, matched/diverged, по
+  категориям и подкатегориям, `unexplained` (должен быть 0).
+- ✅ Критерий выхода: покрыто `tests/test_world_engine_phase3.py` (22 теста:
+  атомарный dual-write + поля/round_id, off-регрессия, golden-сетка всех
+  категорий + И13-комбо, shadow не меняет legacy/контекст и не пишет presence,
+  `unexplained == 0`). Регрессий нет (704 passed; 28 pre-existing падений вне
+  scope, набор идентичен Фазе 2).
 
 **Фаза 4 — Cutover: Perception Engine + Recency Tail** [Ул.2, Ул.3]
 - `witness_model`/`context_builder` переходят на `PerceptionResult` через

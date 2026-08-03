@@ -248,7 +248,43 @@ async def delete_character(db: AsyncSession, character_id: int) -> bool:
 
 
 # ----------------------------- Message -----------------------------
-async def create_message(db: AsyncSession, message: schemas.MessageCreate) -> models.Message:
+def _build_world_event(
+    db_message: models.Message, *, round_id: str | None = None
+) -> models.WorldEvent:
+    """Dual-write: `WorldEvent` рядом с `Message` (WPE.md Фаза 3).
+
+    Событие копирует поля сообщения (legacy-bridge: строковая локация).
+    ``event_type``: ``speech`` для user/character, ``system`` для системных.
+    ``round_id`` для user-сообщения выводится так же, как в chat_engine
+    (``r{chat_id}-m{message_id}``) — тот же раунд, что и остальные реплики.
+    """
+    role = (db_message.role or "").strip().lower()
+    event_type = "system" if role == "system" else "speech"
+    if round_id is None and role == "user":
+        round_id = f"r{db_message.chat_id}-m{db_message.id}"
+    return models.WorldEvent(
+        chat_id=db_message.chat_id,
+        character_id=db_message.character_id,
+        message_id=db_message.id,
+        event_type=event_type,
+        location=db_message.location or "",
+        round_id=round_id,
+        target_character_ids=db_message.target_character_ids or "[]",
+    )
+
+
+async def create_message(
+    db: AsyncSession,
+    message: schemas.MessageCreate,
+    *,
+    round_id: str | None = None,
+) -> models.Message:
+    """Create a message; with `WORLD_ENGINE_EVENTS_ENABLED` also writes its
+    `WorldEvent` atomically (same transaction, WPE.md Фаза 3 dual-write).
+
+    The dual-write is a no-op by default (flag off). Shadow perception
+    (`run_shadow_perception`) runs after commit and never affects the result.
+    """
     kwargs = message.orm_kwargs() if hasattr(message, "orm_kwargs") else message.model_dump()
     if "target_character_ids" in kwargs and not isinstance(
         kwargs["target_character_ids"], str
@@ -258,8 +294,22 @@ async def create_message(db: AsyncSession, message: schemas.MessageCreate) -> mo
         )
     db_message = models.Message(**kwargs)
     db.add(db_message)
+    await db.flush()
+    if settings.world_engine_events_enabled:
+        db.add(_build_world_event(db_message, round_id=round_id))
     await db.commit()
     await db.refresh(db_message)
+    if settings.world_engine_events_enabled:
+        try:
+            from . import wpe_shadow
+
+            await wpe_shadow.run_shadow_perception(db, db_message)
+        except Exception:
+            logger.exception(
+                "[WPE-P3] shadow perception failed chat_id=%s msg_id=%s",
+                db_message.chat_id,
+                db_message.id,
+            )
     return db_message
 
 

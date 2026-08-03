@@ -61,7 +61,10 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 Индексы: `ix_messages_chat_ts (chat_id, timestamp, id)`, `ix_messages_character_id (character_id)`.
 
 ### `world_events`
-Неизменяемый (append-only) журнал world-событий (WPE 3.0, Фаза 0). Заведён, **не пишется** до Фазы 3.
+Неизменяемый (append-only) журнал world-событий (WPE 3.0). С Фазы 3 пишется
+атомарно вместе с `Message` (`crud.create_message`, флаг
+`WORLD_ENGINE_EVENTS_ENABLED`); строковая `location` — legacy-bridge до
+перехода на `location_id`.
 
 | колонка | тип | примечание |
 |---|---|---|
