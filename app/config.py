@@ -333,6 +333,9 @@ class Settings(BaseSettings):
     world_engine_actions_enabled: bool = Field(
         default=False, alias="WORLD_ENGINE_ACTIONS_ENABLED"
     )
+    wpe_action_consistency_max_retries: int = Field(
+        default=1, alias="WORLD_ENGINE_CONSISTENCY_MAX_RETRIES"
+    )
     world_engine_threads_enabled: bool = Field(
         default=False, alias="WORLD_ENGINE_THREADS_ENABLED"
     )

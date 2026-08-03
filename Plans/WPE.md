@@ -1,6 +1,19 @@
 # World & Perception Engine 3.0 — план внедрения (v3)
 
-> Дата: 2026-08-03 · Статус: **Фаза 4 реализована (08-04); ожидает ревью перед Фазой 5**.
+> Дата: 2026-08-03 · Статус: **Фаза 5 реализована (08-04)**.
+> Статус фазы 5 (Action Resolution): протокол §5 исполнен целиком —
+> действия из native tools (`turn.actions`) применяются атомарно
+> (`crud.apply_character_actions`): `move_to` обновляет `location`+`location_id`
+> и создаёт immutable `WorldEvent(move)` одной транзакцией, `send_message`
+> валидирует адресатов и создаёт `WorldEvent(speech)`; Consistency Validator
+> (`app/action_resolution.classify_consistency`) — три класса: `consistent` /
+> `minor_ambiguity` (молчаливое действие → System Narrator **без ретрая**, И16) /
+> `contradiction` (ретрай ≤1 внутри `generate()` с фидбеком, затем отклонение +
+> ремарка); `generate()` отдаёт `turn`+`verdict` в response-событии;
+> `detect_character_movement`/regex-канал понижен до safety-net (И4) при
+> включённом `WORLD_ENGINE_ACTIONS_ENABLED`. Откат — флаг off возвращает
+> пост-раундовый regex-путь. Golden #4/#5/#12/#13/#16/#22 покрыты
+> (`tests/test_world_engine_phase5.py`, 27 тестов).
 > Статус фазы 4 (Cutover): `perceive()` подключён к production-путям под
 > флагом `WORLD_ENGINE_PERCEPTION_ENABLED` — presence в
 > `crud.compute_and_save_presence_for_message`/`_for_round` и
@@ -552,18 +565,36 @@ Tool-схема (OpenAI-совместимая, используется и в O
 - Откат: флаг выключается по чату; старый код удаляется отдельным PR после
   стабильности.
 
-**Фаза 5 — Action Resolution + System Narrator** [Ул.1]
-- Исполнение протокола §5 целиком: действия из tools применяются (move_to,
-  send_message), атомарно, с immutable `WorldEvent`.
-- Consistency Validator: три класса; **молчаливое действие → System Narrator
-  без ретрая (И16)**; `contradiction` → ≤1 retry, затем отклонение + ремарка.
-- `detect_character_movement`/regex-канал понижены до safety-net (И14).
-- Флаг: `WORLD_ENGINE_ACTIONS_ENABLED`.
-- Критерий выхода: golden "явное перемещение", "молчаливый телепорт →
-  Narrator", "конфликт action↔текст", "несколько действий за ход" (§11)
-  проходят; прирост латентности согласован.
-- Откат: флаг выключается, движок возвращается к пост-раундовому
-  `extract_scene_state`.
+**✅ Фаза 5 — Action Resolution + System Narrator** [Ул.1] *(реализована 08-04)*
+- ✅ Протокол §5 исполнен целиком: действия из tools применяются (move_to,
+  send_message), атомарно, с immutable `WorldEvent`. `turn.actions`
+  извлекаются только из tool_calls/JSON-схемы (И4) и пробрасываются из
+  `ollama_client.generate()` в response-событие (`turn` + `verdict`).
+- ✅ Consistency Validator (`app/action_resolution.classify_consistency`) — три
+  класса: `consistent` / `minor_ambiguity` (**молчаливое действие → System
+  Narrator без ретрая**, И16) / `contradiction` (→ ≤1 retry внутри
+  `generate()` с фидбеком `<action_consistency>`, затем детерминированное
+  отклонение + ремарка Narrator). Стоик ретраев — `WPE_ACTION_CONSISTENCY_MAX_RETRIES` (1).
+- ✅ System Narrator: ремарки `role=system` по шаблону из `WorldEvent`
+  (`*[Система: <Имя> <действие>]*`), генерируются только движком (И6), текст
+  реплики не редактируется; при `contradiction` — ремарка об отклонении.
+- ✅ Применение: `crud.apply_character_actions` — валидные действия атомарно
+  (одна транзакция), порядок move → зависящие от локации; невалидное действие
+  отклоняется без `WorldEvent` и не портит валидные (#13); `location_id`
+  обновляется для успешных `move_to`; `WorldEvent(move)` immutable с
+  `location_from`/`location_to`/`round_id`; `send_message` → `WorldEvent(speech)`
+  с `target_character_ids` (Threads — Фаза 6).
+- ✅ `detect_character_movement`/regex-канал понижены до safety-net (И14):
+  активны только при выключенном флаге действий.
+- ✅ Флаг: `WORLD_ENGINE_ACTIONS_ENABLED` (+ tuning-настройка
+  `WPE_ACTION_CONSISTENCY_MAX_RETRIES`).
+- ✅ Критерий выхода: golden "явное перемещение" (#4), "молчаливый телепорт →
+  Narrator" (#5/#16), "конфликт action↔текст" (#12), "несколько действий за
+  ход" (#13), native tools (#22) покрыты `tests/test_world_engine_phase5.py`
+  (27 тестов). Регрессий нет (744 passed; 28 pre-existing падений вне scope,
+  набор идентичен Фазе 4).
+- ✅ Откат: флаг выключается — движок возвращается к пост-раундовому
+  regex-пути движения (проверено off-тестами).
 
 **Фаза 6 — Thread/мессенджер + двухканальное частичное восприятие** [Ул.2]
 - `Thread` + `ThreadParticipantState` в проде; `send_message` создаёт/обновляет

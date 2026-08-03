@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import action_resolution
 from . import crud
 from . import memory_service
 from . import models
@@ -690,6 +691,8 @@ async def process_user_message_streaming(
             )
 
         response_text = ""
+        turn_output = None
+        consistency_verdict = "no_actions"
         try:
             async for event in ollama_client.generate(
                 client=client,
@@ -744,6 +747,8 @@ async def process_user_message_streaming(
                     yield {"type": "token", "text": event["text"], "character_id": current_character.id}
                 elif event["type"] == "response":
                     response_text = event["text"]
+                    turn_output = event.get("turn")
+                    consistency_verdict = event.get("verdict", "no_actions")
         except RuntimeError as exc:
             logger.error(
                 "[chat_id=%d] Generation failed for %s: %s",
@@ -754,43 +759,129 @@ async def process_user_message_streaming(
             response_text = f"*[{current_character.name} молчит, не в силах ответить]*"
             round_generation_ok = False
 
-        # Deterministic movement detection (§9-§11): the new location is applied
-        # BEFORE the message is saved and BEFORE the next NPC generates, so the
-        # updated world state is visible to the rest of the round (§12).
-        movement_target = detect_character_movement(
-            response_text,
-            current_character.name,
-            known_locations,
-            character_locations,
-            character_names,
+        # WPE Фаза 5: Action Resolution (Ул.1, §5). Действия извлекаются только
+        # из tool_calls/JSON-схемы (И4); regex-канал движения понижен до
+        # safety-net — при включённом флаге источник истины — actions.
+        actions_active = (
+            settings.world_engine_actions_enabled
+            and turn_output is not None
+            and bool(turn_output.actions)
         )
-        if movement_target and movement_target != character_locations.get(
-            current_character.id, ""
-        ):
-            await crud.update_character_locations_batch(
-                db, chat_id, {current_character.id: movement_target}
-            )
-            character_locations[current_character.id] = movement_target
-            current_character.location = movement_target
-            detector_confirmed_locs[current_character.name] = movement_target
+        if actions_active:
+            if consistency_verdict == "contradiction":
+                # contradiction: ретрай (≤1) уже был внутри generate(); действия
+                # отклоняются, текст остаётся, инцидент логируется, ремарка
+                # Narrator фиксирует решение движка (§5.2).
+                logger.warning(
+                    "[WPE-P5] chat_id=%d contradiction unresolved for %s, "
+                    "actions rejected",
+                    chat_id,
+                    current_character.name,
+                )
+                applied = crud.ApplyActionsResult()
+                rejected = [
+                    {"action_index": index, "type": action.type}
+                    for index, action in enumerate(turn_output.actions)
+                ]
+            else:
+                applied = await crud.apply_character_actions(
+                    db,
+                    chat_id,
+                    current_character,
+                    turn_output,
+                    round_id=round_id,
+                )
+                for mv in applied.applied_moves:
+                    if mv.get("changed"):
+                        character_locations[current_character.id] = mv["location_to"]
+                        current_character.location = mv["location_to"]
+                        announced_movements[current_character.id] = mv["location_to"]
+                        detector_confirmed_locs[current_character.name] = mv[
+                            "location_to"
+                        ]
+                if applied.rejected:
+                    logger.info(
+                        "[WPE-P5] chat_id=%d rejected actions for %s: %s",
+                        chat_id,
+                        current_character.name,
+                        applied.rejected,
+                    )
+                rejected = applied.rejected
 
-            loc_msg_text = f"*{current_character.name} переместился в {movement_target}*"
-            loc_message = await crud.create_message(
-                db,
-                schemas.MessageCreate(
-                    chat_id=chat_id,
-                    role="system",
-                    content=loc_msg_text,
-                    visibility="global",
-                ),
-                round_id=round_id,
+            # System Narrator (И16, §5.10): для каждого применённого действия,
+            # НЕ отражённого в тексте реплики, движок сам вставляет служебную
+            # ремарку role=system по детерминированному шаблону из WorldEvent.
+            # Текст реплики при этом не редактируется.
+            reflected = action_resolution.reflected_action_indices(
+                turn_output,
+                response_text,
+                tuple(known_locations),
             )
-            yield {"type": "message", "message": _message_to_dict(loc_message)}
-            round_messages.append(loc_message)
-            context_messages.append(loc_message)
-            if len(context_messages) > history_limit:
-                context_messages = context_messages[-history_limit:]
-            announced_movements[current_character.id] = movement_target
+            remarks = action_resolution.build_narrator_remarks(
+                current_character.name,
+                turn_output,
+                consistency_verdict,
+                applied.applied_moves,
+                applied.applied_messages,
+                reflected,
+                rejected=rejected,
+            )
+            for remark in remarks:
+                remark_message = await crud.create_message(
+                    db,
+                    schemas.MessageCreate(
+                        chat_id=chat_id,
+                        role="system",
+                        content=remark,
+                        visibility="global",
+                    ),
+                    round_id=round_id,
+                )
+                yield {"type": "message", "message": _message_to_dict(remark_message)}
+                round_messages.append(remark_message)
+                context_messages.append(remark_message)
+                if len(context_messages) > history_limit:
+                    context_messages = context_messages[-history_limit:]
+        else:
+            # Deterministic movement detection (§9-§11): safety-net regex-канал,
+            # активен только когда Action Resolution выключен (И4). New location
+            # applied BEFORE the message is saved and BEFORE the next NPC
+            # generates, so the updated world state is visible to the rest of
+            # the round (§12).
+            movement_target = detect_character_movement(
+                response_text,
+                current_character.name,
+                known_locations,
+                character_locations,
+                character_names,
+            )
+            if movement_target and movement_target != character_locations.get(
+                current_character.id, ""
+            ):
+                await crud.update_character_locations_batch(
+                    db, chat_id, {current_character.id: movement_target}
+                )
+                character_locations[current_character.id] = movement_target
+                current_character.location = movement_target
+                detector_confirmed_locs[current_character.name] = movement_target
+
+                loc_msg_text = f"*{current_character.name} переместился в {movement_target}*"
+                loc_message = await crud.create_message(
+                    db,
+                    schemas.MessageCreate(
+                        chat_id=chat_id,
+                        role="system",
+                        content=loc_msg_text,
+                        visibility="global",
+                    ),
+                    round_id=round_id,
+                )
+                yield {"type": "message", "message": _message_to_dict(loc_message)}
+                round_messages.append(loc_message)
+                context_messages.append(loc_message)
+                if len(context_messages) > history_limit:
+                    context_messages = context_messages[-history_limit:]
+                announced_movements[current_character.id] = movement_target
 
         char_location = character_locations.get(current_character.id, "") or ""
         # Detect remote communication channel from response text
@@ -2191,6 +2282,8 @@ async def regenerate_message_streaming(
     directive = pending.instruction if pending else None
 
     response_text = ""
+    turn_output = None
+    consistency_verdict = "no_actions"
     try:
         async for event in ollama_client.generate(
             client=client,
@@ -2248,6 +2341,8 @@ async def regenerate_message_streaming(
                 }
             elif event["type"] == "response":
                 response_text = event["text"]
+                turn_output = event.get("turn")
+                consistency_verdict = event.get("verdict", "no_actions")
     except RuntimeError as exc:
         logger.error(
             "[chat_id=%d] Regeneration failed for %s: %s",
@@ -2262,23 +2357,73 @@ async def regenerate_message_streaming(
     if not response_text:
         raise RuntimeError(f"Пустой ответ при перегенерации {character.name}")
 
-    # Deterministic movement detection on the regenerated text (§9-§11, §12).
-    # The world update is applied the same way as in the main round path.
-    movement_target = detect_character_movement(
-        response_text,
-        character.name,
-        known_locations,
-        character_locations,
-        character_names,
+    # WPE Фаза 5: Action Resolution в пути перегенерации (Ул.1, §5). При
+    # выключенном флаге остаётся legacy regex-канал (safety-net, И4).
+    actions_active = (
+        settings.world_engine_actions_enabled
+        and turn_output is not None
+        and bool(turn_output.actions)
     )
-    if movement_target and movement_target != character_locations.get(
-        character.id, ""
-    ):
-        await crud.update_character_locations_batch(
-            db, chat_id, {character.id: movement_target}
+    if actions_active:
+        if consistency_verdict != "contradiction":
+            applied = await crud.apply_character_actions(
+                db,
+                chat_id,
+                character,
+                turn_output,
+                round_id=None,
+            )
+            for mv in applied.applied_moves:
+                if mv.get("changed"):
+                    character_locations[character.id] = mv["location_to"]
+                    character.location = mv["location_to"]
+            rejected = applied.rejected
+        else:
+            applied = crud.ApplyActionsResult()
+            rejected = [
+                {"action_index": index, "type": action.type}
+                for index, action in enumerate(turn_output.actions)
+            ]
+        reflected = action_resolution.reflected_action_indices(
+            turn_output, response_text, tuple(known_locations)
         )
-        character_locations[character.id] = movement_target
-        character.location = movement_target
+        for remark in action_resolution.build_narrator_remarks(
+            character.name,
+            turn_output,
+            consistency_verdict,
+            applied.applied_moves,
+            applied.applied_messages,
+            reflected,
+            rejected=rejected,
+        ):
+            await crud.create_message(
+                db,
+                schemas.MessageCreate(
+                    chat_id=chat_id,
+                    role="system",
+                    content=remark,
+                    visibility="global",
+                ),
+                round_id=None,
+            )
+    else:
+        # Deterministic movement detection on the regenerated text (§9-§11, §12).
+        # The world update is applied the same way as in the main round path.
+        movement_target = detect_character_movement(
+            response_text,
+            character.name,
+            known_locations,
+            character_locations,
+            character_names,
+        )
+        if movement_target and movement_target != character_locations.get(
+            character.id, ""
+        ):
+            await crud.update_character_locations_batch(
+                db, chat_id, {character.id: movement_target}
+            )
+            character_locations[character.id] = movement_target
+            character.location = movement_target
 
     # Persist the new reply, then drop the old one
     char_location = character_locations.get(character.id, "") or ""

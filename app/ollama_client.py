@@ -17,6 +17,7 @@ from .token_counter import get_token_counter
 from .prompt_builder import (
     build_anti_mimicry_block,
     build_character_summary_block,
+    build_consistency_feedback_block,
     build_extraction_system,
     build_extraction_user,
     build_intervention_block,
@@ -56,6 +57,7 @@ from .role_isolation import (
     sanitize_and_validate_response,
 )
 from . import schemas
+from . import action_resolution
 from .witness_model import Presence, filter_history_for_character, filter_history_for_character_with_presence
 
 logger = logging.getLogger(__name__)
@@ -935,6 +937,7 @@ def _build_generation_messages(
     generation_cue: str,
     *,
     repetition_feedback: str = "",
+    consistency_feedback: str = "",
     anti_mimicry_block: str = "",
     personality_block: str = "",
     consistency_block: str = "",
@@ -949,6 +952,9 @@ def _build_generation_messages(
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
+    consistency_feedback_block = build_consistency_feedback_block(
+        consistency_feedback
+    )
     user_content = build_user_context_message(
         summary_block,
         memories_block,
@@ -961,6 +967,7 @@ def _build_generation_messages(
         consistency_block,
         reinforcement,
         feedback_block,
+        consistency_feedback_block,
         scene_block,
         behavior_drivers_block,
         open_issues_block,
@@ -1036,8 +1043,15 @@ async def _generate_once(
     epistemic_mask_block: str = "",
     directive: str | None = None,
     recency_tail_block: str = "",
-) -> tuple[str, str, bool, int, list[str]]:
-    """One LLM call + isolation sanitize. Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list)."""
+    consistency_feedback: str = "",
+) -> tuple[str, str, bool, int, list[str], schemas.TurnOutput | None]:
+    """One LLM call + isolation sanitize.
+
+    Returns (raw, sanitized, isolation_ok, thinking_len, tokens_list,
+    shadow_turn_output) — последний элемент: структурированный `TurnOutput`
+    из tool_calls/JSON-схемы (WPE Фаза 2), `None`, если инструменты выключены
+    или ответ невалиден. Фаза 5 использует его для Action Resolution.
+    """
     api_mode = "chat" if settings.use_chat_api else "generate"
     thinking = _resolve_thinking(enable_thinking)
     if settings.world_engine_recency_tail_enabled and not recency_tail_block:
@@ -1152,6 +1166,7 @@ async def _generate_once(
             reinforcement,
             generation_cue,
             repetition_feedback=repetition_feedback,
+            consistency_feedback=consistency_feedback,
             anti_mimicry_block=anti_mimicry_block,
             vocabulary_block=vocabulary_block,
             personality_block=personality_block,
@@ -1194,6 +1209,11 @@ async def _generate_once(
         feedback_block = build_repetition_feedback_block(repetition_feedback)
         if feedback_block:
             context_parts.append(feedback_block)
+        consistency_feedback_block = build_consistency_feedback_block(
+            consistency_feedback
+        )
+        if consistency_feedback_block:
+            context_parts.append(consistency_feedback_block)
         if behavior_drivers_block:
             context_parts.append(behavior_drivers_block)
         if open_issues_block:
@@ -1431,7 +1451,15 @@ async def _generate_once(
             len(built_context.dropped_items),
         )
 
-    return generated, sanitized, is_valid, thinking_len, tokens_collected, num_ctx
+    return (
+        generated,
+        sanitized,
+        is_valid,
+        thinking_len,
+        tokens_collected,
+        num_ctx,
+        shadow_turn_output,
+    )
 
 
 def _check_vocabulary_borrowing(
@@ -1565,6 +1593,12 @@ async def generate(
     repetition_feedback = ""
     strict_isolation = False
 
+    # WPE Фаза 5: Action<->Text Consistency Validator (Ул.1, §5). Стоик
+    # contradiction-ретраев ≤1 (в рамках общего бюджета вызовов); молчаливое
+    # действие (minor_ambiguity) НЕ вызывает retry (И16).
+    consistency_attempt = 0
+    consistency_feedback = ""
+
     # Isolation-valid candidates ranked for best-of on exhaustion
     candidates: list[tuple[str, RepetitionAnalysis | None]] = []
 
@@ -1579,7 +1613,15 @@ async def generate(
             f"{settings.max_repetition_retries}"
         )
 
-        _raw, sanitized, isolation_ok, _thinking_len, token_chunks, used_num_ctx = await _generate_once(
+        (
+            _raw,
+            sanitized,
+            isolation_ok,
+            _thinking_len,
+            token_chunks,
+            used_num_ctx,
+            turn_output,
+        ) = await _generate_once(
             client,
             chat_id=chat_id,
             character=character,
@@ -1617,6 +1659,7 @@ async def generate(
             epistemic_mask_block=epistemic_mask_block,
             directive=directive,
             recency_tail_block=recency_tail_block,
+            consistency_feedback=consistency_feedback,
         )
 
         if not isolation_ok:
@@ -1689,12 +1732,44 @@ async def generate(
                 # Retries exhausted: pick best candidate below
                 break
 
+        # --- WPE Фаза 5: Action<->Text Consistency Validator (Ул.1, §5) ---
+        # Действия извлекаются только из tool_calls/JSON-схемы (И4), не из
+        # текста. contradiction -> ретрай ≤1 с фидбеком; minor_ambiguity
+        # (молчаливое действие) НЕ ретраится (И16).
+        if turn_output is not None and turn_output.actions:
+            verdict = action_resolution.classify_consistency(turn_output, sanitized)
+            if (
+                verdict == "contradiction"
+                and consistency_attempt < settings.wpe_action_consistency_max_retries
+            ):
+                consistency_attempt += 1
+                consistency_feedback = action_resolution.build_consistency_feedback(
+                    turn_output, sanitized, character.name
+                )
+                logger.warning(
+                    "[chat_id=%d] Action/Text contradiction for %s — retry "
+                    "(%d/%d) actions=%s",
+                    chat_id,
+                    character.name,
+                    consistency_attempt,
+                    settings.wpe_action_consistency_max_retries,
+                    action_resolution.describe_actions(turn_output),
+                )
+                continue
+        else:
+            verdict = "no_actions"
+
         # Clean accept - yield token events first, then response
         if token_chunks:
             for chunk in token_chunks:
                 yield {"type": "token", "text": chunk, "character_id": character.id}
                 await asyncio.sleep(0.01)  # small delay for streaming feel
-        yield {"type": "response", "text": sanitized}
+        yield {
+            "type": "response",
+            "text": sanitized,
+            "turn": turn_output,
+            "verdict": verdict,
+        }
         return
 
     # Best isolation-valid candidate after repetition exhaustion
@@ -1715,7 +1790,12 @@ async def generate(
             getattr(best_ana, "score", None),
             getattr(best_ana, "progression_score", None),
         )
-        yield {"type": "response", "text": best_text}
+        yield {
+            "type": "response",
+            "text": best_text,
+            "turn": None,
+            "verdict": "no_actions",
+        }
         return
 
     if settings.fallback_on_isolation_failure:
@@ -1762,7 +1842,12 @@ async def generate(
                 logger.info(
                     "[chat_id=%d] Fallback succeeded for %s", chat_id, character.name
                 )
-                yield {"type": "response", "text": fallback_result.cleaned_text}
+                yield {
+                    "type": "response",
+                    "text": fallback_result.cleaned_text,
+                    "turn": None,
+                    "verdict": "no_actions",
+                }
                 return
         except Exception as exc:
             logger.warning(

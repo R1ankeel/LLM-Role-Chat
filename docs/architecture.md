@@ -195,6 +195,39 @@
 Откат обеих фаз — выключение флагов (legacy `can_character_perceive_event`
 сохранён как fallback).
 
+### 4.3. WPE 3.0 Фаза 5: Action Resolution + System Narrator (Ул.1)
+
+При включённом `WORLD_ENGINE_ACTIONS_ENABLED` структурированные действия
+(`schemas.TurnOutput.actions`, извлечённые только из native
+tools/JSON-схемы — И4) применяются в round-пути `chat_engine.py`:
+
+1. `ollama_client.generate()` пробрасывает в response-событие поля `turn`
+   (`TurnOutput`) и `verdict` (вердикт Consistency Validator).
+2. **Consistency Validator** (`app/action_resolution.classify_consistency`):
+   `consistent` / `minor_ambiguity` (молчаливое действие) / `contradiction`.
+   `contradiction` ретраится внутри `generate()` (≤
+   `WPE_ACTION_CONSISTENCY_MAX_RETRIES`, фидбек в блоке
+   `<action_consistency>`); молчаливое действие **не** ретраится (И16).
+3. **Применение** (`crud.apply_character_actions`) — атомарно одной
+   транзакцией: `move_to` резолвится в каноническую `Location`, обновляет
+   `character.location` + `location_id` и создаёт immutable `WorldEvent(move)`
+   (`location_from`/`location_to`/`round_id`); `send_message` валидирует
+   адресатов и создаёт `WorldEvent(speech)` (Threads — Фаза 6). Порядок:
+   move → зависящие от локации. Невалидные действия отклоняются без
+   `WorldEvent` и не ломают валидные (#13).
+4. **System Narrator** (И6, И16): для каждого применённого действия, **не
+   отражённого в тексте реплики** (`action_resolution.reflected_action_indices`),
+   движок создаёт служебное сообщение `role="system"` по шаблону из `WorldEvent`
+   (`*[Система: <Имя> <действие>]*`), сразу после реплики; текст реплики не
+   редактируется. При неразрешённом `contradiction` действия отклоняются и
+   ремарка фиксирует решение движка.
+5. **Regex-канал движения** (`detect_character_movement`) при включённом
+   флаге — safety-net (И4): активен только при выключенном
+   `WORLD_ENGINE_ACTIONS_ENABLED`.
+
+Откат — выключение флага (движок возвращается к пост-раундовому regex-пути
+движения).
+
 ### 5. Пост-раунд (в том же запросе)
 
 1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций.

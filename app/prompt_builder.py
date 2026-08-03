@@ -331,6 +331,19 @@ def build_take_actions_instruction() -> str:
     )
 
 
+def build_consistency_feedback_block(feedback: str) -> str:
+    """Обёртка фидбека Action<->Text Consistency Validator (WPE.md §5, Фаза 5).
+
+    Конструирует отрицательное согласие в контекст для retry: блок добавляется
+    в пользовательское сообщение (никогда не в system/developer), как и
+    repetition feedback.
+    """
+    text = (feedback or "").strip()
+    if not text:
+        return ""
+    return f"<action_consistency>\n{text}\n</action_consistency>"
+
+
 def build_system_intervention_block(lines: list[str] | None) -> str:
     """Recency Tail (WPE.md §6, Ул.3, И15): render P0-события одного персонажа.
 

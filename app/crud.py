@@ -1149,6 +1149,179 @@ async def update_character_locations_batch(
         await db.commit()
 
 
+# -------------------- WPE 3.0: Action Resolution (Фаза 5) --------------------
+@dataclass
+class ApplyActionsResult:
+    """Результат применения действий `turn.actions` (WPE.md §5, Фаза 5).
+
+    ``applied_moves`` / ``applied_messages`` — применённые действия с индексом
+    в исходном ``turn.actions`` (для System Narrator: какие из них не отражены
+    в тексте). ``rejected`` — отклонённые с причиной (невалидная локация /
+    невалидные адресаты). Невалидное действие не портит валидные (#13).
+    """
+
+    applied_moves: list[dict] = dataclass_field(default_factory=list)
+    applied_messages: list[dict] = dataclass_field(default_factory=list)
+    rejected: list[dict] = dataclass_field(default_factory=list)
+
+
+async def apply_character_actions(
+    db: AsyncSession,
+    chat_id: int,
+    character: models.Character,
+    turn: schemas.TurnOutput | None,
+    *,
+    round_id: str | None = None,
+) -> ApplyActionsResult:
+    """Применить структурированные действия персонажа атомарно (WPE.md §5).
+
+    - ``move_to``: локация резолвится в каноническую ``Location`` (Фаза 1);
+      успешный переезд обновляет ``character.location`` + ``location_id`` и
+      создаёт immutable ``WorldEvent(move)`` с ``location_from``/``location_to``
+      в ОДНОЙ транзакции (flush всех обновлений + один commit). Переезд в ту же
+      локацию считается применённым без изменения состояния и без события.
+    - ``send_message``: валидируются адресаты (участники чата); создаётся
+      ``WorldEvent(speech)`` с ``target_character_ids`` и текущей локацией.
+      Thread/remote_status формализуются в Фазе 6.
+    - Порядок применения: ``move`` → зависящие от локации (``send_message``),
+      внутри вида — исходный порядок (§5.5). ``location_id`` обновляется для
+      успешных ``move_to`` (§5.6).
+    - Невалидное действие отклоняется (нет ``WorldEvent``, нет изменения
+      ``WorldState``, v2 §5.4) и не ломает валидные (#13).
+    """
+    result = ApplyActionsResult()
+    if turn is None or not turn.actions:
+        return result
+
+    locations = await get_chat_locations(db, chat_id)
+    characters = await get_characters_by_chat(db, chat_id)
+    char_map = {c.id: c for c in characters}
+    current_char = char_map.get(character.id, character)
+    from_location = current_char.location or ""
+
+    # ---- 1. Валидация предпосылок (§5.3) ----
+    planned_moves: list[tuple[int, schemas.Action, models.Location | None]] = []
+    planned_messages: list[tuple[int, schemas.Action, list[int]]] = []
+    for index, action in enumerate(turn.actions):
+        if action.type == "move_to":
+            target = resolve_location_name(locations, action.location)
+            if target is None:
+                result.rejected.append(
+                    {
+                        "action_index": index,
+                        "type": "move_to",
+                        "reason": "unknown_location",
+                        "location": action.location or "",
+                    }
+                )
+            else:
+                planned_moves.append((index, action, target))
+        elif action.type == "send_message":
+            raw_targets = [int(t) for t in action.target_character_ids]
+            bad = [t for t in raw_targets if t not in char_map]
+            if bad:
+                result.rejected.append(
+                    {
+                        "action_index": index,
+                        "type": "send_message",
+                        "reason": "invalid_target",
+                        "targets": bad,
+                    }
+                )
+            else:
+                planned_messages.append((index, action, raw_targets))
+        else:
+            result.rejected.append(
+                {
+                    "action_index": index,
+                    "type": str(action.type),
+                    "reason": "unsupported_action",
+                }
+            )
+
+    # ---- 2. Применение: move → send_message, атомарно (§5.5) ----
+    for index, action, target in planned_moves:
+        to_canonical = target.name
+        if _locations_same(from_location, to_canonical):
+            result.applied_moves.append(
+                {
+                    "action_index": index,
+                    "character_id": current_char.id,
+                    "location_from": from_location,
+                    "location_to": from_location,
+                    "location_id": current_char.location_id,
+                    "changed": False,
+                }
+            )
+            continue
+        current_char.location = to_canonical
+        current_char.location_id = target.id
+        db.add(
+            models.WorldEvent(
+                chat_id=chat_id,
+                character_id=current_char.id,
+                event_type="move",
+                location=to_canonical,
+                location_from=from_location,
+                location_to=to_canonical,
+                round_id=round_id,
+                target_character_ids="[]",
+            )
+        )
+        result.applied_moves.append(
+            {
+                "action_index": index,
+                "character_id": current_char.id,
+                "location_from": from_location,
+                "location_to": to_canonical,
+                "location_id": target.id,
+                "changed": True,
+            }
+        )
+
+    current_location = current_char.location or from_location
+    for index, action, targets in planned_messages:
+        db.add(
+            models.WorldEvent(
+                chat_id=chat_id,
+                character_id=current_char.id,
+                event_type="speech",
+                location=current_location,
+                round_id=round_id,
+                target_character_ids=perception.serialize_target_ids(targets),
+            )
+        )
+        result.applied_messages.append(
+            {
+                "action_index": index,
+                "character_id": current_char.id,
+                "target_character_ids": targets,
+                "channel": action.channel,
+            }
+        )
+
+    if result.applied_moves or result.applied_messages:
+        await db.commit()
+        await db.refresh(current_char)
+
+    if result.applied_moves or result.applied_messages or result.rejected:
+        logger.info(
+            "[WPE-P5] actions chat_id=%d character=%s applied_moves=%d "
+            "applied_messages=%d rejected=%d",
+            chat_id,
+            current_char.name,
+            len(result.applied_moves),
+            len(result.applied_messages),
+            len(result.rejected),
+        )
+    return result
+
+
+def _locations_same(a: str, b: str) -> bool:
+    """Сравнение локаций по каноническому имени (legacy-bridge, как Фаза 1)."""
+    return perception.locations_match(a, b)
+
+
 # ----------------------------- Location -----------------------------
 async def get_chat_locations(
     db: AsyncSession, chat_id: int

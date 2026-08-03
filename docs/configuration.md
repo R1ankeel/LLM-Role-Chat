@@ -268,6 +268,19 @@ tools/format в генерации: действия извлекаются в `
 user-сообщения перед generation cue, защищённый от усечения бюджетом.
 Флаги независимы (раздельные canary'и); откат — выключить оба.
 
+Фаза 5 (Action Resolution + System Narrator) реализована 08-04; флаг
+`WORLD_ENGINE_ACTIONS_ENABLED` по-прежнему **`false`** — включает применение
+действий из tools (`turn.actions`): `move_to` обновляет `location`+`location_id`
+и создаёт immutable `WorldEvent(move)` одной транзакцией, `send_message`
+валидирует адресатов; Consistency Validator (`app/action_resolution`) даёт
+вердикты `consistent` / `minor_ambiguity` (молчаливое действие → System
+Narrator **без ретрая**) / `contradiction` (ретрай ≤1 внутри `generate()` с
+фидбеком, затем отклонение + ремарка); regex-канал движения
+(`detect_character_movement`) при включённом флаге — safety-net (И4), активен
+только при выключенном флаге. Откат — выключить флаг (возврат к пост-раундовому
+regex-пути). Тюнинг-настройка `WPE_ACTION_CONSISTENCY_MAX_RETRIES` (по
+умолчанию `1`) ограничивает contradiction-ретраи внутри `generate()`.
+
 | ключ | дефолт | описание (фаза) |
 |---|---|---|
 | `WORLD_ENGINE_LOCATIONS_ENABLED` | `false` | канонические локации, сравнение по `location_id` (Фаза 1, реализована) |
@@ -275,7 +288,8 @@ user-сообщения перед generation cue, защищённый от у�
 | `WORLD_ENGINE_EVENTS_ENABLED` | `false` | `WorldEvent` dual-write атомарно с `Message` + shadow `perceive()` 2 канала, классификация расхождений (Фаза 3, реализована) |
 | `WORLD_ENGINE_PERCEPTION_ENABLED` | `false` | cutover на `PerceptionResult`/Renderer: presence пишется через `perceive()` (Фаза 4, реализована) |
 | `WORLD_ENGINE_RECENCY_TAIL_ENABLED` | `false` | Recency Tail в хвост промпта, P0-адресация (Фаза 4, реализована) |
-| `WORLD_ENGINE_ACTIONS_ENABLED` | `false` | применение действий + System Narrator (Фаза 5, Ул.1) |
+| `WORLD_ENGINE_ACTIONS_ENABLED` | `false` | применение действий + System Narrator + Consistency Validator (Фаза 5, Ул.1, реализована) |
+| `WORLD_ENGINE_CONSISTENCY_MAX_RETRIES` | `1` | contradiction-ретраи ≤ N внутри `generate()` (Фаза 5, тюнинг) |
 | `WORLD_ENGINE_THREADS_ENABLED` | `false` | Thread/ThreadParticipantState в проде (Фаза 6) |
 | `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` | `false` | частичное восприятие по каналам (Фаза 6, Ул.2) |
 | `WORLD_ENGINE_EVENT_BUS_ENABLED` | `false` | Event Bus / буждение NPC (Фаза 7, Ул.5) |
