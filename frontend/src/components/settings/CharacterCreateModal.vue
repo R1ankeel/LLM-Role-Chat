@@ -11,6 +11,9 @@ const ui = useUiStore()
 
 const saving = ref(false)
 
+const nextOrderIndex = () =>
+  characters.npcs.reduce((max, c) => Math.max(max, c.order_index), -1) + 1
+
 const form = reactive<CharacterForm>({
   name: '',
   personality: '',
@@ -22,7 +25,7 @@ const form = reactive<CharacterForm>({
   relationships: '',
   location: '',
   temperature: 0.8,
-  order_index: 0,
+  order_index: nextOrderIndex(),
   appearance: '',
   avatar_url: '',
   avatar_crop: '',

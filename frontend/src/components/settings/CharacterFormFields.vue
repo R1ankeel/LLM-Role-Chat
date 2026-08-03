@@ -147,7 +147,7 @@ const temperature = {
         />
       </label>
 
-      <label v-if="mode === 'profile'" class="field">
+      <label class="field">
         <span class="field__label">Порядок</span>
         <input
           v-model.number="model.order_index"
@@ -155,7 +155,7 @@ const temperature = {
           type="number"
           step="1"
         />
-        <span class="field__hint">Чем меньше число, тем выше персонаж в списке.</span>
+        <span class="field__hint">Чем меньше число, тем выше персонаж в списке. Уникален в чате.</span>
       </label>
     </div>
   </div>
