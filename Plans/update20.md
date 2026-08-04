@@ -37,6 +37,29 @@
 > **869 passed / 28 pre-existing / 0 новых** (29 новых тестов). См.
 > «Sprint 2 — Статус».
 >
+> **Sprint 3 (2026-08-05)**: ✅ ВЫПОЛНЕН — Character State (§8): единое
+> runtime-состояние персонажа в `character_states` (эмоции/стресс/mood/физика/
+> внимание/цели) без дублирования локаций и отношений. Детерминированный
+> `emotion_engine` (эмоции из relationship deltas + событий раунда, stress,
+> mood-вывод, decay, капы за раунд); опциональная Sensors-нормализация эмоций
+> только в рамках caps (`sensors_emotion_enabled`, Sensors НЕ задаёт mood);
+> пост-раунд стадия `character_state` в pipeline; блок `YOUR STATE` в контексте
+> (рендер по флагу `CHARACTER_STATE_ENABLED`, default false); canary-флаги
+> `EMOTION_ROUND_CAP`/`STRESS_ROUND_CAP`/`SENSORS_EMOTION_INTENSITY_CAP`.
+> Тесты: **894 passed / 28 pre-existing / 0 новых** (24 новых теста). См.
+> «Sprint 3 — Статус».
+>
+> **Sprint 4 (2026-08-05)**: ✅ ВЫПОЛНЕН — Attention (§11): слой «воспринято ≠
+> вошло в сознание». Детерминированный `attention.py` (score 0..1 из 8
+> компонентов с нормированными весами), колонка `message_presence.attention`
+> (REAL NULL, идемпотентный ALTER), фильтр memory extraction (attention < LOW →
+> не в память) и recency tail (не в реакцию) при `ATTENTION_ENABLED` (default
+> false); Sensors perception-proposal hook (§5.1.3) в presence round pass
+> (significance только в рамках `SENSORS_PERCEPTION_SIGNIFICANCE_CAP`).
+> Presence-лестница и рендер recent history НЕ меняются. Тесты:
+> **914 passed / 28 pre-existing / 0 новых** (20 новых тестов). См.
+> «Sprint 4 — Статус».
+>
 > Принцип: **не строить новые подсистемы поверх существующих**. Сначала найти
 > существующую реализацию, расширять её; если она мешает развитию — явно
 > вынести миграцию/рефакторинг в отдельный спринт. Дублирование запрещено.
@@ -1528,6 +1551,71 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: state пишется и читается; контекст не регрессирует.
 - **НЕ делать**: не хранить локацию/отношения в state.
 
+#### Sprint 3 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (без изменения поведения при `character_state_enabled=false` и
+  `sensors_emotion_enabled=false`):
+  1. `app/emotion_engine.py` (новый, чистый модуль без БД/LLM):
+     `EMOTIONS` (warmth/relief/hope/suspicion/tension/resentment/hurt/fear),
+     `normalize_emotional_state` (неизвестные ключи отбрасываются, clamp 0..1),
+     `relationship_emotion_deltas` (фикс-правила: affection/trust/attraction↑ →
+     warmth/relief/hope; resentment↑ → resentment; jealousy↑ → tension/suspicion;
+     trust/affection/attraction↓ → suspicion/hurt; кап `emotion_round_cap` на
+     эмоцию за раунд), `stress_delta` (события emotional_salience>0.5 +
+     негативные дельты, кап `stress_round_cap`), `decay_stress`/`decay_emotional_state`
+     (мягкое затухание), `derive_mood` (mood ВСЕГДА выводится движком из
+     эмоций+стресса; Sensors mood напрямую не задаёт), `apply_sensors_proposal`
+     (сдвиг интенсивности только в рамках `sensors_intensity_cap` × confidence),
+     `compute_state_update` (полный детерминированный update);
+  2. `app/character_state.py` (новый): `state_to_dict`, `build_your_state_block`
+     (рендер `<your_state>` эмоции ≥ `RENDER_INTENSITY_THRESHOLD`, mood, stress,
+     physical, attention, active_goal — БЕЗ локации/отношений),
+     `collect_round_inputs` (relationship deltas kind='llm' + world events с
+     emotional_salience), `update_states_from_round` (get_or_create пустой строки,
+     Sensors-emotion предложение при `sensors_service.is_enabled("emotion")`,
+     `compute_state_update` → `update_character_state`; report
+     {states, updated, sensors_used});
+  3. `app/crud.py`: `get_character_state`, `get_character_states_for_chat`,
+     `get_or_create_character_state` (пустая строка, commit, refresh),
+     `update_character_state` (частичное, stress clamp 0..1),
+     `get_relationship_events_for_round` (join RelationshipEvent×Relationship,
+     kind='llm', round_id), `get_world_events_for_round` (только extraction-события,
+     emotional_salience IS NOT NULL);
+  4. `app/schemas.py`: `CharacterStateRead` (JSON-валидаторы через
+     `normalize_emotional_state`); `BuiltContext.state_text` (вариант YOUR STATE);
+  5. `app/prompt_builder.py`: `build_your_state_block`/`state_block_from_dict`;
+  6. `app/context_builder.py`: параметр `character_state`, рендер `state_block`
+     под флагом (фиксированный блок, не усекается), `state_text` в BuiltContext,
+     счётчик в `component_tokens["character_state"]`;
+  7. `app/ollama_client.py`: `your_state_block` в `_build_generation_messages`
+     и legacy-пути из `built_context.state_text`;
+  8. `app/chat_engine.py`: `_round_step` — загрузка `crud.get_character_state`
+     под флагом (ошибка → warning, раунд не падает) и передача в
+     `context_builder.build(..., character_state=...)`;
+  9. `app/post_round_pipeline.py`: стадия `character_state` ПОСЛЕ relationships,
+     ПЕРЕД story (events раунда уже в БД; relationship deltas — best-effort, т.к.
+     анализатор фоновый); no-op при флаге off; изоляция try/except;
+  10. `app/config.py` + `.env.example`/`.env`: `CHARACTER_STATE_ENABLED`,
+      `EMOTION_ROUND_CAP` (0.4), `STRESS_ROUND_CAP` (0.2),
+      `SENSORS_EMOTION_INTENSITY_CAP` (0.3).
+- **Изменённые файлы**: `app/config.py`, `app/chat_engine.py`,
+  `app/context_builder.py`, `app/crud.py`, `app/ollama_client.py`,
+  `app/post_round_pipeline.py`, `app/prompt_builder.py`, `app/schemas.py`,
+  `.env.example` (+ `.env`), `tests/test_post_round_pipeline.py` (отчёт стадии);
+  новые `app/emotion_engine.py`, `app/character_state.py`,
+  `tests/test_character_state.py`.
+- **БД**: `character_states` уже создана в Sprint 0 (CREATE IF NOT EXISTS,
+  unique character_id) — новых миграций не потребовалось.
+- **Тесты**: `tests/test_character_state.py` (24: детерминированные правила
+  эмоций/стресса/mood/decay, Sensors-caps, запись из deltas+events, отсутствие
+  location/relationships в state, идемпотентность (одна строка на персонажа),
+  откат по флагу, Sensors-failure → детерминированный путь, рендер YOUR STATE,
+  CharacterStateRead). Полный прогон: **894 passed, 28 failed** — те же 28
+  pre-existing падений (task_queue/context_state/memory_service/embeddings и др.,
+  к Sprint 3 не относятся), 0 новых.
+- **Откат**: флаг off по умолчанию — state не пишется и не читается, блок
+  YOUR STATE не рендерится; таблица существовала до спринта.
+
 ### Sprint 4 — Attention (P1)
 
 - **Цель**: «воспринято ≠ вошло в сознание».
@@ -1551,6 +1639,78 @@ STORY            — current story state: активные threads + прогр�
   не то, что рендерится в recent history.
 - **Критерий**: attention пишется; extraction/context фильтруют по порогу.
 - **НЕ делать**: не менять presence-лестницу.
+
+#### Sprint 4 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (без изменения поведения при `attention_enabled=false` —
+  presence-лестница и рендер recent history не тронуты, attention не пишется):
+  1. `app/attention.py` (новый, чистый модуль без БД/LLM):
+     `attention_bucket` (LOW/MEDIUM/HIGH; `None` → HIGH — legacy-откат),
+     `compute_attention_score` (взвешенная сумма 8 компонентов §11: volume
+     из громких стимулов/`audio_level`, distance из presence-лестницы,
+     relevance из роли события + Sensors-significance, personal из упоминания
+     имени, emotional из активного якоря, novelty, relationship из targets
+     отношений наблюдателя, address из addressed=true; своя речь = 1.0),
+     `attention_weights` (нормировка на 1.0), `apply_sensors_significance`
+     (подсказка только в рамках `SENSORS_PERCEPTION_SIGNIFICANCE_CAP`);
+  2. `app/models.py`: `MessagePresence.attention` (REAL NULL) — колонка для
+     score пары (персонаж, событие); NULL = attention не считался (флаг off);
+  3. `app/database.py`: идемпотентный `ALTER TABLE message_presence
+     ADD COLUMN attention REAL NULL` в `ensure_schema` (существующие БД
+     обновляются на старте);
+  4. `app/schemas.py`: `MessagePresenceCreate.attention` (Optional[float],
+     0..1);
+  5. `app/crud.py`: `upsert_message_presence_batch` пишет attention при
+     создании и обновляет только при явно переданном (None не затирает);
+     `get_attention_map` (только не-NULL, пусто при флаге off);
+     `_attention_context_for_chat` (rel_targets + anchor_authors одним
+     заходом, 2 запроса); `_attention_score_for` (score + Sensors
+     significance); attention встроен в `compute_and_save_presence_for_message`
+     (синхронный путь) и `compute_and_save_presence_for_round` (пост-раунд);
+  6. Sensors perception-proposal (§5.1.3): только в presence round pass —
+     один вызов `sensors_service.run(task="perception")` на раунд при
+     `attention_enabled`; `significance` применяется в рамках caps; Sensors
+     НЕ определяет доступность информации (решает `perceive()`/presence) и
+     НЕ принимает решение о внимании; недоступен Sensors → детерминированный
+     путь (graceful degradation);
+  7. `app/witness_model.py`: `filter_history_for_memory_extraction` получила
+     `attention_map` — события с attention < LOW исключаются из memory-
+     контекста (reason=`low_attention_background`), даже при present/told;
+     `build_character_recency_tail` получила `attention_map` — такие события
+     не идут в реакцию/recency tail;
+  8. `app/memory_service.py`: `get_observable_context_for_character` +
+     `attention_map`; `_extract_and_save_memories` и summarization-путь грузят
+     `crud.get_attention_map` и передают в фильтр;
+  9. `app/context_builder.py`: `_load_attention_map` (chunks) + передача в
+     recency tail; recent history рендер не меняется;
+  10. `app/chat_engine.py`: загрузка attention_map в обоих путях генерации
+      и передача в fallback `build_character_recency_tail`;
+  11. `app/post_round_pipeline.py`: стадия `presence` получает `client` для
+      Sensors perception-proposal;
+  12. `app/config.py` + `.env.example`/`.env`: `ATTENTION_ENABLED` (false),
+      `ATTENTION_LOW` (0.35), `ATTENTION_HIGH` (0.7),
+      `ATTENTION_WEIGHT_VOLUME/DISTANCE/RELEVANCE/PERSONAL/EMOTIONAL/NOVELTY/
+      RELATIONSHIP/ADDRESS` (0.15/0.15/0.10/0.25/0.10/0.05/0.05/0.15),
+      `SENSORS_PERCEPTION_SIGNIFICANCE_CAP` (0.15).
+- **Изменённые файлы**: `app/attention.py` (новый), `app/models.py`,
+  `app/database.py`, `app/schemas.py`, `app/crud.py`, `app/witness_model.py`,
+  `app/memory_service.py`, `app/context_builder.py`, `app/chat_engine.py`,
+  `app/post_round_pipeline.py`, `app/config.py`, `.env.example` (+ `.env`),
+  `tests/test_attention.py` (новый).
+- **БД**: `message_presence` + `attention REAL NULL` (идемпотентный ALTER в
+  `ensure_schema`; новых таблиц нет).
+- **Тесты**: `tests/test_attention.py` (20: сценарии из постановки — падение
+  стакана=low, крик по имени=high, своя речь=1.0; якорь/новизна/имя меняют
+  ровно свою весовую компоненту; пороги bucket и откат None→HIGH; Sensors-caps;
+  запись attention через presence round pass (флаг on); откат (флаг off → NULL,
+  `get_attention_map` пуст); upsert не затирает существующее значение; memory
+  filter исключает low и включает high; recency tail исключает low и сохраняет
+  legacy без карты). Полный прогон: **914 passed, 28 failed** — те же 28
+  pre-existing падений (task_queue/context_state/memory_service/embeddings и др.,
+  к Sprint 4 не относятся), 0 новых.
+- **Откат**: `ATTENTION_ENABLED=false` по умолчанию — attention не считается
+  (NULL в БД), memory/recency фильтры ведут себя как раньше (None → HIGH);
+  presence-лестница и рендер recent history не изменены.
 
 ### Sprint 5 — Belief System (P0)
 
@@ -2145,8 +2305,8 @@ belief-system». На этом плане решение **пересматри�
 Sprint 0  — Подготовка: schema foundation, backfill (P0) ✅ (2026-08-04)
 Sprint 1  — Structured World Events (P0) ✅ (2026-08-05)
 Sprint 2  — Memory Architecture v2: типы + якоря (P0) ✅ (2026-08-05)
-Sprint 3  — Character State (P0)
-Sprint 4  — Attention (P1)
+Sprint 3  — Character State (P0) ✅ (2026-08-05)
+Sprint 4  — Attention (P1) ✅ (2026-08-05)
 Sprint 5  — Belief System (P0)
 Sprint 6  — Hybrid Retrieval v2 (P1)
 Sprint 7  — Relationship Evolution v2 (P1)

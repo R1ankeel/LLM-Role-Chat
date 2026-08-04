@@ -414,5 +414,76 @@ class Settings(BaseSettings):
         default=3, alias="RELATIONSHIP_ANCHOR_MAX"
     )
 
+    # ----- Character State (Plans/update20.md §8, Sprint 3) -----
+    # Единое runtime-состояние персонажа: emotional_state (JSON map
+    # emotion→intensity), mood, stress, physical_state, attention, goals.
+    # Хранит ТОЛЬКО то, чего нет в других таблицах (не локацию/не отношения).
+    # Пост-раунд детерминированно обновляется emotion_engine'ом из relationship
+    # deltas + событий раунда (+ опциональная Sensors-нормализация в рамках
+    # caps). Блок YOUR STATE рендерится только при включённом флаге.
+    character_state_enabled: bool = Field(
+        default=False, alias="CHARACTER_STATE_ENABLED"
+    )
+    # Caps emotion_engine (det. правила): сколько интенсивности эмоции может
+    # добавиться за один раунд и сколько стресса (0..1).
+    emotion_round_cap: float = Field(default=0.4, alias="EMOTION_ROUND_CAP")
+    stress_round_cap: float = Field(default=0.2, alias="STRESS_ROUND_CAP")
+    # Sensors-предложение эмоции может сдвинуть интенсивность не более чем на
+    # этот порог за раунд (Sensors НЕ задаёт mood напрямую — только в caps).
+    sensors_emotion_intensity_cap: float = Field(
+        default=0.3, alias="SENSORS_EMOTION_INTENSITY_CAP"
+    )
+
+    # ----- Attention (Plans/update20.md §11, Sprint 4) -----
+    # «Воспринято ≠ вошло в сознание». Детерминированный attention score для пары
+    # (персонаж, событие) пишется в `message_presence.attention`; используется
+    # фильтром memory extraction (attention < LOW → не в память) и хуком в recency
+    # tail. НЕ меняет presence-лестницу (риск Sprint 4: только то, что идёт в
+    # память, не то, что рендерится в recent history).
+    attention_enabled: bool = Field(
+        default=False, alias="ATTENTION_ENABLED"
+    )
+    # Пороги (§11): < LOW — «слышал фоном» (не в память/реакцию);
+    # LOW ≤ score < HIGH — «заметил» (в память с пониженной важностью);
+    # ≥ HIGH — «в центре внимания» (в память, в recency tail).
+    attention_low: float = Field(default=0.35, alias="ATTENTION_LOW")
+    attention_high: float = Field(default=0.7, alias="ATTENTION_HIGH")
+    # Веса компонентов score (сумма = 1.0, §11):
+    #   w_volume (громкость/стимулы), w_distance (same > adjacent > remote),
+    #   w_relevance (важность события), w_personal (имя/интерес),
+    #   w_emotional (якорь активен), w_novelty (новое vs повтор),
+    #   w_relationship (участвует target отношения), w_address (addressed=true).
+    attention_weight_volume: float = Field(
+        default=0.15, alias="ATTENTION_WEIGHT_VOLUME"
+    )
+    attention_weight_distance: float = Field(
+        default=0.15, alias="ATTENTION_WEIGHT_DISTANCE"
+    )
+    attention_weight_relevance: float = Field(
+        default=0.10, alias="ATTENTION_WEIGHT_RELEVANCE"
+    )
+    attention_weight_personal: float = Field(
+        default=0.25, alias="ATTENTION_WEIGHT_PERSONAL"
+    )
+    attention_weight_emotional: float = Field(
+        default=0.10, alias="ATTENTION_WEIGHT_EMOTIONAL"
+    )
+    attention_weight_novelty: float = Field(
+        default=0.05, alias="ATTENTION_WEIGHT_NOVELTY"
+    )
+    attention_weight_relationship: float = Field(
+        default=0.05, alias="ATTENTION_WEIGHT_RELATIONSHIP"
+    )
+    attention_weight_address: float = Field(
+        default=0.15, alias="ATTENTION_WEIGHT_ADDRESS"
+    )
+    # Sensors perception-proposal (§5.1.3): `significance` (0..1) может поднять
+    # attention score не более чем на эту величину — Sensors НЕ определяет
+    # окончательный набор информации (решает `perceive()`/presence) и НЕ
+    # принимает решение о внимании; только подсказка в рамках caps.
+    sensors_perception_significance_cap: float = Field(
+        default=0.15, alias="SENSORS_PERCEPTION_SIGNIFICANCE_CAP"
+    )
+
 
 settings = Settings()

@@ -4,12 +4,15 @@
 стадий. Каждая стадия — отдельная функция, обёрнутая в try/except: падение
 одной НЕ ломает раунд (graceful degradation).
 
-Стадии (порядок из §15):
+Стадии (порядок из §15, Sprint 3 добавил character_state после relationships):
 1. presence round pass   — ``crud.compute_and_save_presence_for_round``;
 2. event extraction      — ``event_service`` (LLM/Sensors) → ``crud.save_round_events``;
 3. memory extraction     — ``memory_service.process_post_round`` (background);
 4. relationships         — ``relationship_analyzer`` (background, если включён);
-5. story                 — каркас под спринты 8-11; в Sprint 1 — no-op.
+5. character state       — ``character_state.update_states_from_round`` (Sprint 3):
+   детерминированные эмоции/стресс/mood из world_events раунда + relationship
+   deltas (которые к этому моменту уже могут быть закоммичены фоновым анализатором);
+6. story                 — каркас под спринты 8-11; в Sprint 1 — no-op.
 
 Memory и relationship — внешние коллбеки (инъекция), чтобы избежать циклической
 зависимости ``pipeline → chat_engine``; ``chat_engine`` передаёт свои функции.
@@ -28,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _stage_presence(
+    client: Any,
     db,
     *,
     round_messages: list[Any],
@@ -36,7 +40,12 @@ async def _stage_presence(
     characters: list[Any],
     character_locations: dict[int, str],
 ) -> dict:
-    """Stage 1: presence round pass (perception witness rows for the round)."""
+    """Stage 1: presence round pass (perception witness rows for the round).
+
+    Sprint 4 (§11): с presence детерминированно пишется attention; Sensors
+    perception-proposal (§5.1.3) вызывается здесь (пост-раунд, один вызов на
+    раунд) только при ``attention_enabled`` — движок сам решает доступность.
+    """
     try:
         await crud.compute_and_save_presence_for_round(
             db,
@@ -45,6 +54,7 @@ async def _stage_presence(
             character_names,
             characters=characters,
             character_locations=character_locations,
+            client=client,
         )
         return {"ok": True, "stage": "presence"}
     except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
@@ -163,7 +173,7 @@ async def _stage_story(
     round_id: str | None,
     round_messages: list[Any],
 ) -> dict:
-    """Stage 5: story capture — каркас (спринты 8-11); в Sprint 1 — no-op."""
+    """Stage 6: story capture — каркас (спринты 8-11); в Sprint 1 — no-op."""
     return {
         "ok": True,
         "stage": "story",
@@ -171,6 +181,56 @@ async def _stage_story(
         "round_id": round_id,
         "messages": len(round_messages),
     }
+
+
+async def _stage_character_state(
+    client: Any,
+    db,
+    *,
+    chat_id: int,
+    round_id: str | None,
+    characters: list[Any],
+) -> dict:
+    """Stage 5: character state update (Sprint 3, Plans/update20.md §23).
+
+    Детерминированное обновление ``character_states`` через ``emotion_engine``
+    из relationship deltas раунда + world events (события идут из stage 2).
+    Стадия только ПОСЛЕ relationships/story нет — перед story, чтобы события
+    раунда (world_events, stage 2) уже были в БД. No-op при отключённом флаге
+    ``character_state_enabled``; падение стадии не роняет раунд.
+    """
+    if not settings.character_state_enabled:
+        return {
+            "ok": True,
+            "stage": "character_state",
+            "skipped": "flag off",
+        }
+    if not characters or not round_id:
+        return {
+            "ok": True,
+            "stage": "character_state",
+            "skipped": "no characters/round",
+        }
+    try:
+        from . import character_state
+
+        report = await character_state.update_states_from_round(
+            db,
+            chat_id,
+            round_id,
+            characters,
+            client=client,
+        )
+        return {
+            "ok": True,
+            "stage": "character_state",
+            "states": report["states"],
+            "updated": report["updated"],
+            "sensors_used": report["sensors_used"],
+        }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning("Post-round pipeline: character_state stage failed: %s", exc)
+        return {"ok": False, "stage": "character_state", "error": str(exc)}
 
 
 async def run_post_round_pipeline(
@@ -191,17 +251,25 @@ async def run_post_round_pipeline(
     relationship_analyzer: Callable[..., Awaitable[Any]] | None = None,
     stages: set[str] | None = None,
 ) -> dict:
-    """Оркестратор пост-раундных стадий (§15, Sprint 1).
+    """Оркестратор пост-раундных стадий (§15, Sprint 1, +character_state Sprint 3).
 
     Вызывается из ``chat_engine.process_user_message_streaming`` ПОСЛЕ генерации
     раунда и scene extraction. Каждая стадия изолирована: исключение одной не
     влияет на остальные и не роняет раунд. Возвращает отчёт по стадиям.
     """
-    enabled = stages or {"presence", "event_extraction", "memory", "relationships", "story"}
+    enabled = stages or {
+        "presence",
+        "event_extraction",
+        "memory",
+        "relationships",
+        "character_state",
+        "story",
+    }
     report: dict[str, Any] = {}
 
     if "presence" in enabled:
         report["presence"] = await _stage_presence(
+            client,
             db,
             round_messages=round_messages,
             character_ids=character_ids,
@@ -240,6 +308,15 @@ async def run_post_round_pipeline(
             round_snapshots=round_snapshots,
             character_snapshots=character_snapshots,
             round_id=round_id,
+        )
+
+    if "character_state" in enabled:
+        report["character_state"] = await _stage_character_state(
+            client,
+            db,
+            chat_id=chat_id,
+            round_id=round_id,
+            characters=characters,
         )
 
     if "story" in enabled:

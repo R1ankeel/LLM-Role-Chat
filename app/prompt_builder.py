@@ -317,6 +317,27 @@ def build_user_context_message(*blocks: str) -> str:
     return "\n\n".join(parts)
 
 
+def build_your_state_block(state: Any) -> str:
+    """Build the ``YOUR STATE`` block (Plans/update20.md §23, Sprint 3).
+
+    Рендер per-character runtime-состояния из ``character_states`` (эмоции,
+    настроение, стресс, физическое состояние, фокус, цель). Рендерится только
+    при включённом ``character_state_enabled`` (решает context_builder); пустой/
+    отсутствующий state → пустой блок. Блок отражает состояние персонажа, а не
+    World Truth — никакой локации/отношений здесь нет (они в других блоках).
+    """
+    if state is None:
+        return ""
+    return state_block_from_dict(state)
+
+
+def state_block_from_dict(state: Any) -> str:
+    """Рендер YOUR STATE из state-объекта (ORM-строка) или dict (Sprint 3)."""
+    from .character_state import build_your_state_block as _render
+
+    return _render(state)
+
+
 def build_take_actions_instruction() -> str:
     """Инструкция tool-calling `take_actions` (WPE.md §8, Ул.4, Фаза 2).
 

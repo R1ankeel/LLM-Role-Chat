@@ -1015,6 +1015,7 @@ def _build_generation_messages(
     epistemic_mask_block: str = "",
     directive_block: str = "",
     recency_tail_block: str = "",
+    your_state_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -1035,6 +1036,7 @@ def _build_generation_messages(
         feedback_block,
         consistency_feedback_block,
         scene_block,
+        your_state_block,
         behavior_drivers_block,
         open_issues_block,
         epistemic_mask_block,
@@ -1193,6 +1195,11 @@ async def _generate_once(
             location_descriptions=location_descriptions,
         )
 
+    # YOUR STATE block (Sprint 3, §23) — runtime-состояние персонажа.
+    # Рендер только когда context_builder получил state (флаг
+    # character_state_enabled + включённый билдер); иначе блок пуст.
+    your_state_block = built_context.state_text if built_context is not None else ""
+
     # Vocabulary fingerprinting block — prevents style contamination (Phase 5)
     vocabulary_block = build_vocabulary_block(character, prior_replies)
 
@@ -1244,6 +1251,7 @@ async def _generate_once(
             epistemic_mask_block=epistemic_mask_block,
             directive_block=directive_block,
             recency_tail_block=recency_tail_block,
+            your_state_block=your_state_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -1258,6 +1266,8 @@ async def _generate_once(
             context_parts.append(dialogue_block)
         if scene_block:
             context_parts.append(scene_block)
+        if your_state_block:
+            context_parts.append(your_state_block)
         if anti_mimicry_block:
             context_parts.append(anti_mimicry_block)
         if vocabulary_block:

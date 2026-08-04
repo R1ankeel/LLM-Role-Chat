@@ -574,8 +574,14 @@ def get_observable_context_for_character(
     same_round_ids: set[int] | None = None,
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
+    attention_map: dict[int, float] | None = None,
 ) -> witness_model.ObservableContext:
-    """Perception-filtered context safe for memory extraction (present/told only)."""
+    """Perception-filtered context safe for memory extraction (present/told only).
+
+    Sprint 4 (§11): ``attention_map`` — attention score пары (персонаж,
+    сообщения) из ``crud.get_attention_map``; события с attention < LOW в память
+    не идут даже при present/told (воспринято ≠ вошло в сознание).
+    """
     return witness_model.filter_history_for_memory_extraction(
         messages,
         viewer_character_id,
@@ -585,6 +591,7 @@ def get_observable_context_for_character(
         max_len=len(messages) or 1,
         viewer_location=viewer_location,
         character_locations=character_locations,
+        attention_map=attention_map,
     )
 
 
@@ -689,6 +696,7 @@ async def _extract_and_save_memories(
                 viewer_location = character_snap.get("location") or ""
 
                 presence_map = await crud.get_presence_map(db, message_ids, char_id)
+                attention_map = await crud.get_attention_map(db, message_ids, char_id)
                 observable = get_observable_context_for_character(
                     round_snapshots,
                     char_id,
@@ -697,6 +705,7 @@ async def _extract_and_save_memories(
                     same_round_ids=same_round_ids,
                     viewer_location=viewer_location,
                     character_locations=character_locations,
+                    attention_map=attention_map,
                 )
                 _log_memory_perception(
                     chat_id=chat_id,
@@ -877,6 +886,11 @@ async def _maybe_update_summaries(
                     [message.id for message in new_messages],
                     character_id,
                 )
+                attention_map = await crud.get_attention_map(
+                    db,
+                    [message.id for message in new_messages],
+                    character_id,
+                )
                 # Same stricter filter as memory: present/told only (no mentioned snippets)
                 observable = get_observable_context_for_character(
                     new_messages,
@@ -885,6 +899,7 @@ async def _maybe_update_summaries(
                     presence_map,
                     viewer_location=character_snap.get("location") or "",
                     character_locations=character_locations,
+                    attention_map=attention_map,
                 )
                 dialogue_text = observable.text
                 if not dialogue_text.strip():

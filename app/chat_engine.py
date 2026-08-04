@@ -603,6 +603,11 @@ async def process_user_message_streaming(
             history_message_ids,
             current_character.id,
         )
+        attention_map = await crud.get_attention_map(
+            db,
+            history_message_ids,
+            current_character.id,
+        )
 
         _log_generation_diagnostics(
             character_id=current_character.id,
@@ -661,6 +666,17 @@ async def process_user_message_streaming(
                 getattr(chat, "max_context_tokens", None)
                 or settings.max_context_tokens
             )
+            character_state = None
+            if settings.character_state_enabled:
+                try:
+                    character_state = await crud.get_character_state(
+                        db, current_character.id
+                    )
+                except Exception as exc:  # noqa: BLE001 — state не роняет раунд
+                    logger.warning(
+                        "[chat_id=%d] Failed to load character state for %s: %s",
+                        chat_id, current_character.name, exc,
+                    )
             built_context = await context_builder.build(
                 db=db,
                 chat_id=chat_id,
@@ -700,6 +716,7 @@ async def process_user_message_streaming(
                     player_location,
                 ),
                 max_tokens=max_tokens,
+                character_state=character_state,
             )
 
         response_text = ""
@@ -751,6 +768,7 @@ async def process_user_message_streaming(
                         current_character.id,
                         character_names,
                         player_id=player_id,
+                        attention_map=attention_map,
                     )
                 ),
             ):
@@ -2260,6 +2278,7 @@ async def regenerate_message_streaming(
     # Presence & prior replies visible to this character
     history_message_ids = [m.id for m in context_messages if m.id is not None]
     presence_map = await crud.get_presence_map(db, history_message_ids, character.id)
+    attention_map = await crud.get_attention_map(db, history_message_ids, character.id)
 
     _log_generation_diagnostics(
         character_id=character.id,
@@ -2392,6 +2411,7 @@ async def regenerate_message_streaming(
                     character.id,
                     character_names,
                     player_id=player_id,
+                    attention_map=attention_map,
                 )
             ),
         ):

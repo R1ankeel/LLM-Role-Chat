@@ -139,8 +139,13 @@ Witness-присутствие персонажа для сообщения (к�
 | `message_id` | FK → `messages.id` ON DELETE CASCADE | |
 | `character_id` | FK → `characters.id` ON DELETE CASCADE | |
 | `presence` | TEXT(20) | `present` / `mentioned` / `audible` / `absent` / `told` |
+| `attention` | REAL NULL | Sprint 4 (§11): score внимания пары (персонаж, событие) 0..1. NULL — attention не считался (флаг off) → legacy. Идемпотентный ALTER в `ensure_schema` |
 
 UNIQUE `(message_id, character_id)`. Индекс `ix_presence_character_message`.
+
+Attention (Sprint 4, §11) фильтрует только то, что идёт в память (attention <
+`ATTENTION_LOW` → не в память) и recency tail; presence-лестница/рендер recent
+history не меняются. Подробности — `docs/attention.md`.
 
 ### `memories`
 Долгосрочная память персонажа. Дубликаты исключаются по `content_hash` (SHA-256 нормализованного текста) в рамках персонажа.
@@ -272,9 +277,14 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 Заведены как фундамент state-driven архитектуры (`update20.md`, Sprint 0, п.3):
 создаются идемпотентно, **read-path их не читает**, движок их не заполняет до
 соответствующих спринтов. 10 таблиц из плана + `consolidation_state` (по §20/E).
+С Sprint 3 заполняется `character_states` (под canary-флагом); остальные — по
+своим спринтам.
 
-### `character_states` (Sprint 3)
+### `character_states` (Sprint 3 ✅)
 Одна строка на персонажа в чате: эмоции, стресс, физическое состояние, внимание, цели.
+Заполняется пост-раунд стадией `character_state` в `post_round_pipeline`
+(детерминированный `emotion_engine` из relationship_events + world_events;
+под флагом `CHARACTER_STATE_ENABLED`, default false). См. `docs/character_state.md`.
 
 | колонка | тип | примечание |
 |---|---|---|

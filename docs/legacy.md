@@ -12,18 +12,21 @@
 
 | поле | статус | комментарий | замена |
 |---|---|---|---|
-| `mood` | legacy | глобальное настроение сцены; движок не пишет | `character_states.mood` (per-character, Sprint 3) |
-| `tension` | legacy | глобальное напряжение; движок не пишет | `character_states` эмоции/стресс (Sprint 3) |
+| `mood` | legacy | глобальное настроение сцены; движок не пишет | `character_states.mood` (per-character, Sprint 3 ✅) |
+| `tension` | legacy | глобальное напряжение; движок не пишет | `character_states` эмоции/стресс (Sprint 3 ✅) |
 | `plot_flags` | legacy | флаги сюжета; движок не пишет, устанавливает только пользователь | `story_states.current_state` (Sprint 8) |
 | `active_events` | legacy | активные сюжетные события; движок не пишет | `story_threads` / `story_events` (Sprint 8/10) |
-| `active_goal` / `active_goals` | legacy | цели сцены; движок не пишет | `character_states.active_goal/personal_goals` (Sprint 3), `npc_plans` (Sprint 10) |
+| `active_goal` / `active_goals` | legacy | цели сцены; движок не пишет | `character_states.active_goal/personal_goals` (Sprint 3 ✅), `npc_plans` (Sprint 10) |
 | `weather` | актуально | пишется/читается существующим путём | — |
 | `time_of_day` | актуально | из `extract_scene_state` (но движком не пишется) | — |
 
 Правило: legacy-поля **сохраняются** для обратной совместимости (пользовательский
 PATCH и старые сценарии не должны ломаться), но **не дублируются** в новых
 таблицах до их спринтов. Переносить значения из legacy в state-таблицы не нужно
-до спринтов, которые их наполняют.
+до спринтов, которые их наполняют. С Sprint 3 per-character `mood`/`stress`/
+`active_goal` пишет `emotion_engine` в `character_states`; глобальные
+`custom_state.mood/tension` при этом остаются нетронутыми (не дублируются и не
+читаются движком).
 
 ## `characters.location` (строковая)
 
@@ -46,11 +49,11 @@ Legacy-bridge. Sprint 0 добавил `world_events.location_id` (канони�
 
 | legacy-поле | спринт замены |
 |---|---|
-| `custom_state.mood` | 3 (`character_states.mood`) |
-| `custom_state.tension` | 3 (`character_states`) |
+| `custom_state.mood` | 3 ✅ (`character_states.mood`) |
+| `custom_state.tension` | 3 ✅ (`character_states`) |
 | `custom_state.plot_flags` | 8 (`story_states`) |
 | `custom_state.active_events` | 8/10 (`story_threads`/`story_events`) |
-| `custom_state.active_goal(s)` | 3/10 (`character_states`/`npc_plans`) |
+| `custom_state.active_goal(s)` | 3 ✅/10 (`character_states`/`npc_plans`) |
 | `chats.general_prompt` (сюжет) | 8 (`story_states.original_plot`) |
 | `characters.location` | уже частично (WPE Фаза 1 → `location_id`) |
 | `world_events.location` | Sprint 0 (→ `location_id`) |

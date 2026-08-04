@@ -20,7 +20,6 @@ from .perception import (
 )
 from .prompt_builder import build_system_intervention_block
 from .stimuli import build_audible_line, parse_stimuli, stimulus_targets
-
 Presence = Literal["present", "mentioned", "audible", "absent", "told"]
 
 # Presence values that count as real observation for memory / summary extraction.
@@ -269,6 +268,7 @@ def build_character_recency_tail(
     character_names: dict[int, str],
     *,
     player_id: int | None = None,
+    attention_map: dict[int, float] | None = None,
 ) -> str:
     """Recency Tail (WPE.md §6, Ул.3, И15): P0-события одного персонажа.
 
@@ -276,7 +276,13 @@ def build_character_recency_tail(
     remote_status=delivered), включая срочные вызовы из стимулов, и рендерит
     их блоком ``build_system_intervention_block``. Пересобирается отдельно для
     каждого персонажа: в хвост конкретного NPC попадают только его события.
+
+    Sprint 4 (§11): при ``attention_enabled`` события с ``attention < LOW``
+    («слышал фоном») в реакцию/recency tail НЕ идут (рендерится recent history
+    при этом не меняется). ``None``/отсутствие в карте → legacy (HIGH bucket).
     """
+    from .attention import attention_bucket
+
     lines: list[str] = []
     for message in messages:
         targets = parse_target_ids(_get_attr(message, "target_character_ids"))
@@ -289,6 +295,10 @@ def build_character_recency_tail(
             author = character_names.get(author_id, "Персонаж")
         else:
             author = "Игрок"
+        mid = _message_id(message)
+        if attention_map and mid is not None and mid in attention_map:
+            if attention_bucket(attention_map[mid]) == "low":
+                continue
         lines.append(f"{author} обращается к тебе прямо сейчас. Отреагируй!")
     return build_system_intervention_block(lines)
 
@@ -523,13 +533,20 @@ def filter_history_for_memory_extraction(
     viewer_location: str | None = None,
     character_locations: dict[int, str] | None = None,
     adjacency_index: dict[str, set[str]] | None = None,
+    attention_map: dict[int, float] | None = None,
 ) -> ObservableContext:
     """Build memory-safe observable dialogue for one character.
 
     Reuses the same presence/perception rules as RP generation, but only
     includes ``present`` and ``told`` events. Soft ``mentioned``/``audible``
     snippets are excluded so remote name-drops cannot become hard memories.
+
+    Sprint 4 (§11): при ``attention_enabled`` события с ``attention < LOW``
+    («слышал фоном») в память НЕ идут, даже если ``present`` — воспринято, но
+    не вошло в сознание. ``None``/отсутствие в карте → legacy (HIGH bucket).
     """
+    from .attention import attention_bucket
+
     if max_len is None:
         max_len = len(messages) or 1
     recent = messages[-max_len:] if len(messages) > max_len else messages
@@ -569,6 +586,21 @@ def filter_history_for_memory_extraction(
                 }
             )
             continue
+
+        # Sprint 4 (§11): attention < LOW → в память НЕ идёт (фон), при этом
+        # рендер recent history не меняется (presence-лестница нетронута).
+        if attention_map and mid is not None and mid in attention_map:
+            if attention_bucket(attention_map[mid]) == "low":
+                skipped.append(
+                    {
+                        "message_id": mid,
+                        "presence": presence,
+                        "location": location,
+                        "preview": preview,
+                        "reason": "low_attention_background",
+                    }
+                )
+                continue
 
         # For memory: use full present content; for told keep the told template.
         line = format_line_for_presence(

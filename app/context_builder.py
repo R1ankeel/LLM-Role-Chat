@@ -36,6 +36,7 @@ from .prompt_builder import (
     build_scene_block,
     build_system_prompt,
     build_vocabulary_block,
+    build_your_state_block,
     merge_char_locations,
 )
 from .repetition_detector import build_repetition_feedback_block
@@ -82,6 +83,25 @@ async def _load_presence_map(
     return presence_map
 
 
+async def _load_attention_map(
+    db: AsyncSession,
+    message_ids: list[int],
+    character_id: int,
+) -> dict[int, float]:
+    """Attention scores (Sprint 4, §11) in chunks; empty when flag is off.
+
+    Используется только для фильтрации recency tail — recent history рендер
+    (presence-лестница) не трогается.
+    """
+    if not settings.attention_enabled or not message_ids:
+        return {}
+    attention_map: dict[int, float] = {}
+    for start in range(0, len(message_ids), _PRESENCE_QUERY_CHUNK):
+        chunk = message_ids[start : start + _PRESENCE_QUERY_CHUNK]
+        attention_map.update(await crud.get_attention_map(db, chunk, character_id))
+    return attention_map
+
+
 class ContextBuilder:
     """Assembles one character's context within a token budget."""
 
@@ -114,6 +134,7 @@ class ContextBuilder:
         prior_replies: list[tuple[str, str]] | None = None,
         is_isolated: bool = False,
         max_tokens: int | None = None,
+        character_state: Any = None,
     ) -> schemas.BuiltContext:
         counter = self._token_counter
         budget = build_budget(max_tokens)
@@ -132,6 +153,7 @@ class ContextBuilder:
             m.id for m in candidates if getattr(m, "id", None) is not None
         ]
         presence_map = await _load_presence_map(db, message_ids, char_id)
+        attention_map = await _load_attention_map(db, message_ids, char_id)
 
         filter_enabled = bool(settings.enable_witness_filter)
         # Renderer (WPE.md §4/§6, Фаза 6): канало-зависимый текст при включённом
@@ -226,6 +248,7 @@ class ContextBuilder:
                 char_id,
                 character_names,
                 player_id=None,
+                attention_map=attention_map,
             )
 
         # ---- 2. summary frontier split --------------------------------
@@ -295,6 +318,12 @@ class ContextBuilder:
             locations=locations,
             location_descriptions=location_descriptions,
         )
+        # YOUR STATE (Sprint 3, Plans/update20.md §23): runtime-состояние
+        # персонажа. Заполняется пост-раунд emotion_engine'ом; рендер только
+        # при character_state_enabled. Часть фиксированных блоков — не усекается.
+        state_block = ""
+        if settings.character_state_enabled and character_state is not None:
+            state_block = build_your_state_block(character_state)
         instructions_text = self._build_instructions_text(
             character,
             scene_state,
@@ -305,6 +334,7 @@ class ContextBuilder:
         )
         system_tokens = counter.count(system_block)
         scene_tokens = counter.count(scene_block)
+        state_tokens = counter.count(state_block)
         instructions_tokens = counter.count(instructions_text)
 
         # ---- 6. summary (P2, budgeted) ---------------------------------
@@ -342,7 +372,9 @@ class ContextBuilder:
             mem_tokens = counter.count(mem_block)
 
         # ---- 8. final enforcement pass (priority order) ----------------
-        fixed_tokens = system_tokens + scene_tokens + instructions_tokens
+        fixed_tokens = (
+            system_tokens + scene_tokens + state_tokens + instructions_tokens
+        )
         content_available = max(
             0, budget.total_tokens - budget.reserve_tokens - fixed_tokens
         )
@@ -398,6 +430,7 @@ class ContextBuilder:
         total_tokens = (
             system_tokens
             + scene_tokens
+            + state_tokens
             + summary_tokens
             + mem_tokens
             + retrieved_tokens
@@ -432,6 +465,7 @@ class ContextBuilder:
         component_tokens = {
             "system": system_tokens,
             "scene": scene_tokens,
+            "character_state": state_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -451,6 +485,7 @@ class ContextBuilder:
             summary_text=summary_text or None,
             memories=mem_list,
             recency_tail_text=recency_tail_text,
+            state_text=state_block,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,
@@ -723,12 +758,13 @@ class ContextBuilder:
     def _log_context(self, built: schemas.BuiltContext) -> None:
         t = built.component_tokens
         logger.info(
-            "Context budget: %d | system=%d scene=%d relationships=%d "
-            "summary=%d memories=%d retrieved_history=%d recent_history=%d "
-            "instructions=%d reserve=%d | TOTAL=%d mode=%s dropped=%d",
+            "Context budget: %d | system=%d scene=%d character_state=%d "
+            "relationships=%d summary=%d memories=%d retrieved_history=%d "
+            "recent_history=%d instructions=%d reserve=%d | TOTAL=%d mode=%s dropped=%d",
             built.budget.total_tokens,
             t.get("system", 0),
             t.get("scene_state", 0),
+            t.get("character_state", 0),
             t.get("relationships", 0),
             t.get("summary", 0),
             t.get("memories", 0),

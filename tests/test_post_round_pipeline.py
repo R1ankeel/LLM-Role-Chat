@@ -119,7 +119,8 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
     report = await run_post_round_pipeline(**kwargs)
 
     assert set(report.keys()) == {
-        "presence", "event_extraction", "memory", "relationships", "story",
+        "presence", "event_extraction", "memory", "relationships",
+        "character_state", "story",
     }
     assert report["presence"]["ok"] is True
     # флаг off по умолчанию → стадия извлечения событий — no-op
@@ -129,6 +130,9 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
     assert report["memory"].get("skipped") == "no processor"
     assert report["relationships"]["ok"] is True
     assert report["relationships"].get("skipped") == "analyzer off"
+    # character_state — флаг off по умолчанию → no-op
+    assert report["character_state"]["ok"] is True
+    assert report["character_state"].get("skipped") == "flag off"
     assert report["story"]["ok"] is True
 
 

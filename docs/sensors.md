@@ -69,7 +69,40 @@ Sensors **не может** самостоятельно: изменять БД 
 Sprint 0 заводит только каркас (конфиг, сервис, схемы, тесты) под флагом off.
 К процессам **не подключено**: ни perception, ни memory, ни relationships не
 вызывают Sensors. Подключение — по спринтам (§5.1.3): event classification —
-Sprint 1 ✅, memory extraction — Sprint 2 ✅, emotion/mood — Sprint 3.
+Sprint 1 ✅, memory extraction — Sprint 2 ✅, emotion/mood — Sprint 3 ✅.
+
+## Подключение: Emotion/Mood (Sprint 3)
+
+`app/character_state.py::update_states_from_round` — при активной задаче
+(`sensors_service.is_enabled("emotion")`: `SENSORS_MODEL` + `sensors_enabled` +
+`sensors_emotion_enabled`) SensorsService предлагает `{emotion, intensity,
+confidence, mood_delta}` (схема `emotion`). Движок `emotion_engine` применяет
+предложение **только в рамках caps и правил**:
+
+- сдвиг интенсивности ограничен `SENSORS_EMOTION_INTENSITY_CAP` (default 0.3)
+  за раунд и clamp [0,1]; emotion из стандартного вокабуляра `EMOTIONS`;
+- Sensors **НЕ задаёт mood напрямую** — `mood` всегда выводит `derive_mood`
+  из emotional_state + stress (детерминированно);
+- Sensors недоступен / невалидный JSON / неизвестная эмоция → `None`,
+  детерминированный путь (graceful degradation, §5.1.8).
+
+## Подключение: Perception proposal (Sprint 4)
+
+`app/crud.py::compute_and_save_presence_for_round` — при `attention_enabled` и
+активной задаче `perception` (`sensors_service.is_enabled("perception")`:
+`SENSORS_MODEL` + `sensors_enabled` + `sensors_perception_enabled`) SensorsService
+предлагает `{potential_visual, potential_audio, addressed, notice,
+significance}` (схема `perception`, §5.1.3). Движок:
+
+- использует `significance` (0..1) как подсказку к attention score: подъём
+  ограничен `SENSORS_PERCEPTION_SIGNIFICANCE_CAP` (default 0.15);
+- Sensors **не определяет** окончательный набор информации — доступность
+  решает только существующий `perceive()`/presence-лестница;
+- Sensors **не принимает** решение о внимании (пороги остаются движком);
+- Sensors недоступен / невалидный JSON / timeout → `None`, детерминированный
+  путь (graceful degradation, §5.1.8).
+
+Подробно про attention-слой — `docs/attention.md`.
 
 ## Подключение: Memory extraction (Sprint 2)
 

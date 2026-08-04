@@ -360,6 +360,18 @@ def ensure_schema(db_engine) -> None:
             )
         )
 
+        # Sprint 4 (Plans/update20.md §11): attention score пары (персонаж, событие).
+        # Идемпотентный ALTER: существующие строки получают NULL (attention не
+        # считался) — read-path при выключенном флаге не читает колонку.
+        presence_columns = {col["name"] for col in inspector.get_columns("message_presence")}
+        if "attention" not in presence_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE message_presence ADD COLUMN attention REAL NULL"
+                )
+            )
+            logger.info("Added attention column to message_presence")
+
         # Create scene_states table if not exists (P3 Scene Tracking) - BEFORE indexes
         conn.execute(
             text(

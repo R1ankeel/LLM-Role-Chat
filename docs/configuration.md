@@ -150,6 +150,40 @@
 
 Приоритет бюджета: резерв → state (P0) → summary/memory (P2) → retrieval (P3) → свежий диалог (остаток).
 
+## Character State (Sprint 3, `Plans/update20.md §8`)
+
+| ключ | дефолт | описание |
+|---|---|---|
+| `CHARACTER_STATE_ENABLED` | `false` | единое runtime-состояние персонажа: писать/читать `character_states` пост-раунд + рендерить блок `YOUR STATE` |
+| `EMOTION_ROUND_CAP` | `0.4` | макс. прирост интенсивности одной эмоции за раунд |
+| `STRESS_ROUND_CAP` | `0.2` | макс. прирост стресса за раунд (0..1) |
+| `SENSORS_EMOTION_INTENSITY_CAP` | `0.3` | макс. сдвиг интенсивности от Sensors-предложения эмоции за раунд |
+
+Подробно: `docs/character_state.md`. При `CHARACTER_STATE_ENABLED=false` (default)
+таблица не пишется и не читается, поведение равно legacy.
+
+## Attention (Sprint 4, `Plans/update20.md §11`)
+
+| ключ | дефолт | описание |
+|---|---|---|
+| `ATTENTION_ENABLED` | `false` | слой «воспринято ≠ вошло в сознание»: считать/писать `message_presence.attention` и фильтровать память/recency tail |
+| `ATTENTION_LOW` | `0.35` | нижний порог: `score < LOW` — «слышал фоном» (не в память/реакцию) |
+| `ATTENTION_HIGH` | `0.7` | верхний порог: `score ≥ HIGH` — «в центре внимания» (в память, в recency tail) |
+| `ATTENTION_WEIGHT_VOLUME` | `0.15` | вес громкости (громкие стимулы / audio_level) |
+| `ATTENTION_WEIGHT_DISTANCE` | `0.15` | вес близости (same > adjacent > remote по presence) |
+| `ATTENTION_WEIGHT_RELEVANCE` | `0.10` | вес важности события (своя речь/игрок/персонаж/система) |
+| `ATTENTION_WEIGHT_PERSONAL` | `0.25` | вес упоминания имени наблюдателя |
+| `ATTENTION_WEIGHT_EMOTIONAL` | `0.10` | вес активного эмоционального якоря |
+| `ATTENTION_WEIGHT_NOVELTY` | `0.05` | вес новизны (новое vs повтор) |
+| `ATTENTION_WEIGHT_RELATIONSHIP` | `0.05` | вес участия target отношения наблюдателя |
+| `ATTENTION_WEIGHT_ADDRESS` | `0.15` | вес addressed=true (в target_character_ids) |
+| `SENSORS_PERCEPTION_SIGNIFICANCE_CAP` | `0.15` | макс. подъём attention score от Sensors perception-proposal (§5.1.3) |
+
+Подробно: `docs/attention.md`. При `ATTENTION_ENABLED=false` (default) attention
+не считается (NULL в БД), memory/recency фильтры ведут себя как раньше;
+presence-лестница и рендер recent history не меняются.
+
+
 ## Динамический num_ctx (KV window)
 
 | ключ | дефолт | описание |

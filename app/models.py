@@ -316,7 +316,14 @@ class Message(Base):
 
 
 class MessagePresence(Base):
-    """Per-character witness presence for a message."""
+    """Per-character witness presence for a message.
+
+    Sprint 4 (Plans/update20.md §11): колонка ``attention`` (REAL NULL) — score
+    внимания персонажа к событию (0..1), пишется движком детерминированно вместе
+    с presence. Фильтрует то, что идёт в память (attention < ATTENTION_LOW → не
+    в память) и recency tail; presence-лестницу не меняет. NULL — attention не
+    считался (флаг off) → legacy-поведение.
+    """
 
     __tablename__ = "message_presence"
     __table_args__ = (
@@ -332,6 +339,7 @@ class MessagePresence(Base):
         ForeignKey("characters.id", ondelete="CASCADE"), nullable=False
     )
     presence: Mapped[str] = mapped_column(String(20), nullable=False)
+    attention: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     message: Mapped["Message"] = relationship(back_populates="presence_records")
     character: Mapped["Character"] = relationship()

@@ -193,6 +193,15 @@
 инструкций, не усекается бюджетом (резерв `context_reserve_tokens`), и
 дублируется в `BuiltContext.recency_tail_text`.
 
+**Sprint 4 (Attention, §11)**: при `ATTENTION_ENABLED` вместе с presence
+детерминированно пишется `message_presence.attention` (score 0..1, см.
+`app/attention.py`). События с `attention < ATTENTION_LOW` исключаются из
+memory extraction (`witness_model.filter_history_for_memory_extraction` через
+`attention_map`) и из recency tail / реакции (`build_character_recency_tail`);
+рендер recent history и presence-лестница **не меняются**. Sensors
+perception-proposal (§5.1.3) — в presence round pass, `significance` применяется
+в рамках `SENSORS_PERCEPTION_SIGNIFICANCE_CAP`. Подробно: `docs/attention.md`.
+
 Откат обеих фаз — выключение флагов (legacy `can_character_perceive_event`
 сохранён как fallback).
 
@@ -310,7 +319,7 @@ partial → бинарный full/none по каналам.
 
 ### 5. Пост-раунд (в том же запросе)
 
-1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций.
+1. **Presence round pass** — пересчёт presence для всех сообщений раунда с учётом финальных локаций. При `ATTENTION_ENABLED` (Sprint 4, §11) вместе с presence детерминированно пишется `message_presence.attention`, а Sensors perception-proposal (§5.1.3) может поднять score в рамках `SENSORS_PERCEPTION_SIGNIFICANCE_CAP` (см. `docs/attention.md`).
 2. **Извлечение сцены** (`extract_scene_state`): один LLM-вызов с structured output (`format` JSON-схема), определяет локации персонажей. `time_of_day` из ответа LLM игнорируется — движок никогда не меняет время суток автоматически, его устанавливает только пользователь через `PATCH /chats/{id}/scene`.
    - Локации принимаются только если: имя в списке разрешённых локаций И есть текстовое свидетельство перемещения (`_detect_movement_in_text`).
    - Перемещения объявляются системными сообщениями `role="system"` с `visibility="global"`.

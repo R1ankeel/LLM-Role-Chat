@@ -5,7 +5,7 @@ import logging
 import random
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
-from typing import Literal, Optional, Tuple
+from typing import Any, Literal, Optional, Tuple
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -1177,6 +1177,10 @@ async def upsert_message_presence_batch(
             db.add(models.MessagePresence(**record.model_dump()))
         else:
             existing.presence = record.presence
+            # Sprint 4 (§11): attention обновляется только если явно передан
+            # (None при выключенном флаге → существующее значение сохраняется).
+            if record.attention is not None:
+                existing.attention = record.attention
     await db.commit()
 
 
@@ -1192,6 +1196,134 @@ async def get_presence_map(
     result = await db.execute(stmt)
     rows = list(result.scalars().all())
     return {row.message_id: row.presence for row in rows}
+
+
+async def get_attention_map(
+    db: AsyncSession, message_ids: list[int], character_id: int
+) -> dict[int, float]:
+    """Attention score (Sprint 4, §11) для пары (персонаж, сообщения).
+
+    Пусто при выключенном ``attention_enabled`` — attention не считался
+    (NULL в БД) → фильтры ведут себя как legacy. Возвращает
+    ``{message_id: attention}`` только для строк с не-NULL score.
+    """
+    if not settings.attention_enabled or not message_ids:
+        return {}
+    stmt = select(
+        models.MessagePresence.message_id, models.MessagePresence.attention
+    ).where(
+        models.MessagePresence.character_id == character_id,
+        models.MessagePresence.message_id.in_(message_ids),
+        models.MessagePresence.attention.is_not(None),
+    )
+    result = await db.execute(stmt)
+    return {mid: attn for mid, attn in result.all()}
+
+
+async def _attention_context_for_chat(
+    db: AsyncSession, chat_id: int, character_ids: list[int]
+) -> dict[int, dict[str, set[int]]]:
+    """Per-character внимание-контекст (§11) одним заходом (2 запроса).
+
+    Для каждого персонажа:
+    - ``rel_targets`` — targets его направленных отношений (w_relationship);
+    - ``anchor_authors`` — targets отношений с эмоциональным якорем
+      (w_emotional: событие с таким автором активирует якорь).
+    Пусто при выключенном ``attention_enabled`` — score не считается.
+    """
+    if not settings.attention_enabled or not character_ids:
+        return {}
+    rel_stmt = select(models.CharacterRelationship).where(
+        models.CharacterRelationship.chat_id == chat_id,
+        models.CharacterRelationship.source_character_id.in_(character_ids),
+    )
+    rels = list((await db.execute(rel_stmt)).scalars().all())
+    rel_ids = [r.id for r in rels]
+
+    anchored_rel_ids: set[int] = set()
+    if rel_ids:
+        anchor_stmt = select(models.MemoryAnchor.relationship_id).where(
+            models.MemoryAnchor.relationship_id.in_(rel_ids)
+        )
+        anchored_rel_ids = set((await db.execute(anchor_stmt)).scalars().all())
+
+    rel_targets: dict[int, set[int]] = {}
+    anchor_authors: dict[int, set[int]] = {}
+    for rel in rels:
+        rel_targets.setdefault(rel.source_character_id, set()).add(
+            rel.target_character_id
+        )
+        if rel.id in anchored_rel_ids:
+            anchor_authors.setdefault(rel.source_character_id, set()).add(
+                rel.target_character_id
+            )
+    return {
+        cid: {
+            "rel_targets": rel_targets.get(cid, set()),
+            "anchor_authors": anchor_authors.get(cid, set()),
+        }
+        for cid in character_ids
+    }
+
+
+def _attention_score_for(
+    *,
+    message,
+    character_id: int,
+    presence: str,
+    character_names: dict[int, str],
+    rel_targets: set[int],
+    anchor_authors: set[int],
+    sensors_significance: float | None = None,
+) -> float:
+    """Детерминированный attention score пары (персонаж, событие) (§11).
+
+    Sensors ``significance`` (если передан) применяется как подсказка в рамках
+    caps — Sensors не решает доступность информации (presence) и не принимает
+    решение о внимании.
+    """
+    from . import attention
+
+    author_id = getattr(message, "character_id", None)
+    anchor_active = False
+    if author_id is not None:
+        try:
+            anchor_active = int(author_id) in anchor_authors
+        except (TypeError, ValueError):
+            pass
+    score = attention.compute_attention_score(
+        presence=presence,
+        event=perception.event_from_message(message),
+        observer={
+            "character_id": character_id,
+            "name": character_names.get(character_id, ""),
+        },
+        character_names=character_names,
+        relationship_target_ids=rel_targets,
+        anchor_active=anchor_active,
+    )
+    if sensors_significance is not None:
+        score = attention.apply_sensors_significance(score, sensors_significance)
+    return score
+
+
+def _round_text_snippet(round_messages: list, max_len: int = 1500) -> str:
+    """Короткий текст раунда для sensor-задачи (минимальный контекст §5.1.7)."""
+    parts: list[str] = []
+    for message in round_messages:
+        role = getattr(message, "role", None)
+        content = str(getattr(message, "content", "") or "")
+        if not content:
+            continue
+        if role == "user":
+            parts.append(f"Игрок: {content}")
+        elif role == "system":
+            parts.append(f"Система: {content}")
+        else:
+            name = getattr(getattr(message, "character", None), "name", None) or ""
+            parts.append(f"{name}: {content}")
+    snippet = "\n".join(parts)
+    return snippet[:max_len]
 
 
 def _build_perception_world_state(
@@ -1282,6 +1414,22 @@ async def compute_and_save_presence_for_message(
         if chat_id is not None:
             known_voices = await _known_voices_for_chat(db, chat_id)
 
+    # Sprint 4 (§11): attention score считается детерминированно вместе с
+    # presence (только для включённого флага). Sensors perception-proposal не
+    # вызывается на синхронном пути — только в пост-раунд presence pass.
+    attention_ctx: dict[int, dict[str, set[int]]] = {}
+    if settings.attention_enabled:
+        chat_id = getattr(message, "chat_id", None)
+        if chat_id is None:
+            for character in characters:
+                chat_id = getattr(character, "chat_id", None)
+                if chat_id is not None:
+                    break
+        if chat_id is not None:
+            attention_ctx = await _attention_context_for_chat(
+                db, chat_id, [c.id for c in characters]
+            )
+
     records: list[schemas.MessagePresenceCreate] = []
     result: dict[int, str] = {}
     for character in characters:
@@ -1305,11 +1453,23 @@ async def compute_and_save_presence_for_message(
                 character_locations=locations,
             )
         result[character.id] = presence
+        attention = None
+        if attention_ctx:
+            ctx = attention_ctx.get(character.id, {})
+            attention = _attention_score_for(
+                message=message,
+                character_id=character.id,
+                presence=presence,
+                character_names=names,
+                rel_targets=ctx.get("rel_targets", set()),
+                anchor_authors=ctx.get("anchor_authors", set()),
+            )
         records.append(
             schemas.MessagePresenceCreate(
                 message_id=message_id,
                 character_id=character.id,
                 presence=presence,
+                attention=attention,
             )
         )
     await upsert_message_presence_batch(db, records)
@@ -1324,6 +1484,7 @@ async def compute_and_save_presence_for_round(
     *,
     characters: list | None = None,
     character_locations: dict[int, str] | None = None,
+    client: Any = None,
 ) -> None:
     """Persist perception-based presence for all messages in a completed round.
 
@@ -1333,6 +1494,13 @@ async def compute_and_save_presence_for_round(
     Фаза 6: для событий удалённых каналов доставки тредов подставляются
     по-событийно, voice familiarity — из отношений при включённом
     ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED``.
+
+    Sprint 4 (§11): вместе с presence детерминированно пишется attention score.
+    Sensors perception-proposal (§5.1.3) вызывается только здесь (пост-раунд,
+    один вызов на раунд при ``sensors_perception_enabled``): предложенная
+    ``significance`` применяется как подсказка к attention в рамках
+    ``SENSORS_PERCEPTION_SIGNIFICANCE_CAP``; доступность информации (presence)
+    Sensors не определяет. Недоступен Sensors → детерминированный путь.
     """
     if characters is None:
         characters = []
@@ -1349,10 +1517,38 @@ async def compute_and_save_presence_for_round(
 
     world_state = await _chat_world_state_for_characters(db, characters)
     known_voices = None
+    chat_id = None
     if settings.world_engine_partial_perception_enabled and characters:
         chat_id = getattr(characters[0], "chat_id", None)
         if chat_id is not None:
             known_voices = await _known_voices_for_chat(db, chat_id)
+    if chat_id is None and characters:
+        chat_id = getattr(characters[0], "chat_id", None)
+
+    # Sprint 4 (§11): attention-контекст персонажей + Sensors perception-подсказка
+    # (significance раунда, один вызов, только пост-раунд).
+    attention_ctx: dict[int, dict[str, set[int]]] = {}
+    sensors_significance: float | None = None
+    if settings.attention_enabled:
+        attention_ctx = await _attention_context_for_chat(db, chat_id, character_ids)
+        if chat_id is not None and client is not None:
+            try:
+                from .sensors_service import sensors_service
+
+                if sensors_service.is_enabled("perception"):
+                    minimal_context = _round_text_snippet(round_messages)
+                    if minimal_context:
+                        sensors_result = await sensors_service.run(
+                            client, task="perception", minimal_context=minimal_context
+                        )
+                        if sensors_result is not None:
+                            sensors_significance = sensors_result.get("significance")
+            except Exception:  # noqa: BLE001 — Sensors не должен ронять раунд
+                logger.warning(
+                    "[chat_id=%s] Sensors perception proposal failed; "
+                    "deterministic attention only",
+                    chat_id,
+                )
 
     records: list[schemas.MessagePresenceCreate] = []
     for message in round_messages:
@@ -1395,11 +1591,24 @@ async def compute_and_save_presence_for_round(
                     viewer_location=locations.get(character_id, ""),
                     character_locations=locations,
                 )
+            attention = None
+            if attention_ctx:
+                ctx = attention_ctx.get(character_id, {})
+                attention = _attention_score_for(
+                    message=message,
+                    character_id=character_id,
+                    presence=presence,
+                    character_names=character_names,
+                    rel_targets=ctx.get("rel_targets", set()),
+                    anchor_authors=ctx.get("anchor_authors", set()),
+                    sensors_significance=sensors_significance,
+                )
             records.append(
                 schemas.MessagePresenceCreate(
                     message_id=message_id,
                     character_id=character_id,
                     presence=presence,
+                    attention=attention,
                 )
             )
     await upsert_message_presence_batch(db, records)
@@ -2589,3 +2798,210 @@ async def save_round_events(
     report.written_links = links
     report.skipped_below_importance = skipped
     return report
+
+
+# ------------------------ Character State (Sprint 3) ------------------------
+
+def _clamp_json_number(value, low: float, high: float) -> float:
+    """Clamp число для JSON-полей character_states (None проходит как None)."""
+    if value is None:
+        return None  # type: ignore[return-value]
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return low
+    return max(low, min(high, f))
+
+
+async def get_character_state(
+    db: AsyncSession, character_id: int
+) -> models.CharacterState | None:
+    """Прочитать состояние персонажа (одна строка на персонажа)."""
+    stmt = select(models.CharacterState).where(
+        models.CharacterState.character_id == character_id
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_character_states_for_chat(
+    db: AsyncSession, chat_id: int
+) -> list[models.CharacterState]:
+    """Прочитать состояния всех персонажей чата (для сводки/debug)."""
+    stmt = (
+        select(models.CharacterState)
+        .where(models.CharacterState.chat_id == chat_id)
+        .order_by(models.CharacterState.character_id)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_or_create_character_state(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    round_id: str | None = None,
+) -> models.CharacterState:
+    """Получить состояние персонажа или создать пустую строку (Sprint 3).
+
+    Пустая строка: emotional_state '{}', mood '', stress NULL, physical_state
+    '{}', attention NULL, active_goal '', personal_goals '[]'. Локация/отношения
+    в state НЕ хранятся (берутся из существующих таблиц).
+    """
+    state = await get_character_state(db, character_id)
+    if state is not None:
+        return state
+    state = models.CharacterState(
+        chat_id=chat_id,
+        character_id=character_id,
+        emotional_state="{}",
+        mood="",
+        stress=None,
+        physical_state="{}",
+        attention=None,
+        current_focus_id=None,
+        active_goal="",
+        personal_goals="[]",
+        updated_round_id=round_id,
+    )
+    db.add(state)
+    await db.commit()
+    await db.refresh(state)
+    return state
+
+
+async def update_character_state(
+    db: AsyncSession,
+    character_id: int,
+    *,
+    emotional_state: dict | str | None = None,
+    mood: str | None = None,
+    stress: float | None = None,
+    physical_state: dict | str | None = None,
+    attention: str | None = None,
+    current_focus_id: int | None = None,
+    active_goal: str | None = None,
+    personal_goals: list | str | None = None,
+    updated_round_id: str | None = None,
+) -> models.CharacterState | None:
+    """Обновить состояние персонажа (частичное; None-поля НЕ сбрасываются,
+    кроме явного attention/current_focus_id, передаваемых как есть)."""
+    state = await get_character_state(db, character_id)
+    if state is None:
+        return None
+
+    if emotional_state is not None:
+        state.emotional_state = (
+            json.dumps(emotional_state, ensure_ascii=False)
+            if isinstance(emotional_state, dict)
+            else str(emotional_state)
+        )
+    if mood is not None:
+        state.mood = str(mood)
+    if stress is not None:
+        state.stress = _clamp_json_number(stress, 0.0, 1.0)
+    if physical_state is not None:
+        state.physical_state = (
+            json.dumps(physical_state, ensure_ascii=False)
+            if isinstance(physical_state, dict)
+            else str(physical_state)
+        )
+    if attention is not None:
+        state.attention = attention or None
+    if current_focus_id is not None:
+        state.current_focus_id = current_focus_id or None
+    if active_goal is not None:
+        state.active_goal = str(active_goal)
+    if personal_goals is not None:
+        state.personal_goals = (
+            json.dumps(personal_goals, ensure_ascii=False)
+            if isinstance(personal_goals, list)
+            else str(personal_goals)
+        )
+    if updated_round_id is not None:
+        state.updated_round_id = updated_round_id
+
+    await db.commit()
+    await db.refresh(state)
+    return state
+
+
+# ------------------------ Round inputs for emotion engine (Sprint 3) ---------
+
+async def get_relationship_events_for_round(
+    db: AsyncSession, round_id: str | None
+) -> list[dict]:
+    """Relationship события раунда с source/target и дельтами (для emotion_engine).
+
+    Join с ``character_relationships``: только направленные рёбра, которые реально
+    изменились в этом раунде (kind='llm'). Пустой round_id → пустой список.
+    """
+    if not round_id:
+        return []
+    stmt = (
+        select(models.RelationshipEvent, models.CharacterRelationship)
+        .join(
+            models.CharacterRelationship,
+            models.CharacterRelationship.id == models.RelationshipEvent.relationship_id,
+        )
+        .where(
+            models.RelationshipEvent.round_id == round_id,
+            models.RelationshipEvent.kind == "llm",
+        )
+    )
+    result = await db.execute(stmt)
+    rows = []
+    for event, rel in result.all():
+        rows.append(
+            {
+                "source_character_id": rel.source_character_id,
+                "target_character_id": rel.target_character_id,
+                "delta_affection": event.delta_affection,
+                "delta_trust": event.delta_trust,
+                "delta_attraction": event.delta_attraction,
+                "delta_resentment": event.delta_resentment,
+                "delta_jealousy": event.delta_jealousy,
+                "importance": event.importance,
+            }
+        )
+    return rows
+
+
+async def get_world_events_for_round(
+    db: AsyncSession, round_id: str | None
+) -> list[dict]:
+    """World events раунда со структурной разметкой (эмоциональная салиенсность).
+
+    Только extraction-события (emotional_salience/importance заполнены):
+    движковые speech/move салиенс не имеют и эмоции не двигают.
+    """
+    if not round_id:
+        return []
+    stmt = (
+        select(models.WorldEvent)
+        .where(
+            models.WorldEvent.round_id == round_id,
+            models.WorldEvent.emotional_salience.isnot(None),
+        )
+        .order_by(models.WorldEvent.id)
+    )
+    result = await db.execute(stmt)
+    events: list[dict] = []
+    for event in result.scalars().all():
+        try:
+            target_ids = json.loads(event.target_character_ids or "[]")
+        except (json.JSONDecodeError, TypeError):
+            target_ids = []
+        events.append(
+            {
+                "character_id": event.character_id,
+                "event_type": event.event_type,
+                "importance": event.importance,
+                "emotional_salience": event.emotional_salience,
+                "story_salience": event.story_salience,
+                "target_character_ids": target_ids,
+                "action": event.action,
+            }
+        )
+    return events
