@@ -5,7 +5,8 @@
 - payload chat/generate: `tools` / `format` (JSON-Schema), §8;
 - streaming-контракт: токены стримятся, `tool_calls` в терминальном сообщении
   не рендерятся (тест #22);
-- фоллбэк tools → format → text-only (строго нативный, И14);
+- фоллбэк tools → format (строго нативный, И14); deprecated text-only путь
+  удалён в Фазе 8 — при недоступных tools/format генерация падает с ошибкой;
 - shadow: действия извлекаются, логируются, НЕ применяются; текст прежний;
 - кэш возможностей модели (§12);
 - метрики критерия выхода §10 (`wpe_tools_stats_snapshot`).
@@ -289,7 +290,7 @@ async def test_stream_chat_yields_tokens_and_tool_calls_not_rendered():
 
 
 # ---------------------------------------------------------------------------
-# Фоллбэк tools → format → text-only (строго нативный, §8)
+# Фоллбэк tools → format (строго нативный, §8); text-only удалён в Фазе 8
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -336,43 +337,38 @@ async def test_stream_chat_tools_unsupported_falls_back_to_format():
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_tools_and_format_unsupported_text_only():
+async def test_stream_chat_tools_and_format_unsupported_raises():
+    """Фаза 8: text-only fallback удалён (И14) — если ни tools, ни format не
+    поддерживаются, генерация не деградирует к тексту, а падает с ошибкой."""
     captured = []
-    ok_lines = [
-        json.dumps({"message": {"content": "Просто текст без действий."}, "done": True})
-    ]
     tool_error = FakeStreamResponse(
         status=400, error_body='{"error":"model does not support tools"}'
     )
     format_error = FakeStreamResponse(
         status=400, error_body='{"error":"model does not support format"}'
     )
-    ok_resp = FakeStreamResponse(lines=ok_lines)
 
     def fake_stream(method, url, json=None, **kwargs):
         captured.append(json)
-        return [tool_error, format_error, ok_resp][len(captured) - 1]
+        return [tool_error, format_error][len(captured) - 1]
 
     client = httpx.AsyncClient(base_url="http://test")
     client.stream = MagicMock(side_effect=fake_stream)
 
-    events = []
-    async for event in ollama_client._stream_ollama_chat(
-        client,
-        "test-model",
-        [{"role": "user", "content": "hi"}],
-        temperature=0.8,
-        tools=[schemas.build_take_actions_tool()],
-        format_schema=schemas.build_take_actions_json_schema(),
-    ):
-        events.append(event)
+    with pytest.raises(RuntimeError, match="не поддерживает format"):
+        async for event in ollama_client._stream_ollama_chat(
+            client,
+            "test-model",
+            [{"role": "user", "content": "hi"}],
+            temperature=0.8,
+            tools=[schemas.build_take_actions_tool()],
+            format_schema=schemas.build_take_actions_json_schema(),
+        ):
+            pass
 
-    assert len(captured) == 3
+    assert len(captured) == 2
     assert captured[0].get("tools")
     assert captured[1].get("format")
-    assert "tools" not in captured[2] and "format" not in captured[2]
-    assert events[-1]["tool_mode"] == "text"
-    assert "Просто текст" in events[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -398,9 +394,10 @@ async def test_stream_chat_non_tool_error_still_raises():
 def test_model_capability_cache_skips_tools():
     ollama_client._MODEL_TOOL_MODE_CACHE["m1"] = "format"
     assert ollama_client._tool_mode_chain("m1", "tools") == ["format"]
-    ollama_client._MODEL_TOOL_MODE_CACHE["m2"] = "text"
-    assert ollama_client._tool_mode_chain("m2", "tools") == ["text"]
-    assert ollama_client._tool_mode_chain("m3", "tools") == ["tools", "format", "text"]
+    ollama_client._MODEL_TOOL_MODE_CACHE["m2"] = "text"  # legacy-кэш (Фаза 8)
+    assert ollama_client._tool_mode_chain("m2", "tools") == ["tools", "format"]
+    assert ollama_client._tool_mode_chain("m3", "tools") == ["tools", "format"]
+    assert ollama_client._tool_mode_chain("m4", "text") == ["text"]
 
 
 # ---------------------------------------------------------------------------

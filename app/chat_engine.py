@@ -306,6 +306,9 @@ def _detect_communication_channel(
 ) -> tuple[str, list[int]]:
     """Detect remote communication channel from character response text.
 
+    WPE 3.0 Фаза 8: legacy-safety-net, НЕ источник истины (И14). Источник
+    канала/адресатов — `send_message` action из tools/format; этот regex-путь
+    срабатывает только когда действия не извлечены (actions off / text-only).
     Scans for channel keywords and identifies the target character by name.
     Returns (channel_type, list_of_target_character_ids).
     """
@@ -852,11 +855,22 @@ async def process_user_message_streaming(
                 if len(context_messages) > history_limit:
                     context_messages = context_messages[-history_limit:]
         else:
-            # Deterministic movement detection (§9-§11): safety-net regex-канал,
-            # активен только когда Action Resolution выключен (И4). New location
-            # applied BEFORE the message is saved and BEFORE the next NPC
-            # generates, so the updated world state is visible to the rest of
-            # the round (§12).
+            # WPE Фаза 8: regex-детектор — только legacy-safety-net (И14),
+            # НЕ источник истины (источник — `turn.actions` из tools/format).
+            # Активен только когда Action Resolution не применил действия.
+            if settings.world_engine_actions_enabled:
+                logger.warning(
+                    "[WPE-P8] chat_id=%d regex movement safety-net for %s: "
+                    "структурированные действия не извлечены (text-only путь "
+                    "deprecated, Фаза 8)",
+                    chat_id,
+                    current_character.name,
+                )
+            else:
+                logger.debug(
+                    "[WPE-P8] regex movement safety-net (actions off) for %s",
+                    current_character.name,
+                )
             movement_target = detect_character_movement(
                 response_text,
                 current_character.name,
@@ -894,7 +908,8 @@ async def process_user_message_streaming(
 
         char_location = character_locations.get(current_character.id, "") or ""
         # Remote channel: источник истины — `send_message` action (И14); regex
-        # `_detect_communication_channel` остаётся только для отката (actions off).
+        # `_detect_communication_channel` — только legacy-safety-net (Фаза 8),
+        # не источник истины, активен лишь когда actions не применились.
         if actions_active and applied.applied_messages:
             msg_channel = (
                 applied.applied_messages[0].get("channel") or "direct"
@@ -903,6 +918,13 @@ async def process_user_message_streaming(
                 applied.applied_messages[0].get("target_character_ids") or []
             )
         else:
+            if settings.world_engine_actions_enabled:
+                logger.warning(
+                    "[WPE-P8] chat_id=%d regex channel safety-net for %s "
+                    "(text-only путь deprecated, Фаза 8)",
+                    chat_id,
+                    current_character.name,
+                )
             msg_channel, msg_targets = _detect_communication_channel(
                 response_text, current_character.name, character_names
             )

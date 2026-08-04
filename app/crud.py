@@ -1187,11 +1187,24 @@ async def compute_and_save_presence_for_round(
 async def update_character_location(
     db: AsyncSession, character_id: int, location: str
 ) -> models.Character | None:
-    """Manually override a character's location."""
+    """Manually override a character's location.
+
+    WPE 3.0 Фаза 8 (аудит legacy-полей §6 v2): строка ``location`` — только
+    read-only legacy-bridge; источник — ``location_id``. Резолвим каноническую
+    локацию и пишем оба поля одной транзакцией, чтобы не оставалось пути,
+    обновляющего только строку (нерезолвленная/общая сцена → ``location_id``
+    = None).
+    """
     db_character = await get_character(db, character_id)
     if db_character is None:
         return None
     db_character.location = location
+    db_character.location_id = None
+    if location.strip():
+        locations = await get_chat_locations(db, db_character.chat_id)
+        resolved = resolve_location_name(locations, location)
+        if resolved is not None:
+            db_character.location_id = resolved.id
     await db.commit()
     await db.refresh(db_character)
     return db_character
@@ -1208,9 +1221,16 @@ async def get_character_locations_by_chat(
 async def update_character_locations_batch(
     db: AsyncSession, chat_id: int, locations: dict[int, str]
 ) -> None:
-    """Batch-update character locations from scene extraction."""
+    """Batch-update character locations from scene extraction.
+
+    WPE 3.0 Фаза 8 (аудит legacy-полей): строка ``location`` — read-only
+    legacy-bridge; резолвим и пишем ``location_id`` параллельно (источник —
+    каноническая ``Location``). Нерезолвленная локация оставляет
+    ``location_id`` без изменений (консервативно, обратная совместимость).
+    """
     characters = await get_characters_by_chat(db, chat_id)
     char_map = {c.id: c for c in characters}
+    loc_rows = await get_chat_locations(db, chat_id)
     changed = False
     for cid, loc in locations.items():
         cid_int = int(cid)
@@ -1219,6 +1239,9 @@ async def update_character_locations_batch(
             new_loc = loc.strip()
             if char.location != new_loc:
                 char.location = new_loc
+                resolved = resolve_location_name(loc_rows, new_loc)
+                if resolved is not None:
+                    char.location_id = resolved.id
                 changed = True
     if changed:
         await db.commit()

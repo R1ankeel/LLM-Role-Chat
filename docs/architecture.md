@@ -164,9 +164,10 @@
 - **Shadow**: действия извлекаются, логируются (`[WPE-P2] shadow …`), метрики
   копятся в `ollama_client.WPE_TOOLS_STATS` (`wpe_tools_stats_snapshot()`);
   **не применяются** — текст реплики остаётся прежним.
-- **Фоллбэк** строго нативный (И14): tools → `format` → text-only (deprecated),
-  срабатывает по HTTP 400 «не поддерживает tools/format»; возможности модели
-  кэшируются один раз на имя модели (§12).
+- **Фоллбэк** строго нативный (И14): tools → `format` (JSON-Schema); text-only
+  фоллбэк **удалён в Фазе 8** — при недоступных tools/format генерация падает
+  с `RuntimeError` (структурированные действия обязательны); возможности
+  модели кэшируются один раз на имя модели (§12).
 - **Откат**: выключение флага возвращает генерацию текст-only.
 - Системный промпт получает инструкцию `build_take_actions_instruction` (по
   гейту флага) — текст реплики и действия в одном ответе.
@@ -284,6 +285,28 @@ partial → бинарный full/none по каналам.
 истории); зацикливание невозможно — каждый `pop_next` помечает NPC
 сгенерированным. Откат — `WORLD_ENGINE_EVENT_BUS_ENABLED` off → `run_round_fixed`
 воспроизводит исходный фиксированный порядок без изменения поведения.
+
+### 4.6. WPE 3.0 Фаза 8: Уборка (legacy-поля, text-only, regex)
+
+Закрытие аудита legacy-полей (§6 v2) и удаление deprecated путей:
+
+- **`Message.visibility`, `character.location`-строка — read-only legacy-bridge.**
+  Источник — канонические поля: `Message.visibility` задаётся только при
+  создании (no update-path); все write-path строки `character.location`
+  (`crud.update_character_location`, `crud.update_character_locations_batch`)
+  резолвят каноническую `Location` и пишут также `location_id` одной
+  транзакцией.
+- **Text-only путь генерации удалён (И14).** `_tool_mode_chain`/
+  `_next_tool_mode` (`app/ollama_client.py`) больше не дают фоллбэк
+  tools → format → text: при недоступных tools/format генерация падает с
+  `RuntimeError`. Текст-only остаётся только для нетools-генерации
+  (`preferred="text"`).
+- **Regex-детекторы — legacy-safety-net, не источник истины.**
+  `app/movement.py detect_character_movement` и
+  `app/chat_engine._detect_communication_channel` не считывают действия из
+  текста как истину; источник — `turn.actions` из tools/format. Regex
+  срабатывает с deprecation-логом (`[WPE-P8]`), только когда действия не
+  извлечены (actions off / откат).
 
 ### 5. Пост-раунд (в том же запросе)
 

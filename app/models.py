@@ -226,8 +226,9 @@ class Character(Base):
     avatar_crop: Mapped[str] = mapped_column(Text, default="", nullable=False)
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     # WPE 3.0 (Фаза 0): каноническая локация как FK на `locations.id`.
-    # nullable — legacy-чаты до backfill (Фаза 1). `location` (строка)
-    # остаётся read-only legacy-bridge до Фазы 8.
+    # Фаза 8 (аудит legacy-полей §6 v2): `location` (строка) — read-only
+    # legacy-bridge, все write-path (`update_character_location`,
+    # `update_character_locations_batch`) пишут также `location_id`.
     location_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -267,7 +268,9 @@ class Message(Base):
     )
     role: Mapped[str] = mapped_column(String(50), nullable=False)  # user/character/system
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # Event / perception metadata
+    # Event / perception metadata.
+    # WPE 3.0 Фаза 8 (аудит legacy-полей §6 v2): `visibility` — read-only
+    # legacy-bridge, задаётся только при создании сообщения (no update-path).
     visibility: Mapped[str] = mapped_column(
         String(20), default=settings.default_event_visibility, nullable=False
     )

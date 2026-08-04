@@ -155,6 +155,26 @@ ai-roleplay-chat/
 └── .env / .env.example      # конфигурация
 ```
 
+## World & Perception Engine 3.0
+
+Двухканальное восприятие мира (visual/audio), канонические локации, действия
+персонажей через tools/structured outputs и Event Bus реализованы поэтапно под
+флагами (все по умолчанию `false`, откат — выключение флага). Детали:
+
+- План внедрения и инварианты — `Plans/WPE.md` (все фазы 0–8 реализованы 08-04)
+- Флаги и их назначение — `docs/configuration.md` («World & Perception Engine 3.0»)
+- Архитектура по фазам — `docs/architecture.md` (§4.1–4.6)
+- Тесты — `tests/test_world_engine_phase0.py` … `phase7.py`
+
+Ключевое (Фазы 7–8): цикл раунда — очередь приоритетов `Event Bus`
+(`app/round_engine.py`, буждение NPC по адресации, один ответ за раунд);
+deprecated text-only путь генерации удалён — при недоступных tools/format
+генерация падает с `RuntimeError` (И14); regex-детекторы
+(`detect_character_movement`, `_detect_communication_channel`) — только
+legacy-safety-net, не источник истины; `Message.visibility` и
+`character.location`-строка — read-only legacy-bridge (источник — канонические
+`location_id`/create-time visibility).
+
 ## Особенности
 
 - **Location perception**: персонажи не «слышат» события из других локаций (LOCAL по умолчанию)

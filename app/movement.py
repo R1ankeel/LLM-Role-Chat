@@ -6,6 +6,11 @@ guesses a destination ("вышел из комнаты" without a target → ``N
 fires on intention, future tense, negation or memory ("хочу пойти в кухню",
 "не пошёл", "вспоминаю, как ходил в магазин").
 
+WPE 3.0 Фаза 8 (И14): legacy-safety-net, НЕ источник истины. Источник
+перемещений — `Action(move_to)` из tools/format (`apply_character_actions`);
+этот regex-путь активен только как вход Consistency Validator и для
+actions-off / text-only чатов.
+
 The location-name matcher uses short-prefix keys to tolerate Russian
 declension (e.g. "Кухня" matches "в кухню" via the key "кухн"), mirroring the
 approach previously inlined in ``chat_engine._detect_movement_in_text``.

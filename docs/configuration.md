@@ -309,6 +309,15 @@ regex-пути). Тюнинг-настройка `WPE_ACTION_CONSISTENCY_MAX_RET
 игнорируются (И17) — без зацикливания. Откат — выключить флаг
 (`run_round_fixed` — исходный фиксированный порядок без изменения поведения).
 
+Фаза 8 (Уборка, реализована 08-04): deprecated text-only путь генерации удалён —
+при недоступных tools/format генерация падает с `RuntimeError` (И14,
+структурированные действия обязательны); regex-детекторы
+(`detect_character_movement`, `_detect_communication_channel`) — только
+legacy-safety-net с deprecation-логом `[WPE-P8]`, источник истины —
+`turn.actions` из tools/format. Аудит legacy-полей (§6 v2) закрыт: `Message.visibility`
+и `character.location`-строка — read-only legacy-bridge (write-path пишут также
+`location_id`).
+
 
 | ключ | дефолт | описание (фаза) |
 |---|---|---|

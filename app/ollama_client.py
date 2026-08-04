@@ -89,27 +89,44 @@ WPE_TOOLS_STATS: dict[str, Any] = {
 
 
 def _tool_mode_chain(model_name: str, preferred: str) -> list[str]:
-    """Порядок попыток для модели: tools → format → text (§8), с кэшем (§12)."""
+    """Порядок попыток для модели: tools → format (§8, И14), с кэшем (§12).
+
+    Фаза 8: deprecated text-only fallback удалён — при запросе
+    структурированных действий (preferred tools/format) генерация больше не
+    деградирует к тексту. ``preferred="text"`` остаётся только для обычного
+    (нетools) пути генерации, где tools/format не запрашивались.
+    """
     cached = _MODEL_TOOL_MODE_CACHE.get(model_name)
     if cached == "tools":
         return ["tools"]
     if cached == "format":
         return ["format"]
-    if cached == "text":
-        return ["text"]
     return {
-        "tools": ["tools", "format", "text"],
-        "format": ["format", "text"],
+        "tools": ["tools", "format"],
+        "format": ["format"],
         "text": ["text"],
     }.get(preferred, ["text"])
 
 
 def _next_tool_mode(model_name: str, current: str, wants_format: bool) -> str:
-    """Понизить режим tools→format→text и запомнить в кэш (после 400 от Ollama)."""
+    """Понизить режим tools→format и запомнить в кэш (после 400 от Ollama).
+
+    Фаза 8: text-only fallback удалён (И14). Если структурированный режим
+    недоступен и дальнейшего фоллбэка нет — выбрасывается RuntimeError:
+    модель обязана поддерживать tools или format при включённом флаге tools.
+    """
     if current == "tools":
-        nxt = "format" if wants_format else "text"
+        if not wants_format:
+            raise RuntimeError(
+                f"Модель {model_name} не поддерживает tools, а format не "
+                "запрошен: структурированные действия обязательны (И14, Фаза 8)"
+            )
+        nxt = "format"
     elif current == "format":
-        nxt = "text"
+        raise RuntimeError(
+            f"Модель {model_name} не поддерживает format: структурированные "
+            "действия обязательны (И14, Фаза 8)"
+        )
     else:
         nxt = current
     _MODEL_TOOL_MODE_CACHE[model_name] = nxt

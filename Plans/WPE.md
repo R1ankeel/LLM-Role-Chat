@@ -1,6 +1,17 @@
 # World & Perception Engine 3.0 — план внедрения (v3)
 
-> Дата: 2026-08-03 · Статус: **Фаза 7 реализована (08-04)**.
+> Дата: 2026-08-03 · Статус: **Фаза 8 реализована (08-04)**.
+> Статус фазы 8 (Уборка и документация): аудит legacy-полей (§6 v2) закрыт —
+> `Message.visibility` и `character.location`-строка только read-only
+> legacy-bridge (все write-path `update_character_location`/
+> `update_character_locations_batch` пишут также `location_id`); deprecated
+> text-only путь генерации удалён — при недоступных tools/format генерация
+> падает с ошибкой (RuntimeError, И14), regex-детекторы
+> (`detect_character_movement`, `_detect_communication_channel`) помечены и
+> работают только как legacy-safety-net (не источник истины); обновлены
+> `docs/architecture.md`, `docs/configuration.md`, `README.md`; финальный прогон
+> golden-набора §11: **771 passed, 28 pre-existing падений (набор идентичен
+> фазе 7)** — барьер пройден.
 > Статус фазы 7 (Event Bus / Interrupts, Ул.5, §7, И17): цикл раунда вынесен
 > в `app/round_engine.py` (единственная оркестрирующая функция `run_round`,
 > правило §9); очередь приоритетов `EventBus` — разбуженные NPC впереди
@@ -66,6 +77,7 @@
 > в контекст не идут; метрики `WPE_SHADOW_STATS`; откат — выключение флага.
 > Статус фазы 2: tool-calling `take_actions` в shadow (`WORLD_ENGINE_TOOLS_ENABLED`),
 > `TurnOutput` + фоллбэк tools→format→text-only, метрики `WPE_TOOLS_STATS`.
+> (Фаза 8: deprecated text-only фоллбэк удалён — только tools→format, И14.)
 > Статус фазы 1: канонические локации в read-path — backfill
 > `characters.location_id` (`crud.backfill_character_location_ids`,
 > `scripts/backfill_location_ids.py`), `perceive()` сравнивает `location_id`
@@ -441,10 +453,9 @@ Tool-схема (OpenAI-совместимая, используется и в O
 1. `tools` поддерживаются → tool calling.
 2. tools не поддерживаются моделью → `format: <JSON Schema>` (Ollama) /
    `response_format: {type:"json_schema"}` (OpenAI-совместимо) с той же схемой.
-3. ни tools, ни format недоступны → генерация продолжается текст-only, без
-   извлечения действий; применяются legacy safety-net детекторы
-   (`detect_character_movement`) — этот путь помечен deprecated и выпиливается
-   в Фазе 8.
+3. ни tools, ни format недоступны → **RuntimeError** (Фаза 8, И14: structured
+   actions обязательны); текст-only путь с legacy safety-net детекторами
+   удалён в Фазе 8.
 
 Латентность: один вызов на ход (текст+действия), измеряется отдельно
 (риск §12; в.1 из v2 сохраняется).
@@ -463,7 +474,7 @@ Tool-схема (OpenAI-совместимая, используется и в O
 | Цикл раунда в `app/chat_engine.py` | **Выносится в новый `app/round_engine.py`** | Event Bus (И17) требует очереди приоритетов; надстройка внутри существующего `for current_character` плодит флаги и спецкейсы |
 | `app/ollama_client.py` (путь генерации) | **Доработка** ветки chat API: tools/format + `tool_calls` в streaming; generate API остаётся как fallback | LLM-вызов не меняет сути, но payload/response-контракт пересобирается |
 | `app/movement.py` `detect_character_movement` | **Понижается до safety-net** (вход Consistency Validator), не источник истины | И14: источник — `Action[]` из tools |
-| `app/chat_engine._detect_communication_channel` | **Удаляется как источник истины**; `channel` приходит из `send_message` action; regex остаётся только legacy-safety-net для текст-only чатов | И14 |
+| `app/chat_engine._detect_communication_channel` | **Удаляется как источник истины**; `channel` приходит из `send_message` action; regex остаётся только legacy-safety-net с deprecation-логом (Фаза 8: срабатывает лишь когда actions не извлечены) | И14 |
 | `app/witness_model.py` | **Надстройка** (Renderer по каналам + voice familiarity) | Существующая структура presence→формат близка к И8; переписывается внутренняя логика строк, публичный слой `filter_history_*` сохраняется |
 | `app/prompt_builder.py` | **Надстройка**: `build_system_intervention_block`, narrator-форматирование, инструкция `take_actions` | Отдельные независимые блоки |
 | `app/crud.py` (dual-write) | **Надстройка** поверх `create_message` | Одна транзакция Message+WorldEvent |
@@ -534,9 +545,11 @@ Tool-схема (OpenAI-совместимая, используется и в O
   `build_system_prompt` по опциональному параметру. Streaming-контракт:
   токены стримятся как раньше, `tool_calls` приходят в терминальном
   сообщении и **не рендерятся как текст** (тест #22).
-- ✅ Фоллбэк строго нативный (И14): tools → `format` (JSON-Schema) →
-  text-only (deprecated); срабатывает по 400 «не поддерживает tools/format».
-  Кэш возможностей модели один раз на имя модели (§12).
+- ✅ Фоллбэк строго нативный (И14): tools → `format` (JSON-Schema). До Фазы 8
+  был также text-only (deprecated) по 400 «не поддерживает tools/format»;
+  **Фаза 8: text-only фоллбэк удалён** — при недоступных tools/format
+  генерация падает с `RuntimeError`. Кэш возможностей модели один раз на имя
+  модели (§12).
 - ✅ Флаг: `WORLD_ENGINE_TOOLS_ENABLED` (по умолчанию `false`).
 - ✅ Shadow-метрики критерия выхода (§10): `ollama_client.WPE_TOOLS_STATS` +
   `wpe_tools_stats_snapshot()` — доля ходов с корректным `move_to`/
@@ -545,7 +558,8 @@ Tool-схема (OpenAI-совместимая, используется и в O
   avg/max) — собираются на canary и документируются (§12).
 - ✅ Критерий выхода: покрыто `tests/test_world_engine_phase2.py` (19 тестов:
   инструкция, payload tools/format, streaming-контракт #22, фоллбэк tools→
-  format→text-only, кэш, shadow без применения действий). Регрессий нет
+  format (без text-only, Фаза 8), кэш, shadow без применения действий).
+  Регрессий нет
   (682 passed; 28 pre-existing падений вне scope, набор идентичен Фазе 1).
   Канареечный запуск (реальные модели, 100% схема-валидных вызовов без
   падения генерации + прирост латентности) — отдельным отчётом по §12.
@@ -678,13 +692,23 @@ Tool-схема (OpenAI-совместимая, используется и в O
 - ✅ Откат: флаг выключается, очередь → исходный фиксированный порядок
   (проверено off-тестами `run_round_fixed` + streaming off-регрессией).
 
-**Фаза 8 — Уборка и документация**
-- Закрытие аудита legacy-полей (§6 v2): `Message.visibility`,
-  `character.location`-строка — только read-only legacy-bridge.
-- Удаление deprecated text-only пути генерации (без tools/format) и regex
-  детекторов как источника истины.
-- Обновление `docs/architecture.md`, `README.md`. Финальный прогон полного
-  golden-набора §11 как регрессионный барьер перед снятием флагов.
+**Фаза 8 — Уборка и документация** ✅
+- ✅ Закрытие аудита legacy-полей (§6 v2): `Message.visibility`,
+  `character.location`-строка — только read-only legacy-bridge. Проверено:
+  `Message.visibility` задаётся только при создании (no update-path,
+  `app/models.py`); все write-path строки `character.location`
+  (`update_character_location`, `update_character_locations_batch` в
+  `app/crud.py`) пишут также канонический `location_id`.
+- ✅ Удаление deprecated text-only пути генерации (без tools/format) и regex
+  детекторов как источника истины. Проверено: `_tool_mode_chain`/`_next_tool_mode`
+  (`app/ollama_client.py`) не дают фоллбэк tools→format→text — при
+  недоступных tools/format генерация падает с `RuntimeError` (И14); текст-only
+  путь остался только для нетools-генерации (`preferred="text"`);
+  `detect_character_movement`/`_detect_communication_channel` — legacy-safety-net
+  с deprecation-логами (источник истины — `turn.actions` из tools/format).
+- ✅ Обновление `docs/architecture.md`, `README.md`. Финальный прогон полного
+  golden-набора §11 как регрессионный барьер перед снятием флагов:
+  **771 passed, 28 pre-existing (идентично фазе 7)**.
 
 ---
 
