@@ -13,6 +13,8 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [database.md](database.md) | Схема базы данных (SQLite), индексы, миграции |
 | [configuration.md](configuration.md) | Все настройки через `.env` (значения по умолчанию) |
 | [relations.md](relations.md) | Система отношений между персонажами (анализатор, интерпретатор, issues, epistemic mask) |
+| [events.md](events.md) | Structured World Events (Sprint 1): канонический журнал, event extraction, causal links, post-round pipeline |
+| [sensors.md](sensors.md) | Sensors Model — отдельный аналитический слой LLM (предложения perception/event/emotion/memory/relationship) |
 | [intervention.md](intervention.md) | Одноразовое «Вмешательство» игрока: жизнь инструкции, API, промпт |
 | [locations.md](locations.md) | «Локации 2.0»: модель Location, миграция, CRUD API, синхронизация ссылок |
 

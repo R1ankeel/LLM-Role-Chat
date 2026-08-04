@@ -21,6 +21,9 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `thinking_mode` | BOOLEAN | по умолчанию `settings.enable_thinking` |
 | `player_location` | TEXT(255) | локация игрока |
 | `locations` | TEXT | JSON-список локаций мира |
+| `original_plot` | TEXT NULL | выделенный неизменяемый замысел (из `general_prompt`; Sprint 0, §16.1) |
+| `story_prompt` | TEXT NULL | текущий story prompt (эволюционирующий; Sprint 8) |
+| `story_enabled` | BOOLEAN (default 0) | включение динамического сюжета (Sprint 8) |
 | `created_at` | DATETIME | |
 
 ### `characters`
@@ -74,12 +77,25 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `message_id` | FK → `messages.id` ON DELETE SET NULL | привязка к речевому сообщению |
 | `event_type` | TEXT(50) | `speech` / `move` / `system_narrator` / `system` |
 | `location` | TEXT(255) | строковая локация события (legacy-bridge) |
+| `location_id` | INTEGER NULL | FK → `locations.id` ON DELETE SET NULL; каноническая локация события (Sprint 0; NULL = общая сцена/нерезолвлено) |
 | `location_from`, `location_to` | TEXT(255) | для `move` |
 | `round_id` | TEXT(64) NULL | |
 | `target_character_ids` | TEXT | JSON-список |
+| `action` | TEXT NOT NULL DEFAULT '{}' | JSON `{"actor","action","target","object"}`; Sprint 1 (раундная event extraction) |
+| `importance` | REAL NULL | 0..10; Sprint 1; движковые события не заполняют (NULL) |
+| `story_salience` | REAL NULL | 0..1; Sprint 1 |
+| `emotional_salience` | REAL NULL | 0..1; Sprint 1 |
 | `created_at` | DATETIME | |
 
-Индексы: `ix_world_events_chat_ts`, `ix_world_events_character_id`, `ix_world_events_round_id`.
+Индексы: `ix_world_events_chat_ts`, `ix_world_events_character_id`, `ix_world_events_round_id`, `ix_world_events_location_id`.
+
+> **Sprint 1** (`Plans/update20.md §15`): колонки `action/importance/story_salience/
+> emotional_salience` заполняются пост-раундной event extraction
+> (`event_service.extract_round_events` → `crud.save_round_events`) только при
+> `EVENT_EXTRACTION_ENABLED=true`. Движковые `speech`/`move` (dual-write из
+> `crud.create_message`) salience/importance не заполняют — по этим полям
+> (NOT NULL `importance`) определяется, что extraction для раунда уже записана
+> (идемпотентность). Read-path новые поля пока не читает.
 
 ### `threads`
 Тред/канал общения (WPE 3.0, Фаза 0). Заведён, **не пишется** до Фазы 6.
@@ -221,9 +237,14 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 | `source_message_ids` | TEXT JSON | привязка к сообщениям |
 | `round_id` | TEXT(64) | привязка к раунду |
 | `source_round_id` | TEXT(64) | привязка к раунду |
+| `event_id` | INTEGER NULL | FK → `world_events.id` ON DELETE SET NULL; каузальное событие (Sprint 1, раундная extraction) |
 | `timestamp` | DATETIME | |
 
-Индексы: `ix_rel_events_rel_id`, `ix_rel_events_ts`.
+Индексы: `ix_rel_events_rel_id`, `ix_rel_events_ts`, `ix_rel_events_event_id`.
+
+> **Sprint 1**: `event_id` — привязка relationship-события к world-событию, которое
+> его вызвало (пишется в `crud.save_round_events`, если у `ExtractedEvent` есть
+> `importance`). Для decay/archive строк остаётся NULL.
 
 ### `relationship_issues`
 Открытые сюжетные крючки (open issues) между парами. Поле `text` — данные сцены, а не инструкция для LLM (защита от prompt injection).
@@ -242,6 +263,184 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 
 Индексы: `ix_rel_issues_rel_state (relationship_id, state)`, `ix_rel_issues_state`.
 
+## Таблицы состояния (Sprint 0 — заведены, не пишутся)
+
+Заведены как фундамент state-driven архитектуры (`update20.md`, Sprint 0, п.3):
+создаются идемпотентно, **read-path их не читает**, движок их не заполняет до
+соответствующих спринтов. 10 таблиц из плана + `consolidation_state` (по §20/E).
+
+### `character_states` (Sprint 3)
+Одна строка на персонажа в чате: эмоции, стресс, физическое состояние, внимание, цели.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK → `chats.id` ON DELETE CASCADE | |
+| `character_id` | FK → `characters.id` ON DELETE CASCADE | UNIQUE |
+| `emotional_state` | TEXT | JSON map emotion→intensity |
+| `mood` | TEXT(50) NULL | |
+| `stress` | REAL NULL | 0..1 |
+| `physical_state` | TEXT | JSON |
+| `attention` | TEXT NULL | текущий фокус |
+| `current_focus_id` | FK → `characters.id` SET NULL | на кого смотрит |
+| `active_goal` | TEXT NULL | |
+| `personal_goals` | TEXT | JSON list |
+| `updated_round_id` | TEXT(64) NULL | |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_character_states_chat_id`.
+
+### `beliefs` (Sprint 5)
+Знания/убеждения персонажа (триплет subject/predicate/object).
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `character_id` | FK ON DELETE CASCADE | |
+| `subject`, `predicate`, `object` | TEXT | «Борис предал Анну» |
+| `source` | TEXT(30) | `direct_observation/heard/told_by/inference/rumor/memory` |
+| `confidence` | REAL (default 0.5) | 0..1 |
+| `type` | TEXT(20) | `fact/belief/suspicion` |
+| `world_truth_ref` | FK → `world_events.id` SET NULL | если подтверждено миром |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_beliefs_chat_id`.
+
+### `story_states` (Sprint 8)
+Original Plot (immutable) + Current Story State + Story Phase.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `original_plot` | TEXT NULL | immutable |
+| `current_state` | TEXT | JSON |
+| `story_phase` | TEXT(100) NULL | |
+| `updated_round_id` | TEXT(64) NULL | |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_story_states_chat_id`.
+
+### `story_threads` (Sprint 10)
+Активные сюжетные линии.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `title` | TEXT(255) | |
+| `description` | TEXT NULL | |
+| `status` | TEXT(20) | `active/paused/resolved` |
+| `updated_round_id` | TEXT(64) NULL | |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_story_threads_chat_id`.
+
+### `story_events` (Sprint 8)
+**Проекция** `world_events` для сюжета (canonical event source — §15.0).
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `event_id` | FK → `world_events.id` ON DELETE CASCADE | каноническое событие |
+| `round_id` | TEXT(64) NULL | |
+| `event_type` | TEXT(50) NULL | |
+| `actors` | TEXT | JSON list |
+| `location_id` | FK → `locations.id` SET NULL | |
+| `cause` | TEXT NULL | |
+| `consequences` | TEXT NULL | |
+| `importance` | REAL NULL | |
+| `created_at` | DATETIME | |
+
+Индекс `ix_story_events_chat_id`.
+
+### `event_links` (Sprint 1)
+Причинно-следственные рёбра событий.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `event_id` | FK → `world_events.id` ON DELETE CASCADE | следствие |
+| `caused_by_event_id` | FK → `world_events.id` ON DELETE CASCADE NULL | причина |
+| `kind` | TEXT(20) DEFAULT 'causes' | `causes` \| `consequence` \| `goal_step` \| `resolution` |
+| `created_at` | DATETIME | |
+
+Индексы: `ix_event_links_chat_id`, `ix_event_links_event_id`, `ix_event_links_caused_by`.
+
+> **Sprint 1**: в раундной extraction рёбра пишутся из `ExtractedEvent.causes`
+> (событие → события, которые его вызвали, `kind='causes'`).
+
+### `memory_anchors` (Sprint 2/7)
+Эмоциональные якоря направленного отношения `source→target`.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `relationship_id` | FK ON DELETE CASCADE | |
+| `event_id` | FK → `world_events.id` SET NULL | |
+| `emotion` | TEXT(50) NULL | |
+| `valence` | REAL NULL | -1..1 |
+| `intensity` | REAL NULL | 0..1 |
+| `importance` | REAL NULL | |
+| `timestamp` | DATETIME NULL | |
+| `created_at` | DATETIME | |
+
+Индекс `ix_memory_anchors_chat_id`.
+
+### `intents` (Sprint 10)
+Intent NPC на ход.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `character_id` | FK ON DELETE CASCADE | |
+| `target_character_id` | FK → `characters.id` SET NULL | |
+| `goal` | TEXT NULL | |
+| `urgency` | REAL NULL | |
+| `approach` | TEXT(50) NULL | |
+| `emotion` | TEXT(50) NULL | |
+| `risk` | REAL NULL | |
+| `round_id` | TEXT(64) NULL | |
+| `created_at` | DATETIME | |
+
+Индекс `ix_intents_chat_id`.
+
+### `npc_plans` (Sprint 10)
+Долгоживущие маленькие планы NPC.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `character_id` | FK ON DELETE CASCADE | |
+| `plan_name` | TEXT(100) NULL | |
+| `description` | TEXT NULL | |
+| `status` | TEXT(20) | `active/paused/completed/abandoned` |
+| `updated_round_id` | TEXT(64) NULL | |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_npc_plans_chat_id`.
+
+### `consolidation_state` (§20/E)
+Состояние консолидации памяти (адаптивный таймер/водяные знаки).
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK ON DELETE CASCADE | |
+| `character_id` | FK ON DELETE CASCADE | |
+| `last_consolidated_round_id` | TEXT(64) NULL | |
+| `next_consolidation_at` | DATETIME NULL | |
+| `consolidation_count` | INTEGER (default 0) | |
+| `created_at`, `updated_at` | DATETIME | |
+
+UNIQUE `(character_id)`. Индекс `ix_consolidation_state_chat_id`.
+
 ## Миграции данных
 
 `ensure_schema` идемпотентно выполняет при старте:
@@ -256,3 +455,7 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 - **relationship_issues**: `rounds_since_last_mention`.
 - **WPE 3.0 (Фаза 0)**: `characters.location_id` (nullable FK), таблицы `world_events`/`threads`/`thread_participant_states` (+ индексы). Идемпотентно; новые таблицы read-path не читает (откат тривиален).
 - **WPE 3.0 (Фаза 1)**: backfill `characters.location_id` из строковой `location` — `crud.backfill_character_location_ids` (идемпотентно; «Общая сцена» → NULL, нерезолвленное имя → NULL + отчёт на ручной разбор), запуск `scripts/backfill_location_ids.py`. Сам backfill — обычное обновление данных, не изменение схемы.
+- **Sprint 0 (§16.1)**: `chats.original_plot/story_prompt/story_enabled`; `world_events.location_id` (+ индекс); 11 таблиц состояния (`CREATE TABLE IF NOT EXISTS` + индексы, см. выше). Идемпотентно; новые таблицы read-path не читает.
+- **Sprint 0 (backfill сюжета)**: `crud.backfill_plot_fields` — копирует `general_prompt` → `original_plot`/`story_prompt`, `story_enabled=false`, заполняет только пустые поля (идемпотентно, отчёт `PlotBackfillReport`); запуск `scripts/backfill_plot_fields.py`. Поведение не меняется (сюжет по-прежнему читается из `general_prompt`).
+- **Sprint 0 (backfill локаций событий)**: `crud.backfill_event_location_ids` — из строковой `world_events.location` через `resolve_location_name` (+ shared-scene правило `perception.is_shared_scene`), идемпотентно, отчёт `EventLocationBackfillReport` (нерезолвленные → NULL + список); запуск `scripts/backfill_event_location_ids.py`. Сам backfill — обновление данных, не изменение схемы.
+- **Sprint 1 (§15)**: `world_events.action` (TEXT NOT NULL DEFAULT '{}'), `world_events.importance`/`story_salience`/`emotional_salience` (REAL NULL), `relationship_events.event_id` (FK → `world_events.id` ON DELETE SET NULL, nullable, + индекс `ix_rel_events_event_id`). Идемпотентно (только если колонки/индекс отсутствуют); пишет только раундная extraction при `EVENT_EXTRACTION_ENABLED=true`, откат — флаг off. Backfill не требуется.

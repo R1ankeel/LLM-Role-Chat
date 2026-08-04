@@ -544,6 +544,57 @@ class SceneStateUpdate(BaseModel):
     custom_state: Optional[SceneCustomState] = None
 
 
+# ----------------------- Structured World Events (Sprint 1) -----------------------
+class EventAction(BaseModel):
+    """Структурированное действие события (§15). actor — имя персонажа."""
+
+    actor: str = ""
+    action: str = ""
+    target: str = ""
+    object: str = ""
+
+
+class ExtractedEvent(BaseModel):
+    """Одно извлечённое раундной event extraction событие.
+
+    event_type повторяет вокабуляр `world_events` (speech|move|system_narrator),
+    но допускает и свободные типы (fight, gift, promise, ...) — записываются
+    как есть, read-path их ещё не фильтрует. importance 0..10,
+    story_salience / emotional_salience 0..1.
+    """
+
+    event_type: str = "event"
+    description: str = ""
+    source_character: str = ""
+    targets: list[str] = Field(default_factory=list)
+    location: str = ""
+    action: EventAction = Field(default_factory=EventAction)
+    importance: float = 5.0
+    story_salience: float = 0.5
+    emotional_salience: float = 0.5
+    # Индексы в массиве `events` ответа LLM, на которые ссылается это событие
+    # как на причину (caused_by). Отсюда строятся event_links.
+    causes: list[int] = Field(default_factory=list)
+
+
+class EventExtractionResult(BaseModel):
+    """Результат event extraction для одного раунда (до записи в БД)."""
+
+    events: list[ExtractedEvent] = Field(default_factory=list)
+    sensors_used: bool = False
+
+
+class EventExtractionReport(BaseModel):
+    """Отчёт о записанном в `world_events` / `event_links` событийном слое."""
+
+    written_events: int = 0
+    written_links: int = 0
+    skipped_below_importance: int = 0
+    extraction_used: bool = False
+    sensors_used: bool = False
+    error: str = ""
+
+
 class CharacterLocationUpdate(BaseModel):
     """Manual override for a character's location."""
     location: str
@@ -732,6 +783,7 @@ class RelationshipEventRead(BaseModel):
     delta_jealousy: int = 0
     importance: int = 5
     source_round_id: Optional[str] = None
+    event_id: Optional[int] = None
     timestamp: datetime
 
 

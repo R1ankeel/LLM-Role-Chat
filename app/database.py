@@ -246,6 +246,31 @@ def ensure_schema(db_engine) -> None:
             )
             logger.info("Added locations column to chats")
 
+        # Story separation (Plans/update20.md §16.1, Sprint 0): вынос story из
+        # general_prompt. Начальные значения = general_prompt (copy, не move);
+        # story_enabled=false. Backfill — `scripts/backfill_plot_fields.py`.
+        if "original_plot" not in chat_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE chats ADD COLUMN original_plot TEXT NOT NULL DEFAULT ''"
+                )
+            )
+            logger.info("Added original_plot column to chats")
+        if "story_prompt" not in chat_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE chats ADD COLUMN story_prompt TEXT NOT NULL DEFAULT ''"
+                )
+            )
+            logger.info("Added story_prompt column to chats")
+        if "story_enabled" not in chat_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE chats ADD COLUMN story_enabled BOOLEAN NOT NULL DEFAULT 0"
+                )
+            )
+            logger.info("Added story_enabled column to chats")
+
         # Message event metadata (visibility / location / targets)
         message_columns = {col["name"] for col in inspector.get_columns("messages")}
         if "visibility" not in message_columns:
@@ -441,6 +466,59 @@ def ensure_schema(db_engine) -> None:
             )
         )
 
+        # Sprint 0 (Plans/update20.md): каноническая локация события.
+        # Backfill из строковой `world_events.location` — отдельным скриптом
+        # (`scripts/backfill_event_location_ids.py`, аналог `characters.location_id`).
+        world_event_columns = {
+            col["name"] for col in inspector.get_columns("world_events")
+        }
+        if "location_id" not in world_event_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE world_events ADD COLUMN location_id "
+                    "INTEGER REFERENCES locations(id) ON DELETE SET NULL"
+                )
+            )
+            logger.info("Added location_id column to world_events")
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_world_events_location_id "
+                "ON world_events (location_id)"
+            )
+        )
+
+        # Sprint 1 (Plans/update20.md §15): structured event metadata.
+        # Идемпотентные ALTER — существующие БД (после Sprint 0) доезжают без дата-
+        # потерь: новые колонки nullable / с default, read-path их не читает.
+        if "action" not in world_event_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE world_events ADD COLUMN action "
+                    "TEXT NOT NULL DEFAULT '{}'"
+                )
+            )
+        if "importance" not in world_event_columns:
+            conn.execute(
+                text("ALTER TABLE world_events ADD COLUMN importance REAL")
+            )
+        if "story_salience" not in world_event_columns:
+            conn.execute(
+                text("ALTER TABLE world_events ADD COLUMN story_salience REAL")
+            )
+        if "emotional_salience" not in world_event_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE world_events ADD COLUMN emotional_salience REAL"
+                )
+            )
+        if (
+            "action" not in world_event_columns
+            or "importance" not in world_event_columns
+            or "story_salience" not in world_event_columns
+            or "emotional_salience" not in world_event_columns
+        ):
+            logger.info("Added Sprint 1 columns to world_events (action/importance/salience)")
+
         conn.execute(
             text(
                 """
@@ -575,6 +653,8 @@ def ensure_schema(db_engine) -> None:
                 ("jealousy_after", "INTEGER NOT NULL DEFAULT 0"),
                 ("source_message_ids", "TEXT NOT NULL DEFAULT '[]'"),
                 ("round_id", "TEXT"),
+                # Sprint 1 (Plans/update20.md §15.2): проекция на world_events.
+                ("event_id", "INTEGER REFERENCES world_events(id) ON DELETE SET NULL"),
             ]
             for column_name, column_type in new_rel_event_columns:
                 if column_name not in rel_event_columns:
@@ -594,6 +674,12 @@ def ensure_schema(db_engine) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_rel_events_round "
                     "ON relationship_events (round_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_rel_events_event_id "
+                    "ON relationship_events (event_id)"
                 )
             )
 
@@ -760,6 +846,324 @@ def ensure_schema(db_engine) -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_rel_issues_state "
                 "ON relationship_issues (state)"
+            )
+        )
+
+        # ----- State-driven tables (Plans/update20.md, Sprint 0) -----
+        # Пустые таблицы как фундамент. read-path их НЕ читает, write-path НЕ
+        # пишет до соответствующих спринтов (см. комментарии у моделей).
+        # Откат тривиален: новые таблицы изолированы от существующего поведения.
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS character_states (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    emotional_state TEXT NOT NULL DEFAULT '{}',
+                    mood TEXT NOT NULL DEFAULT '',
+                    stress REAL,
+                    physical_state TEXT NOT NULL DEFAULT '{}',
+                    attention TEXT,
+                    current_focus_id INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+                    active_goal TEXT NOT NULL DEFAULT '',
+                    personal_goals TEXT NOT NULL DEFAULT '[]',
+                    updated_round_id TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_character_state_character UNIQUE (character_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_character_states_chat_id "
+                "ON character_states (chat_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_character_states_character "
+                "ON character_states (character_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS beliefs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'memory',
+                    confidence REAL NOT NULL DEFAULT 0.5,
+                    type TEXT NOT NULL DEFAULT 'belief',
+                    world_truth_ref INTEGER REFERENCES world_events(id) ON DELETE SET NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_beliefs_character "
+                "ON beliefs (character_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_beliefs_chat_character "
+                "ON beliefs (chat_id, character_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_beliefs_subject "
+                "ON beliefs (subject)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_beliefs_world_truth_ref "
+                "ON beliefs (world_truth_ref)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS story_states (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    original_plot TEXT NOT NULL DEFAULT '',
+                    current_story TEXT NOT NULL DEFAULT '{}',
+                    story_phase TEXT NOT NULL DEFAULT '',
+                    updated_round_id TEXT,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_story_states_chat_id "
+                "ON story_states (chat_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS story_threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    actors TEXT NOT NULL DEFAULT '[]',
+                    importance INTEGER NOT NULL DEFAULT 5,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_round_id TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_story_threads_chat_status "
+                "ON story_threads (chat_id, status)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS story_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id INTEGER REFERENCES world_events(id) ON DELETE CASCADE,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    round_id TEXT,
+                    event TEXT NOT NULL DEFAULT '',
+                    actors TEXT NOT NULL DEFAULT '[]',
+                    location TEXT NOT NULL DEFAULT '',
+                    cause TEXT NOT NULL DEFAULT '',
+                    consequences TEXT NOT NULL DEFAULT '',
+                    importance INTEGER NOT NULL DEFAULT 5,
+                    story_thread_id INTEGER REFERENCES story_threads(id) ON DELETE SET NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_story_events_chat_id "
+                "ON story_events (chat_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_story_events_event_id "
+                "ON story_events (event_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_story_events_thread "
+                "ON story_events (story_thread_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS event_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    event_id INTEGER NOT NULL REFERENCES world_events(id) ON DELETE CASCADE,
+                    caused_by_event_id INTEGER REFERENCES world_events(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL DEFAULT 'causes'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_event_links_chat_id "
+                "ON event_links (chat_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_event_links_event_id "
+                "ON event_links (event_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_event_links_caused_by "
+                "ON event_links (caused_by_event_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS memory_anchors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    relationship_id INTEGER REFERENCES character_relationships(id) ON DELETE CASCADE,
+                    event_id INTEGER REFERENCES world_events(id) ON DELETE CASCADE,
+                    emotion TEXT NOT NULL DEFAULT '',
+                    valence REAL NOT NULL DEFAULT 0.0,
+                    intensity REAL NOT NULL DEFAULT 0.0,
+                    importance REAL NOT NULL DEFAULT 0.5,
+                    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_anchors_rel "
+                "ON memory_anchors (relationship_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_anchors_event "
+                "ON memory_anchors (event_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS intents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    goal TEXT NOT NULL DEFAULT '',
+                    target INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+                    approach TEXT NOT NULL DEFAULT 'direct',
+                    urgency REAL NOT NULL DEFAULT 0.0,
+                    emotion TEXT NOT NULL DEFAULT '',
+                    risk REAL NOT NULL DEFAULT 0.0,
+                    created_round_id TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_intents_chat_character "
+                "ON intents (chat_id, character_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_intents_round "
+                "ON intents (created_round_id)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS npc_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    goal TEXT NOT NULL,
+                    next_step TEXT NOT NULL DEFAULT '',
+                    blocked_by TEXT NOT NULL DEFAULT '',
+                    priority INTEGER NOT NULL DEFAULT 5,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_round_id TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_npc_plans_chat_character "
+                "ON npc_plans (chat_id, character_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_npc_plans_status "
+                "ON npc_plans (status)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS consolidation_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    last_soft_at DATETIME,
+                    last_hard_at DATETIME,
+                    counters TEXT NOT NULL DEFAULT '{}',
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_consolidation_state_chat "
+                "ON consolidation_state (chat_id)"
             )
         )
 

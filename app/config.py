@@ -346,5 +346,54 @@ class Settings(BaseSettings):
         default=False, alias="WORLD_ENGINE_EVENT_BUS_ENABLED"
     )
 
+    # ----- Sensors Model (Plans/update20.md §5.1) -----
+    # Отдельный аналитический слой для быстрых фоновых задач (perception-
+    # предложения, event classification, emotion/mood, memory-кандидаты,
+    # relationship-дельты). Sensors НЕ источник истины и НЕ подменяет основную
+    # модель генерации реплик. Пустая `SENSORS_MODEL` = слой выключен.
+    # Инфраструктура заведена в Sprint 0, НЕ подключена ни к одному процессу.
+    sensors_model: str = Field(default="", alias="SENSORS_MODEL")
+    # Мастер-флаг слоя. По умолчанию False (legacy-поведение).
+    sensors_enabled: bool = Field(default=False, alias="SENSORS_ENABLED")
+    # Per-task флаги (каждый — своя канарейка). Задача активна только если
+    # включены и мастер-флаг, и per-task флаг, и задана `SENSORS_MODEL`.
+    sensors_perception_enabled: bool = Field(
+        default=False, alias="SENSORS_PERCEPTION_ENABLED"
+    )
+    sensors_event_enabled: bool = Field(
+        default=False, alias="SENSORS_EVENT_ENABLED"
+    )
+    sensors_emotion_enabled: bool = Field(
+        default=False, alias="SENSORS_EMOTION_ENABLED"
+    )
+    sensors_memory_enabled: bool = Field(
+        default=False, alias="SENSORS_MEMORY_ENABLED"
+    )
+    sensors_relationship_enabled: bool = Field(
+        default=False, alias="SENSORS_RELATIONSHIP_ENABLED"
+    )
+    # Отдельный таймаут для sensor-задач (короче, чем у генерации) —
+    # graceful degradation §5.1.8: недоступность Sensors не должна влиять на раунд.
+    sensors_timeout: float = Field(default=60.0, alias="SENSORS_TIMEOUT")
+
+    # ----- Structured World Events (Plans/update20.md §15, Sprint 1) -----
+    # Пост-раундная event extraction: LLM извлекает из истории раунда
+    # структурированные события (action, importance, story/emotional_salience)
+    # и причинно-следственные links, которые пишутся в `world_events` /
+    # `event_links` рядом со speech/move событиями движка. Флаг выключен
+    # по умолчанию — read-path и генерация не меняются (canary).
+    event_extraction_enabled: bool = Field(
+        default=False, alias="EVENT_EXTRACTION_ENABLED"
+    )
+    # Модель для event extraction (пустая = берём основную модель генерации).
+    event_extraction_model: str = Field(
+        default="", alias="EVENT_EXTRACTION_MODEL"
+    )
+    # События с importance ниже порога не записываются (стоимостной лимит:
+    # один LLM-вызов на раунд должен давать только значимые события).
+    event_min_importance: float = Field(
+        default=3.0, alias="EVENT_MIN_IMPORTANCE"
+    )
+
 
 settings = Settings()

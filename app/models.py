@@ -26,6 +26,16 @@ class Chat(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     general_prompt: Mapped[str] = mapped_column(Text, default="")
+    # Story separation (Plans/update20.md §16.1, Sprint 0): `original_plot` —
+    # неизменяемый пользовательский замысел (LLM не может его менять);
+    # `story_prompt` — текущее эволюционирующее story prompt; `story_enabled` —
+    # флаг включения динамического сюжета. Начальные значения — миграция из
+    # `general_prompt` (copy, не move); read-path пока не читает.
+    original_plot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    story_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    story_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     model_name: Mapped[str] = mapped_column(String(255), default=settings.default_model)
     max_history_length: Mapped[int] = mapped_column(
         Integer, default=settings.default_history_length
@@ -130,12 +140,27 @@ class WorldEvent(Base):
     )
     # speech | move | system_narrator | system
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # legacy-bridge: строковая локация события (WPE 3.0 → location_id в Фазе 3)
+    # legacy-bridge: строковая локация события (WPE 3.0 → location_id в Фазе 3).
+    # Sprint 0 (Plans/update20.md): каноническая локация как FK на
+    # `locations.id`. Backfill из строковой `location` — отдельным скриптом
+    # (`scripts/backfill_event_location_ids.py`, аналог `characters.location_id`).
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    location_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     location_from: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     location_to: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     target_character_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    # Sprint 1 (Plans/update20.md §15): structured event metadata. `action` —
+    # JSON {"actor", "action", "target", "object"} (или {}); importance 0..10,
+    # story_salience / emotional_salience 0..1. Заполняются раундной event
+    # extraction (`event_service.extract_round_events`) под флагом
+    # `EVENT_EXTRACTION_ENABLED`; read-path пока не читает.
+    action: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    importance: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    story_salience: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    emotional_salience: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     chat: Mapped["Chat"] = relationship(back_populates="world_events")
@@ -506,6 +531,7 @@ class RelationshipEvent(Base):
         Index("ix_rel_events_ts", "relationship_id", "timestamp"),
         Index("ix_rel_events_kind", "kind"),
         Index("ix_rel_events_round", "round_id"),
+        Index("ix_rel_events_event_id", "event_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -534,6 +560,344 @@ class RelationshipEvent(Base):
     source_message_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)  # JSON array
     round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     source_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # Sprint 1 (Plans/update20.md §15.2): проекция на каноническое событие.
+    # Заполняется только если событие порождено раундной event extraction.
+    event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("world_events.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     relationship: Mapped["CharacterRelationship"] = relationship()
+
+
+# ------------------------- State-driven tables (Sprint 0) -------------------------
+# Пустые таблицы заведены в Sprint 0 (Plans/update20.md) как фундамент под
+# будущие спринты. read-path их НЕ читает и write-path НЕ пишет до соответствующих
+# спринтов: character_states (3), beliefs (5), story_* (8-11), event_links (1),
+# memory_anchors (2/7), intents/npc_plans (10), consolidation_state (12).
+# Откат тривиален: новые таблицы изолированы от существующего поведения.
+
+
+class CharacterState(Base):
+    """Runtime-состояние персонажа (Plans/update20.md §8, Sprint 3).
+
+    Хранит ТОЛЬКО то, чего нет в других таблицах: эмоции, стресс, физическое
+    состояние, внимание, цели. Локация — из `characters.location_id`,
+    отношения — из `character_relationships`, окружение — из `scene_states`.
+    """
+
+    __tablename__ = "character_states"
+    __table_args__ = (
+        UniqueConstraint("character_id", name="uq_character_state_character"),
+        Index("ix_character_states_chat_id", "chat_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # JSON map emotion→intensity, e.g. {"suspicion":0.7,"relief":0.2}
+    emotional_state: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    # neutral/tense/hopeful/... (из interpreter)
+    mood: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    # 0..1
+    stress: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # JSON: energy, wounds, conditions (free-form, пишется LLM)
+    physical_state: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    # current_focus (строка) — «следит за Борисом»; NULL = нет фокуса
+    attention: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # на кого смотрит (FK characters, nullable)
+    current_focus_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("characters.id", ondelete="SET NULL"), nullable=True
+    )
+    active_goal: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    # JSON list персональных целей
+    personal_goals: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    updated_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    character: Mapped["Character"] = relationship(foreign_keys=[character_id])
+
+
+class Belief(Base):
+    """Знание/убеждение персонажа (Plans/update20.md §9, Sprint 5).
+
+    Персонаж НЕ автоматически знает World Truth — в контекст попадают только
+    его beliefs. `world_truth_ref` — FK на каноническое `world_events` (NULL,
+    если подтверждения миром не было).
+    """
+
+    __tablename__ = "beliefs"
+    __table_args__ = (
+        Index("ix_beliefs_character", "character_id"),
+        Index("ix_beliefs_chat_character", "chat_id", "character_id"),
+        Index("ix_beliefs_subject", "subject"),
+        Index("ix_beliefs_world_truth_ref", "world_truth_ref"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), nullable=False
+    )
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    predicate: Mapped[str] = mapped_column(String(255), nullable=False)
+    object: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    # direct_observation | heard | told_by | inference | rumor | memory
+    source: Mapped[str] = mapped_column(String(30), default="memory", nullable=False)
+    # 0..1
+    confidence: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    # fact | belief | suspicion — различие «знает» vs «полагает»
+    type: Mapped[str] = mapped_column(String(20), default="belief", nullable=False)
+    world_truth_ref: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("world_events.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    character: Mapped["Character"] = relationship()
+
+
+class StoryState(Base):
+    """Current Story State (Plans/update20.md §16.2, Sprint 8/9).
+
+    `original_plot` (immutable) дублирует `chats.original_plot` как срез на
+    момент версии; `current_story` — структурированный JSON
+    (summary/active_threads/completed_goals/progress/phase/characters).
+    """
+
+    __tablename__ = "story_states"
+    __table_args__ = (Index("ix_story_states_chat_id", "chat_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    original_plot: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    current_story: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    story_phase: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    updated_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Versioning для rollback (Sprint 9)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class StoryThread(Base):
+    """Активная сюжетная линия (Plans/update20.md §16, Sprint 10).
+
+    `actors` — JSON-список имён/ids участников; `importance` — салиентность
+    для контекста; `status` — active | archived.
+    """
+
+    __tablename__ = "story_threads"
+    __table_args__ = (Index("ix_story_threads_chat_status", "chat_id", "status"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    actors: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    created_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class StoryEvent(Base):
+    """Проекция канонического `world_events` для сюжета (§15.0, §16.3).
+
+    НЕ дублирует поля `world_events` — ссылается через `event_id`. Поля-
+    надстройки (story_thread_id, cause/consequences) — проекционная разметка.
+    """
+
+    __tablename__ = "story_events"
+    __table_args__ = (
+        Index("ix_story_events_chat_id", "chat_id"),
+        Index("ix_story_events_event_id", "event_id"),
+        Index("ix_story_events_thread", "story_thread_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("world_events.id", ondelete="CASCADE"), nullable=True
+    )
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    event: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    actors: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    cause: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    consequences: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    story_thread_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("story_threads.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EventLink(Base):
+    """Причинно-следственное ребро событий (§15.1, Sprint 1).
+
+    `event_id` → `caused_by_event_id`; `kind`: causes | consequence | goal_step
+    | resolution.
+    """
+
+    __tablename__ = "event_links"
+    __table_args__ = (
+        Index("ix_event_links_chat_id", "chat_id"),
+        Index("ix_event_links_event_id", "event_id"),
+        Index("ix_event_links_caused_by", "caused_by_event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("world_events.id", ondelete="CASCADE"), nullable=False
+    )
+    caused_by_event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("world_events.id", ondelete="CASCADE"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(
+        String(20), default="causes", nullable=False
+    )
+
+
+class MemoryAnchor(Base):
+    """Эмоциональный якорь направленного отношения (§7, Sprint 2/7).
+
+    `relationship_id` — FK на `character_relationships` (source→target);
+    `event_id` — FK на каноническое `world_events` (источник события).
+    """
+
+    __tablename__ = "memory_anchors"
+    __table_args__ = (
+        Index("ix_anchors_rel", "relationship_id"),
+        Index("ix_anchors_event", "event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    relationship_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("character_relationships.id", ondelete="CASCADE"), nullable=True
+    )
+    event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("world_events.id", ondelete="CASCADE"), nullable=True
+    )
+    emotion: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    # valence [-1..1], intensity [0..1]
+    valence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    intensity: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    importance: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Intent(Base):
+    """Intent NPC на ход (§21, Sprint 10).
+
+    `target` — FK characters (nullable); `approach`: direct | indirect | avoid |
+    delay; urgency/risk — 0..1.
+    """
+
+    __tablename__ = "intents"
+    __table_args__ = (
+        Index("ix_intents_chat_character", "chat_id", "character_id"),
+        Index("ix_intents_round", "created_round_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), nullable=False
+    )
+    goal: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    target: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("characters.id", ondelete="SET NULL"), nullable=True
+    )
+    approach: Mapped[str] = mapped_column(
+        String(20), default="direct", nullable=False
+    )
+    urgency: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    emotion: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    risk: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    created_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class NpcPlan(Base):
+    """Долгоживущий маленький план NPC (§22, Sprint 10).
+
+    «Я хочу сделать X, но сейчас мне мешает Y». НЕ GOAP/planner. Один активный
+    план на персонажа (обычно). status: active | blocked | done | abandoned.
+    """
+
+    __tablename__ = "npc_plans"
+    __table_args__ = (
+        Index("ix_npc_plans_chat_character", "chat_id", "character_id"),
+        Index("ix_npc_plans_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    character_id: Mapped[int] = mapped_column(
+        ForeignKey("characters.id", ondelete="CASCADE"), nullable=False
+    )
+    goal: Mapped[str] = mapped_column(String(500), nullable=False)
+    next_step: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    blocked_by: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", nullable=False
+    )
+    created_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class ConsolidationState(Base):
+    """Счётчики adaptive consolidation (§20, Sprint 12).
+
+    Заменит 24h-таймер: score-пороги soft/hard/critical. Заведена в Sprint 0
+    (по §E), write-path — Sprint 12.
+    """
+
+    __tablename__ = "consolidation_state"
+    __table_args__ = (Index("ix_consolidation_state_chat", "chat_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=False
+    )
+    last_soft_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_hard_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # JSON counters: {"messages": N, "events": N, "facts": N, "rel_events": N,
+    #                  "story_events": N, "anchors": N}
+    counters: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

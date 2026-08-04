@@ -650,6 +650,17 @@ def build_scene_state_user(current_state: dict, history: str, character_names: s
     return template.format(current_state=current_state_str, history=history, character_names=character_names, locations=loc_str)
 
 
+def build_event_extraction_system() -> str:
+    """Localized system prompt for round event extraction (Sprint 1, §15)."""
+    return _TEMPLATES.get("event_extraction", {}).get("system", "")
+
+
+def build_event_extraction_user(history: str, character_names: str, locations: str = "(не указаны)") -> str:
+    """Localized user prompt for round event extraction (Sprint 1, §15)."""
+    template = _TEMPLATES.get("event_extraction", {}).get("user_prefix", "")
+    return template.format(history=history, character_names=character_names, locations=locations)
+
+
 def build_relationships_block(relationships_text: str) -> str:
     """Build the dynamic relationships block for the system prompt."""
     if not relationships_text:

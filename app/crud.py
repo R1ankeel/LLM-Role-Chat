@@ -1838,6 +1838,133 @@ async def backfill_character_location_ids(
     return report
 
 
+# -------------------- Sprint 0 backfills (Plans/update20.md) --------------------
+@dataclass
+class PlotBackfillReport:
+    """Результат backfill ``chats.original_plot/story_prompt`` из ``general_prompt``.
+
+    Copy, не move: ``general_prompt`` не меняется. Идемпотентно: заполняются
+    только пустые поля (повторный запуск ничего не перезаписывает).
+    """
+
+    total: int = 0
+    filled_original_plot: int = 0
+    filled_story_prompt: int = 0
+    story_enabled: int = 0  # всегда 0: флаг остаётся false до Sprint 8
+
+    def lines(self) -> list[str]:
+        return [
+            f"total={self.total} filled_original_plot={self.filled_original_plot} "
+            f"filled_story_prompt={self.filled_story_prompt} story_enabled={self.story_enabled}"
+        ]
+
+
+async def backfill_plot_fields(
+    db: AsyncSession, chat_id: int | None = None
+) -> PlotBackfillReport:
+    """Backfill ``chats.original_plot`` / ``chats.story_prompt`` из ``general_prompt``.
+
+    Sprint 0 (Plans/update20.md §16.1): начальные значения story-полей = копия
+    ``general_prompt`` (copy, не move). ``story_enabled`` остаётся False — сюжет
+    выключен до Sprint 8. Идемпотентно: заполняются только пустые значения.
+    """
+    stmt = select(models.Chat)
+    if chat_id is not None:
+        stmt = stmt.where(models.Chat.id == chat_id)
+    stmt = stmt.order_by(models.Chat.id)
+    chats = list((await db.execute(stmt)).scalars().all())
+
+    report = PlotBackfillReport(total=len(chats))
+    for chat in chats:
+        source = chat.general_prompt or ""
+        if not chat.original_plot:
+            chat.original_plot = source
+            report.filled_original_plot += 1
+        if not chat.story_prompt:
+            chat.story_prompt = source
+            report.filled_story_prompt += 1
+        if chat.story_enabled:
+            # Защита от случайного включения: backfill не включает сюжет.
+            chat.story_enabled = False
+            report.story_enabled += 1
+
+    await db.commit()
+    return report
+
+
+@dataclass
+class EventLocationBackfillReport:
+    """Результат backfill ``world_events.location_id`` из строковой ``location``.
+
+    Аналог ``LocationBackfillReport``: нерезолвленные случаи НЕ проставляются
+    и попадают в ``unresolved`` на ручной разбор.
+    """
+
+    total: int = 0
+    resolved: int = 0
+    shared_scene: int = 0
+    unresolved: list[tuple[int, int, str, str]] = dataclass_field(
+        default_factory=list
+    )  # (chat_id, event_id, event_type, location)
+
+    def lines(self) -> list[str]:
+        out = [
+            f"total={self.total} resolved={self.resolved} "
+            f"shared_scene={self.shared_scene} unresolved={len(self.unresolved)}"
+        ]
+        for chat_id, event_id, event_type, location in self.unresolved:
+            out.append(
+                f"  UNRESOLVED chat={chat_id} event={event_id} "
+                f"type={event_type!r}: {location!r}"
+            )
+        return out
+
+
+async def backfill_event_location_ids(
+    db: AsyncSession, chat_id: int | None = None
+) -> EventLocationBackfillReport:
+    """Backfill ``world_events.location_id`` из строковой ``world_events.location``.
+
+    Sprint 0 (Plans/update20.md): каноническая локация события (аналог
+    ``backfill_character_location_ids``). Пустая строка / «Общая сцена» → NULL;
+    нерезолвленное имя → NULL + отчёт на ручной разбор. Идемпотентно.
+    """
+    stmt = select(models.WorldEvent)
+    if chat_id is not None:
+        stmt = stmt.where(models.WorldEvent.chat_id == chat_id)
+    stmt = stmt.order_by(models.WorldEvent.chat_id, models.WorldEvent.id)
+    events = list((await db.execute(stmt)).scalars().all())
+
+    locations_by_chat: dict[int, list[models.Location]] = {}
+    report = EventLocationBackfillReport(total=len(events))
+
+    for event in events:
+        raw = (event.location or "").strip()
+        if not raw or perception.is_shared_scene(
+            perception.normalize_location(raw)
+        ):
+            if event.location_id is not None:
+                event.location_id = None
+            report.shared_scene += 1
+            continue
+        locs = locations_by_chat.get(event.chat_id)
+        if locs is None:
+            locs = await get_chat_locations(db, event.chat_id)
+            locations_by_chat[event.chat_id] = locs
+        loc = resolve_location_name(locs, raw)
+        if loc is None:
+            report.unresolved.append(
+                (event.chat_id, event.id, event.event_type, raw)
+            )
+            continue
+        if event.location_id != loc.id:
+            event.location_id = loc.id
+        report.resolved += 1
+
+    await db.commit()
+    return report
+
+
 async def _sync_chat_locations_cache(db: AsyncSession, chat_id: int) -> None:
     """Keep `chats.locations` (JSON array of names) in sync with the locations table.
 
@@ -2217,3 +2344,129 @@ async def get_round_messages_by_round_id(
             break
         round_messages.append(message)
     return round_messages
+
+
+# ------------------------ Structured World Events (Sprint 1) ------------------------
+def _clamp01(value: float | int | None) -> float | None:
+    """Clamp 0..1; None passes through (движковые события салиенс не имеют)."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, f))
+
+
+async def save_round_events(
+    db: AsyncSession,
+    chat_id: int,
+    events: list[schemas.ExtractedEvent],
+    *,
+    round_id: str | None = None,
+) -> schemas.EventExtractionReport:
+    """Записать извлечённые раундные события + causal links (§15, Sprint 1).
+
+    Event extraction (LLM) — отдельная от движковых ``speech``/``move`` запись:
+    движковые события ``importance`` не заполняют (NULL), поэтому раунд с уже
+    записанной extraction детектируется по ``importance IS NOT NULL`` — повторный
+    прогон pipeline идемпотентен и не дублирует события/links.
+
+    Event'ы с ``importance < settings.event_min_importance`` пропускаются
+    (стоимостной лимит). Неизвестный персонаж / нерезолвнутая локация деградируют
+    в NULL (FK nullable) — никогда не падают. ``causes`` — индексы в переданном
+    списке ``events``; из них строятся ``EventLink(kind=causes)``.
+    """
+    report = schemas.EventExtractionReport(extraction_used=True)
+    if not events:
+        return report
+
+    if round_id:
+        stmt = (
+            select(models.WorldEvent.id)
+            .where(
+                models.WorldEvent.chat_id == chat_id,
+                models.WorldEvent.round_id == round_id,
+                models.WorldEvent.importance.isnot(None),
+            )
+            .limit(1)
+        )
+        existing = (await db.execute(stmt)).scalars().first()
+        if existing is not None:
+            logger.info(
+                "[Sprint1] round %s already has extracted events — skip", round_id
+            )
+            return report
+
+    characters = await get_characters_by_chat(db, chat_id, include_player=True)
+    name_to_id: dict[str, int] = {}
+    for character in characters:
+        key = (character.name or "").strip().casefold()
+        if key:
+            name_to_id.setdefault(key, character.id)
+
+    locations = await get_chat_locations(db, chat_id)
+    min_importance = float(settings.event_min_importance or 0.0)
+
+    index_to_event: dict[int, models.WorldEvent] = {}
+    skipped = 0
+    for idx, ev in enumerate(events):
+        try:
+            imp = float(ev.importance or 0.0)
+        except (TypeError, ValueError):
+            imp = 0.0
+        if imp < min_importance:
+            skipped += 1
+            continue
+        source_id = name_to_id.get((ev.source_character or "").strip().casefold())
+        target_ids: list[int] = []
+        for target in ev.targets or []:
+            tid = name_to_id.get((target or "").strip().casefold())
+            if tid is not None:
+                target_ids.append(tid)
+        loc = resolve_location_name(locations, ev.location or "")
+        action_data = ev.action.model_dump() if ev.action else {}
+        event = models.WorldEvent(
+            chat_id=chat_id,
+            character_id=source_id,
+            event_type=(ev.event_type or "event").strip() or "event",
+            location=(ev.location or "").strip(),
+            location_id=loc.id if loc else None,
+            round_id=round_id,
+            target_character_ids=json.dumps(target_ids, ensure_ascii=False),
+            action=json.dumps(action_data, ensure_ascii=False),
+            importance=imp,
+            story_salience=_clamp01(ev.story_salience),
+            emotional_salience=_clamp01(ev.emotional_salience),
+        )
+        db.add(event)
+        index_to_event[idx] = event
+
+    await db.flush()
+
+    links = 0
+    for idx, ev in enumerate(events):
+        target_event = index_to_event.get(idx)
+        if target_event is None:
+            continue
+        for cause_idx in ev.causes or []:
+            if not isinstance(cause_idx, int):
+                continue
+            cause_event = index_to_event.get(cause_idx)
+            if cause_event is None or cause_event.id == target_event.id:
+                continue
+            db.add(
+                models.EventLink(
+                    chat_id=chat_id,
+                    event_id=target_event.id,
+                    caused_by_event_id=cause_event.id,
+                    kind="causes",
+                )
+            )
+            links += 1
+
+    await db.commit()
+    report.written_events = len(index_to_event)
+    report.written_links = links
+    report.skipped_below_importance = skipped
+    return report

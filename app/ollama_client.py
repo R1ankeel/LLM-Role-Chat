@@ -345,6 +345,57 @@ SCENE_STATE_JSON_SCHEMA = {
     "required": ["time_of_day", "character_locations"]
 }
 
+# Round event extraction JSON Schema (Sprint 1, Plans/update20.md §15)
+EVENT_EXTRACTION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "event_type": {"type": "string"},
+                    "description": {"type": "string"},
+                    "source_character": {"type": "string"},
+                    "targets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "location": {"type": "string"},
+                    "action": {
+                        "type": "object",
+                        "properties": {
+                            "actor": {"type": "string"},
+                            "action": {"type": "string"},
+                            "target": {"type": "string"},
+                            "object": {"type": "string"},
+                        },
+                        "required": ["actor", "action", "target", "object"],
+                    },
+                    "importance": {"type": "number"},
+                    "story_salience": {"type": "number"},
+                    "emotional_salience": {"type": "number"},
+                    "causes": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                },
+                "required": [
+                    "event_type",
+                    "description",
+                    "source_character",
+                    "targets",
+                    "location",
+                    "importance",
+                    "story_salience",
+                    "emotional_salience",
+                ],
+            }
+        }
+    },
+    "required": ["events"]
+}
+
 
 def _resolve_thinking(enable_thinking: bool | None) -> bool:
     """Per-call override falls back to global ENABLE_THINKING."""
@@ -2321,3 +2372,119 @@ async def extract_scene_state(
     except (json.JSONDecodeError, AttributeError) as exc:
         logger.warning("Failed to parse scene state JSON: %s", exc)
         return None
+
+
+def _build_event_extraction_messages(
+    history: str,
+    character_names: list[str],
+    locations: str = "[]",
+) -> list[ChatMessage]:
+    """Build messages for round event extraction (Sprint 1, §15)."""
+    from .prompt_builder import (
+        build_event_extraction_system,
+        build_event_extraction_user,
+    )
+
+    char_names_str = "\n".join(f"- {name}" for name in character_names) if character_names else "(нет персонажей)"
+    try:
+        loc_list = json.loads(locations) if locations and locations != "[]" else []
+        loc_str = ", ".join(loc_list) if isinstance(loc_list, list) and loc_list else "(не указаны)"
+    except (json.JSONDecodeError, TypeError):
+        loc_str = "(не указаны)"
+    system = build_event_extraction_system()
+    user = build_event_extraction_user(
+        history=history,
+        character_names=char_names_str,
+        locations=loc_str,
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+async def extract_round_events(
+    client: httpx.AsyncClient,
+    model_name: str,
+    round_history_text: str,
+    character_names: dict[int, str] | list[str],
+    locations: str = "[]",
+    num_ctx: int | None = None,
+) -> list[dict] | None:
+    """Extract structured events from a round's history via LLM (Sprint 1, §15).
+
+    Returns a list of event dicts matching ``ExtractedEvent`` or ``None`` on
+    failure (caller decides: skip the stage, never break the round). The
+    extraction writes no rows — persistence happens in ``crud.save_round_events``.
+    """
+    if isinstance(character_names, dict):
+        char_list = list(character_names.values())
+    else:
+        char_list = list(character_names)
+
+    messages = _build_event_extraction_messages(
+        round_history_text, char_list, locations=locations
+    )
+    options: dict = {"temperature": 0.3}
+    if num_ctx and num_ctx > 0:
+        options["num_ctx"] = num_ctx
+
+    def _payload(use_format: bool) -> dict:
+        if settings.use_chat_api:
+            payload: dict = {
+                "model": model_name,
+                "messages": messages,
+                "stream": False,
+                "options": options,
+            }
+            if use_format:
+                payload["format"] = EVENT_EXTRACTION_JSON_SCHEMA
+            return payload
+        prompt = "\n\n".join(msg["content"] for msg in messages if msg.get("content"))
+        payload = {
+            "model": model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": options,
+        }
+        if use_format:
+            payload["format"] = EVENT_EXTRACTION_JSON_SCHEMA
+        return payload
+
+    def _read_content(data: dict) -> str:
+        if settings.use_chat_api:
+            return data.get("message", {}).get("content", "")
+        return data.get("response", "")
+
+    try:
+        payload = _payload(use_format=True)
+        if settings.use_chat_api:
+            response = await client.post("/api/chat", json=payload)
+        else:
+            response = await client.post("/api/generate", json=payload)
+        response.raise_for_status()
+        content = _read_content(response.json())
+    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
+        logger.warning("Round event extraction with JSON schema failed: %s", exc)
+        try:
+            payload = _payload(use_format=False)
+            if settings.use_chat_api:
+                response = await client.post("/api/chat", json=payload)
+            else:
+                response = await client.post("/api/generate", json=payload)
+            response.raise_for_status()
+            content = _read_content(response.json())
+        except Exception as fallback_exc:
+            logger.warning("Round event extraction fallback failed: %s", fallback_exc)
+            return None
+
+    try:
+        result = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning("Failed to parse round event extraction JSON: %s", exc)
+        return None
+
+    raw_events = result.get("events", []) if isinstance(result, dict) else []
+    if not isinstance(raw_events, list):
+        return None
+    return [e for e in raw_events if isinstance(e, dict)]

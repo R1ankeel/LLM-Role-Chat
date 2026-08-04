@@ -1,6 +1,6 @@
 """Chat engine: process user messages, generate character replies, extract memories."""
 
-import asyncio
+import asyncio  # noqa: F401 — патчится тестами (app.chat_engine.asyncio.create_task)
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -994,16 +994,6 @@ async def process_user_message_streaming(
     character_snapshots = [_character_to_snapshot(c) for c in characters]
     round_snapshots = [_message_to_dict(m) for m in round_messages]
 
-    # Final pass ensures all round presence rows are consistent
-    await crud.compute_and_save_presence_for_round(
-        db,
-        round_messages,
-        character_ids,
-        character_names,
-        characters=characters,
-        character_locations=character_locations,
-    )
-
     # Extract and update scene state from round history (P3)
     scene_update = None
     try:
@@ -1141,13 +1131,8 @@ async def process_user_message_streaming(
             }
             for c in characters
         ]
-        asyncio.create_task(
-            _analyze_and_update_relationships(
-                client, chat_id, chat.model_name,
-                round_snapshots, character_snapshots,
-                round_id=round_id,
-            )
-        )
+        # Scheduling of the relationship task moved into post_round_pipeline
+        # (Sprint 1, Plans/update20.md §15) — it uses these rich snapshots.
 
     # Phase 6: Track stagnation across rounds and force time advance
     try:
@@ -1197,16 +1182,32 @@ async def process_user_message_streaming(
     except Exception as exc:
         logger.warning("[chat_id=%d] Stagnation tracking failed: %s", chat_id, exc)
 
-    # Post-round memory job (outside transaction, background)
-    asyncio.create_task(
-        memory_service.process_post_round(
-            client,
-            chat_id,
-            round_snapshots,
-            character_snapshots,
-            chat.model_name,
+    # Post-round pipeline (Sprint 1, Plans/update20.md §15): presence → event
+    # extraction → memory → relationships → story. Каждая стадия изолирована
+    # try/except — падение одной не ломает раунд (graceful degradation).
+    try:
+        from .post_round_pipeline import run_post_round_pipeline
+
+        _pipeline_report = await run_post_round_pipeline(
+            client=client,
+            db=db,
+            chat_id=chat_id,
+            model_name=chat.model_name,
+            round_messages=round_messages,
+            character_ids=character_ids,
+            character_names=character_names,
+            characters=characters,
+            character_locations=character_locations,
+            round_id=round_id,
+            round_snapshots=round_snapshots,
+            character_snapshots=character_snapshots,
+            memory_processor=memory_service.process_post_round,
+            relationship_analyzer=_analyze_and_update_relationships,
         )
-    )
+    except Exception as exc:
+        logger.warning(
+            "[chat_id=%d] Post-round pipeline failed: %s", chat_id, exc
+        )
 
     # Consume the one-time intervention after a fully successful round. If a
     # character fell back to the "молчит" placeholder, the round is considered
