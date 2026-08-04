@@ -267,6 +267,7 @@ def validate_transition(
 def validate_relationship_type_update(
     current_type: str,
     new_type: str,
+    strict: bool = True,
 ) -> tuple[bool, str]:
     """Validate a relationship type update.
     
@@ -274,13 +275,20 @@ def validate_relationship_type_update(
     Checks:
     1. new_type is in valid types whitelist
     2. transition from current_type to new_type is allowed
+
+    ``strict`` controls the transition gate:
+    - ``strict=True`` (default) — only realistic progressions are allowed
+      (used by the automatic LLM analysis path: ``apply_delta``);
+    - ``strict=False`` — any valid type is allowed, including family types
+      (``семья``/``родитель``/``брат_сестра``), used by the manual editing
+      endpoint. The whitelist check always applies.
     """
     if new_type not in VALID_TYPES:
         return False, (
             f"Invalid relationship_type: '{new_type}'. "
             f"Must be one of: {', '.join(sorted(VALID_TYPES))}"
         )
-    if not validate_transition(current_type, new_type):
+    if strict and not validate_transition(current_type, new_type):
         allowed = TRANSITIONS.get(current_type, set())
         return False, (
             f"Invalid transition from '{current_type}' to '{new_type}'. "

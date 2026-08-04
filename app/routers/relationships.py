@@ -198,7 +198,7 @@ async def update_relationship_endpoint(
 
     if update.relationship_type is not None:
         is_valid, error_msg = validate_relationship_type_update(
-            rel.relationship_type, update.relationship_type
+            rel.relationship_type, update.relationship_type, strict=False
         )
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
