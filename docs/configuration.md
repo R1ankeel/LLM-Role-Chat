@@ -298,6 +298,18 @@ regex-пути). Тюнинг-настройка `WPE_ACTION_CONSISTENCY_MAX_RET
 Флаги независимы; откат — выключить любой из них (partial → бинарный full/none
 по каналам, треды — отдельно).
 
+Фаза 7 (Event Bus / Interrupts) реализована 08-04; флаг по-прежнему **`false`**.
+Включение `WORLD_ENGINE_EVENT_BUS_ENABLED` переводит цикл раунда
+(`chat_engine.process_user_message_streaming`) на очередь приоритетов
+`app/round_engine.py` (`run_round` — единственная оркестрирующая функция):
+разбуженные NPC идут впереди плановых (внутри — FIFO), плановый порядок —
+исходный `order_index`. Буждение по адресации (`addressed=true`): игрок→NPC —
+`target_character_ids` user-сообщения первым ходом; NPC→NPC —
+`target_character_ids` реплики. Один ответ на NPC за раунд, повторные буждения
+игнорируются (И17) — без зацикливания. Откат — выключить флаг
+(`run_round_fixed` — исходный фиксированный порядок без изменения поведения).
+
+
 | ключ | дефолт | описание (фаза) |
 |---|---|---|
 | `WORLD_ENGINE_LOCATIONS_ENABLED` | `false` | канонические локации, сравнение по `location_id` (Фаза 1, реализована) |
@@ -309,4 +321,4 @@ regex-пути). Тюнинг-настройка `WPE_ACTION_CONSISTENCY_MAX_RET
 | `WORLD_ENGINE_CONSISTENCY_MAX_RETRIES` | `1` | contradiction-ретраи ≤ N внутри `generate()` (Фаза 5, тюнинг) |
 | `WORLD_ENGINE_THREADS_ENABLED` | `false` | Thread/ThreadParticipantState в проде: доставка по удалённому каналу независимо от локации (Фаза 6, реализована) |
 | `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` | `false` | частичное восприятие по каналам: рёбра + громкость + невидимость + voice familiarity (Фаза 6, Ул.2, реализована) |
-| `WORLD_ENGINE_EVENT_BUS_ENABLED` | `false` | Event Bus / буждение NPC (Фаза 7, Ул.5) |
+| `WORLD_ENGINE_EVENT_BUS_ENABLED` | `false` | Event Bus / буждение NPC: очередь приоритетов, один ответ за раунд (Фаза 7, Ул.5, реализована) |

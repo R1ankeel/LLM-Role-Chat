@@ -18,6 +18,7 @@ from . import models
 from . import ollama_client
 from . import pending_intervention
 from . import perception
+from . import round_engine
 from . import relationship_analyzer
 from . import relationship_service
 from . import schemas
@@ -577,7 +578,15 @@ async def process_user_message_streaming(
     # Reusable token-aware context builder (per-character contexts A ≠ B)
     context_builder = ContextBuilder()
 
-    for current_character in characters:
+    # WPE Фаза 7 (Ул.5, §7, И17): Event Bus / Interrupts. Пер-NPC шаг раунда
+    # вынесен в `_round_step` (async-генератор); оркестрация цикла — очередь
+    # приоритетов и буждение — делегируется round_engine (единственная
+    # оркестрирующая функция, правило §9). Флаг off — run_round_fixed (откат
+    # без изменения поведения: исходный фиксированный порядок).
+    npc_id_set = {c.id for c in characters}
+
+    async def _round_step(current_character, bus):
+        nonlocal context_messages, round_generation_ok
         other_names = get_other_character_names(characters, current_character.id)
         summary_obj = summaries_by_character.get(current_character.id)
         summary_text = summary_obj.content if summary_obj else None
@@ -933,11 +942,32 @@ async def process_user_message_streaming(
         if response_text:
             prior_reply_events.append(char_message)
 
+        # WPE Фаза 7 (Event Bus, Ул.5, И17): реплика адресована конкретному
+        # NPC (target_character_ids) → будим его для внеочередной генерации.
+        # Повторные буждения и буждения уже ответивших игнорируются EventBus.
+        if bus is not None:
+            for _target_id in msg_targets:
+                if _target_id in npc_id_set:
+                    bus.wake(_target_id)
+
         round_messages.append(char_message)
         context_messages.append(char_message)
         if len(context_messages) > history_limit:
             context_messages = context_messages[-history_limit:]
         yield {"type": "message", "message": _message_to_dict(char_message)}
+
+    # WPE Фаза 7 (Ул.5, §7): цикл раунда делегируется round_engine — единственной
+    # оркестрирующей функции (правило §9). Шаг `_round_step` сам будит
+    # NPC-адресатов своей реплики (NPC↔NPC, И17); игрок→NPC будятся первым
+    # ходом через seed_target_ids. Флаг off — исходный фиксированный порядок.
+    if settings.world_engine_event_bus_enabled:
+        _round_iterator = round_engine.run_round(
+            characters, _round_step, seed_target_ids=event_targets
+        )
+    else:
+        _round_iterator = round_engine.run_round_fixed(characters, _round_step)
+    async for _round_event in _round_iterator:
+        yield _round_event
 
     character_snapshots = [_character_to_snapshot(c) for c in characters]
     round_snapshots = [_message_to_dict(m) for m in round_messages]
