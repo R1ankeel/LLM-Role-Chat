@@ -333,6 +333,40 @@ def _is_generic_fact(text: str) -> bool:
     return False
 
 
+# Story-факты: сюжетная информация «мы ищем Николая», цели, задания (§7).
+_STORY_FACT_PATTERNS = (
+    re.compile(r"\b(мы|группа|отряд|команда)\s+ищ\w+", re.I),
+    re.compile(r"\bзадан\w+\s+[^.]*\b(найти|разыскать|отыскать|достать)\b", re.I),
+    re.compile(r"\b(поиск\w*|квест|миссия|задание|цель\s+похода)\b", re.I),
+)
+
+
+def classify_memory_type(fact) -> str:
+    """Детерминированный fallback-классификатор типа памяти (§7).
+
+    Правила из плана: ``category=="отношения" → social``; локация/предмет →
+    semantic; событийный текст → episodic; привязка к сюжету (story-маркеры)
+    → story. LLM-тип (``fact.memory_type``) приоритетен — этот классификатор
+    применяется только когда тип не задан/не валиден.
+    """
+    if isinstance(fact, dict):
+        category = str(fact.get("category") or "").strip().lower()
+        text = str(fact.get("fact") or "")
+    else:
+        category = str(getattr(fact, "category", "") or "").strip().lower()
+        text = str(getattr(fact, "fact", "") or "")
+    if category == "отношения":
+        return "social"
+    if category in ("локация", "предмет"):
+        return "semantic"
+    if category == "событие":
+        return "episodic"
+    for pattern in _STORY_FACT_PATTERNS:
+        if pattern.search(text):
+            return "story"
+    return "semantic"
+
+
 def validate_extracted_fact(
     fact: schemas.ExtractedFact,
     character_name: str,
@@ -347,7 +381,13 @@ def validate_extracted_fact(
         text = (fact.fact or "").strip()
         if not text:
             return None
-        return fact.model_copy(update={"fact": text})
+        # Sprint 2 (§7): тип памяти заполняется даже при выключенной валидации.
+        return fact.model_copy(
+            update={
+                "fact": text,
+                "memory_type": fact.memory_type or classify_memory_type(fact),
+            }
+        )
 
     if not fact.witnessed:
         logger.debug(
@@ -408,6 +448,8 @@ def validate_extracted_fact(
             "importance": float(fact.importance),
             "category": fact.category or "событие",
             "witnessed": True,
+            # Sprint 2 (§7): детерминированный fallback-классификатор.
+            "memory_type": fact.memory_type or classify_memory_type(fact),
         }
     )
 
@@ -586,6 +628,35 @@ def _log_memory_perception(
         )
 
 
+def _sensors_proposal_to_facts(sensors_result: dict) -> list[schemas.ExtractedFact]:
+    """Sensors memory-candidates (§5.1.3) → ExtractedFact (движок валидирует).
+
+    Sensors предлагает ``{facts: [{text, importance}]}``; категория по умолчанию
+    «событие» (fallback-классификатор уточнит тип). Sensors память НЕ пишет.
+    """
+    facts: list[schemas.ExtractedFact] = []
+    for item in sensors_result.get("facts") or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        importance = item.get("importance")
+        try:
+            imp = float(importance) if importance is not None else 0.5
+        except (TypeError, ValueError):
+            imp = 0.5
+        facts.append(
+            schemas.ExtractedFact(
+                fact=text,
+                category="событие",
+                importance=max(0.0, min(1.0, imp)),
+                witnessed=True,
+            )
+        )
+    return facts
+
+
 async def _extract_and_save_memories(
     client: httpx.AsyncClient,
     chat_id: int,
@@ -638,17 +709,46 @@ async def _extract_and_save_memories(
                     continue
 
                 round_text = observable.text
+                # Sprint 2 (§5.1.3/§7): Sensors memory-candidates имеют
+                # приоритет над прямым LLM-извлечением; Sensors память НЕ пишет —
+                # только предлагает факты, движок валидирует и сохраняет.
+                raw_facts = None
+                sensors_used = False
                 try:
-                    raw_facts = await ollama_client.extract_memories_for_character(
-                        client, model_name, character, round_text
+                    from .sensors_service import sensors_service
+
+                    sensors_result = await sensors_service.run(
+                        client, task="memory", minimal_context=round_text
                     )
+                    sensors_facts = _sensors_proposal_to_facts(sensors_result or {})
+                    if sensors_facts:
+                        raw_facts = sensors_facts
+                        sensors_used = True
+                        logger.debug(
+                            "[Memory] character=%s source=sensors candidates=%d",
+                            char_name,
+                            len(sensors_facts),
+                        )
                 except Exception:
                     logger.warning(
-                        "[chat_id=%d] Memory extraction failed for %s",
+                        "[chat_id=%d] Sensors memory proposal failed for %s",
                         chat_id,
                         char_name,
                     )
-                    continue
+                    sensors_facts = []
+
+                if raw_facts is None:
+                    try:
+                        raw_facts = await ollama_client.extract_memories_for_character(
+                            client, model_name, character, round_text
+                        )
+                    except Exception:
+                        logger.warning(
+                            "[chat_id=%d] Memory extraction failed for %s",
+                            chat_id,
+                            char_name,
+                        )
+                        continue
 
                 if not raw_facts:
                     logger.debug(
@@ -695,6 +795,11 @@ async def _extract_and_save_memories(
                 ]
                 saved = 0
                 for fact in validated:
+                    # Sprint 2 (§7): тип памяти пишется только при включённом
+                    # флаге memory_types_enabled (canary); иначе legacy-поведение.
+                    memory_type = (
+                        fact.memory_type if settings.memory_types_enabled else None
+                    )
                     created = await crud.create_memory(
                         db,
                         schemas.MemoryCreate(
@@ -703,6 +808,7 @@ async def _extract_and_save_memories(
                             content=fact.fact,
                             importance=fact.importance,
                             category=fact.category,
+                            memory_type=memory_type,
                         ),
                         source_message_ids=observed_message_ids,
                     )

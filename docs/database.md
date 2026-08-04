@@ -158,8 +158,12 @@ UNIQUE `(message_id, character_id)`. Индекс `ix_presence_character_message
 | `last_accessed_at` | DATETIME NULL | для консолидации |
 | `source_message_ids` | TEXT | JSON-список |
 | `embedding` | BLOB | для векторного поиска (P3) |
+| `memory_type` | TEXT(20) NOT NULL (default `semantic`) | Sprint 2 (§7): `semantic/episodic/social/story`; не входит в `content_hash` |
+| `event_id` | FK → `world_events.id` ON DELETE SET NULL | Sprint 2: проекция на каноническое событие |
+| `valence` | REAL NULL | Sprint 2: эмоциональная валентность −1..1 |
+| `intensity` | REAL NULL | Sprint 2: эмоциональная интенсивность 0..1 |
 
-UNIQUE `(character_id, content_hash)`. Индексы: `ix_memories_char_created`, `ix_memories_char_imp_created`, `ix_memories_char_last_accessed`.
+UNIQUE `(character_id, content_hash)`. Индексы: `ix_memories_char_created`, `ix_memories_char_imp_created`, `ix_memories_char_last_accessed`, `ix_memories_char_type (character_id, memory_type)`, `ix_memories_event (event_id)` (оба — Sprint 2).
 
 ### `character_summaries`
 Персонаж-специфичное саммари сессии (уровень 3 памяти), один на персонажа.
@@ -374,22 +378,23 @@ Original Plot (immutable) + Current Story State + Story Phase.
 > (событие → события, которые его вызвали, `kind='causes'`).
 
 ### `memory_anchors` (Sprint 2/7)
-Эмоциональные якоря направленного отношения `source→target`.
+Эмоциональные якоря направленного отношения `source→target`. Write-path — Sprint 2
+(расширение `_maybe_create_memory_from_event`, флаг `ANCHORS_ENABLED`); активация
+top-K в контекст — Sprint 7 (`crud.select_top_anchors`, importance × recency,
+дедуп по `event_id`).
 
 | колонка | тип | примечание |
 |---|---|---|
 | `id` | INTEGER PK | |
-| `chat_id` | FK ON DELETE CASCADE | |
-| `relationship_id` | FK ON DELETE CASCADE | |
-| `event_id` | FK → `world_events.id` SET NULL | |
-| `emotion` | TEXT(50) NULL | |
-| `valence` | REAL NULL | -1..1 |
-| `intensity` | REAL NULL | 0..1 |
-| `importance` | REAL NULL | |
-| `timestamp` | DATETIME NULL | |
-| `created_at` | DATETIME | |
+| `relationship_id` | FK → `character_relationships.id` ON DELETE CASCADE | направленное отношение |
+| `event_id` | FK → `world_events.id` ON DELETE CASCADE NULL | канонический источник события |
+| `emotion` | TEXT(50) NOT NULL (default `''`) | краткий ярлык («тепло», «недоверие», …) |
+| `valence` | REAL NOT NULL (default 0.0) | −1..1 (знак ведущих дельт) |
+| `intensity` | REAL NOT NULL (default 0.0) | 0..1 |
+| `importance` | REAL NOT NULL (default 0.5) | |
+| `timestamp` | DATETIME NOT NULL | |
 
-Индекс `ix_memory_anchors_chat_id`.
+Индексы: `ix_anchors_rel (relationship_id)`, `ix_anchors_event (event_id)`.
 
 ### `intents` (Sprint 10)
 Intent NPC на ход.

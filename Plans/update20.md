@@ -27,6 +27,16 @@
 > оркестратор `app/post_round_pipeline.py` вынесен из `chat_engine`. Тесты:
 > **840 passed / 28 pre-existing / 0 новых**. См. «Sprint 1 — Статус».
 >
+> **Sprint 2 (2026-08-05)**: ✅ ВЫПОЛНЕН — Memory Architecture v2: типы + якоря
+> (§7): `memories` +memory_type/event_id/valence/intensity (default 'semantic'),
+> детерминированный fallback-классификатор (`classify_memory_type`),
+> `ExtractedFact.memory_type` в extraction-промпте, anchor-запись из значимых
+> RelationshipEvent (расширение `_maybe_create_memory_from_event`), Sensors
+> memory-hook (§5.1.3) в `_extract_and_save_memories`; canary-флаги
+> `MEMORY_TYPES_ENABLED`/`ANCHORS_ENABLED` (default false). Тесты:
+> **869 passed / 28 pre-existing / 0 новых** (29 новых тестов). См.
+> «Sprint 2 — Статус».
+>
 > Принцип: **не строить новые подсистемы поверх существующих**. Сначала найти
 > существующую реализацию, расширять её; если она мешает развитию — явно
 > вынести миграцию/рефакторинг в отдельный спринт. Дублирование запрещено.
@@ -1432,6 +1442,70 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: типы пишутся, anchors пишутся; retrieval не сломан.
 - **НЕ делать**: не создавать вторую таблицу памяти.
 
+#### Sprint 2 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (без изменения поведения при `memory_types_enabled=false` и
+  `anchors_enabled=false`):
+  1. `app/models.py`: `Memory` + `memory_type` (String(20), NOT NULL, default
+     'semantic'), +`event_id` (nullable FK → `world_events.id`, ON DELETE SET
+     NULL, index), +`valence`/`intensity` (Float nullable); индексы
+     `ix_memories_char_type (character_id, memory_type)`,
+     `ix_memories_event (event_id)`;
+  2. `app/database.py`: идемпотентные ALTER для `memories` (memory_type NOT NULL
+     DEFAULT 'semantic' — существующие строки получают 'semantic' без дата-потерь,
+     event_id/valence/intensity nullable) + CREATE INDEX IF NOT EXISTS; **фикс
+     `ensure_schema`**: inspector на `inspect(conn)` (то же соединение
+     транзакции), иначе миграция падает на прод-БД с данными (см. ниже);
+  3. `app/schemas.py`: `MemoryType` (semantic|episodic|social|story),
+     `normalize_memory_type()` (пустое/невалидное → None);
+     `MemoryBase`/`MemoryUpdate`/`ExtractedFact` + memory_type/valence/intensity/
+     event_id + валидаторы;
+  4. `app/crud.py`: `create_memory` — пустой memory_type → default 'semantic'
+     (type НЕ входит в content_hash, дедуп ключ `(character_id, content_hash)`
+     не меняется); `update_memory` — nullable-колонки; новые **anchor CRUD**:
+     `create_memory_anchor` (клампинг valence/intensity/importance),
+     `anchor_activation_score` (importance × recency = 1/(1+возраст_дней)),
+     `select_top_anchors` (top-K активация + дедуп по event_id — один канонический
+     источник в контексте), `get_anchors_for_relationship(s)`;
+  5. `app/memory_service.py`: `classify_memory_type` (category отношения→social,
+     локация/предмет→semantic, событие→episodic, story-маркеры→story, иначе
+     semantic; LLM-тип приоритетен); `validate_extracted_fact` проставляет
+     fallback-тип; **Sensors memory-hook (§5.1.3)**: при `sensors_memory_enabled`
+     SensorsService предлагает `{facts:[{text, importance}]}` → `_sensors_proposal_to_facts`
+     → существующая `validate_extracted_facts`/witness-фильтр/лимиты → запись
+     (Sensors память сам НЕ пишет); тип пишется только при
+     `memory_types_enabled=true`;
+  6. `app/ollama_client.py`/`app/prompt_builder.py`/`app/prompts/ru.json`:
+     extraction-промпт + `memory_type` (не обязательно, fallback-классификатор);
+  7. `app/relationship_service.py`: `_maybe_create_memory_from_event` и
+     `_maybe_create_memory_from_resolved_issue` → `memory_type='social'` (при
+     флаге); при `anchors_enabled=true` — запись якоря
+     (`create_memory_anchor`) из значимого события (эмоция/валентность по знаку
+     дельт, intensity=|max_delta|/100, importance=event.importance/10); Sensors
+     якоря не предлагает;
+  8. `app/config.py`: `MEMORY_TYPES_ENABLED`, `ANCHORS_ENABLED` (default false),
+     `RELATIONSHIP_ANCHOR_MAX` (default 3); `.env.example` + `.env`.
+- **Изменённые файлы**: `app/models.py`, `app/database.py`, `app/schemas.py`,
+  `app/crud.py`, `app/memory_service.py`, `app/relationship_service.py`,
+  `app/config.py`, `app/ollama_client.py`, `app/prompt_builder.py`,
+  `app/prompts/ru.json`, `.env.example` (+ `.env`); новые
+  `tests/test_memory_types.py`, `tests/test_memory_anchors.py`.
+- **БД**: `ensure_schema` идемпотентна на «прод-схеме после Sprint 0»
+  (проверено на копии с данными: +4 колонки memories, существующие строки →
+  memory_type='semantic', повторный запуск безопасен). Попутно исправлен
+  скрытый дефект: inspector читал БД отдельным соединением и не видел таблиц
+  незакоммиченной транзакции — миграция падала (`NoSuchTableError: scene_states`)
+  на БД с записями в `memories` (см. тест `test_sprint2_migration_backfills_semantic`).
+- **Тесты**: `tests/test_memory_types.py` (17: normalize/classifier/validate/
+  parse/create/update + миграции), `tests/test_memory_anchors.py` (12: клампинг,
+  score, top-K активация, дедуп по event_id, группировка, запись якоря из
+  события под флагом, отказ записи без флага). Полный прогон: **869 passed,
+  28 failed** — те же 28 pre-existing падений (подтверждено baseline `git stash`:
+  те же 28 падают без изменений), 0 новых.
+- **Откат**: флаги off по умолчанию — поведение равно legacy (тип не пишется,
+  якоря не пишутся, read-path не читает новые поля); колонки/индексы можно
+  снять отдельной миграцией.
+
 ### Sprint 3 — Character State (P0)
 
 - **Цель**: единое runtime-состояние персонажа без дублирования существующих данных.
@@ -2070,7 +2144,7 @@ belief-system». На этом плане решение **пересматри�
 ```text
 Sprint 0  — Подготовка: schema foundation, backfill (P0) ✅ (2026-08-04)
 Sprint 1  — Structured World Events (P0) ✅ (2026-08-05)
-Sprint 2  — Memory Architecture v2: типы + якоря (P0)
+Sprint 2  — Memory Architecture v2: типы + якоря (P0) ✅ (2026-08-05)
 Sprint 3  — Character State (P0)
 Sprint 4  — Attention (P1)
 Sprint 5  — Belief System (P0)
@@ -2211,7 +2285,7 @@ WORLD STATE UPDATE            relationship_events / story_events /
    `event_links` (в Sprint 0 уже создана — здесь write-path);
    `relationship_events.+event_id` FK nullable (проекция канонического события);
    `story_events.+event_id` FK (проекция, если таблица создана в Sprint 0).
-3. **Sprint 2** — `memories.+memory_type/event_id/valence/intensity` (default
+3. **Sprint 2** — ✅ `memories.+memory_type/event_id/valence/intensity` (default
    memory_type='semantic'); `memory_anchors` write-path; индексы:
    `ix_memories_char_type (character_id, memory_type)`,
    `ix_memories_event (event_id)`, `ix_anchors_rel (relationship_id)`.

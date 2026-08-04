@@ -69,11 +69,20 @@ Sensors **не может** самостоятельно: изменять БД 
 Sprint 0 заводит только каркас (конфиг, сервис, схемы, тесты) под флагом off.
 К процессам **не подключено**: ни perception, ни memory, ни relationships не
 вызывают Sensors. Подключение — по спринтам (§5.1.3): event classification —
-Sprint 1, memory extraction — Sprint 2, emotion/mood — Sprint 3.
+Sprint 1 ✅, memory extraction — Sprint 2 ✅, emotion/mood — Sprint 3.
+
+## Подключение: Memory extraction (Sprint 2)
+
+`app/memory_service.py::_extract_and_save_memories` — при `sensors_memory_enabled`
+и `SENSORS_MODEL` SensorsService предлагает кандидатов
+`{facts: [{text, importance}]}` (схема `memory`, `get_schema(task="memory")`).
+Движок прогоняет их через существующую `validate_extracted_facts`
+(witness-фильтр, near-dup, лимиты) и сохраняет как обычные факты; Sensors память
+САМ НЕ пишет и не определяет типы (`memory_type` присваивает движок). Sensors
+недоступен → детерминированный LLM-путь (`extract_memories_for_character`).
 
 ## Подключение: Event classification (Sprint 1)
 
-`app/event_service.py` — раундная event extraction (§15, `Plans/update20.md`).
 Когда активна `sensors_event_enabled`, Sensors предлагает classification
 (тип/участники/локация/importance), а движок применяет игровые правила:
 салиенсы клампятся в 0..1, `importance < EVENT_MIN_IMPORTANCE` отбрасывается,

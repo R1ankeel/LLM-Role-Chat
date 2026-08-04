@@ -1364,10 +1364,66 @@ async def _maybe_create_memory_from_event(
         content=content,
         importance=min(1.0, max(0.1, event.importance / 10.0)),
         category="отношения",
+        # Sprint 2 (§7): социальный тип памяти (canary-флаг).
+        memory_type="social" if settings.memory_types_enabled else None,
     )
 
     created = await crud.create_memory(db, memory, source_message_ids=source_msg_ids)
+
+    # Sprint 2 (§7/§13): эмоциональный якорь для значимого события отношения.
+    # Якорь пишется движком (не Sensors); гейтится ANCHORS_ENABLED.
+    if created is not None and settings.anchors_enabled:
+        try:
+            await crud.create_memory_anchor(
+                db,
+                relationship_id=rel.id,
+                event_id=event.event_id,
+                emotion=_anchor_emotion_from_deltas(event),
+                valence=_anchor_valence_from_deltas(event),
+                intensity=min(1.0, abs(max_delta) / 100.0),
+                importance=min(1.0, event.importance / 10.0),
+            )
+        except Exception:
+            logger.exception(
+                "[rel_id=%d] Anchor write failed for event %d",
+                rel.id,
+                event.id,
+            )
     return created
+
+
+def _anchor_emotion_from_deltas(event) -> str:
+    """Краткая эмоция якоря по знаку ведущего сдвига метрик (§7)."""
+    if event.delta_affection != 0:
+        return "тепло" if event.delta_affection > 0 else "холод"
+    if event.delta_trust != 0:
+        return "доверие" if event.delta_trust > 0 else "недоверие"
+    if event.delta_attraction != 0:
+        return "влечение" if event.delta_attraction > 0 else "отчуждение"
+    if event.delta_resentment != 0:
+        return "обида" if event.delta_resentment > 0 else "примирение"
+    if event.delta_jealousy != 0:
+        return "ревность" if event.delta_jealousy > 0 else "спокойствие"
+    return "нейтрально"
+
+
+def _anchor_valence_from_deltas(event) -> float:
+    """Валентность −1..+1 из знаков сдвигов (§7): положительные сдвиги > 0."""
+    signs = 0.0
+    counts = 0
+    for delta in (
+        event.delta_affection,
+        event.delta_trust,
+        event.delta_attraction,
+        event.delta_resentment,
+        event.delta_jealousy,
+    ):
+        if delta:
+            signs += 1.0 if delta > 0 else -1.0
+            counts += 1
+    if counts == 0:
+        return 0.0
+    return round(signs / counts, 3)
 
 
 async def _maybe_create_memory_from_resolved_issue(
@@ -1405,6 +1461,8 @@ async def _maybe_create_memory_from_resolved_issue(
         content=content,
         importance=min(1.0, max(0.1, issue.importance / 10.0)),
         category="отношения",
+        # Sprint 2 (§7): социальный тип памяти (canary-флаг).
+        memory_type="social" if settings.memory_types_enabled else None,
     )
 
     created = await crud.create_memory(db, memory, source_message_ids=source_msg_ids)

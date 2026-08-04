@@ -533,8 +533,12 @@ async def create_memory(db: AsyncSession, memory: schemas.MemoryCreate, source_m
     if await _memory_exists(db, memory.character_id, content_hash):
         return None
     import json
+    data = memory.model_dump()
+    # Sprint 2 (§7): пустое memory_type → default 'semantic' (риск миграции —
+    # существующие строки получают 'semantic', type НЕ входит в content_hash).
+    data["memory_type"] = data.get("memory_type") or "semantic"
     db_memory = models.Memory(
-        **memory.model_dump(),
+        **data,
         content_hash=content_hash,
         source_message_ids=json.dumps(source_message_ids or []),
     )
@@ -968,16 +972,131 @@ async def delete_memory(db: AsyncSession, memory_id: int) -> bool:
 async def update_memory(
     db: AsyncSession, memory_id: int, memory_update: schemas.MemoryUpdate
 ) -> models.Memory | None:
-    """Update memory content/importance/category."""
+    """Update memory content/importance/category (+ Sprint 2 поля типа/эмоции)."""
     db_memory = await db.get(models.Memory, memory_id)
     if db_memory is None:
         return None
     update_data = memory_update.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_memory, field, value)
+    if db_memory.memory_type is None:
+        db_memory.memory_type = "semantic"
     await db.commit()
     await db.refresh(db_memory)
     return db_memory
+
+
+# --------------------- Memory Anchors (Sprint 2, §7) ---------------------
+def anchor_activation_score(anchor: models.MemoryAnchor, now=None) -> float:
+    """Детерминированный score активации якоря: importance × recency (§7).
+
+    recency = 1 / (1 + возраст_в_днях) — свежие якоря получают больший вес;
+    score в диапазоне (0..1], монотонен по importance и свежести.
+    """
+    if now is None:
+        now = datetime.utcnow()
+    timestamp = anchor.timestamp or now
+    age_days = max(0.0, (now - timestamp).total_seconds() / 86400.0)
+    recency = 1.0 / (1.0 + age_days)
+    return float(anchor.importance or 0.5) * recency
+
+
+def select_top_anchors(
+    anchors: list[models.MemoryAnchor],
+    max_k: int,
+    now=None,
+) -> list[models.MemoryAnchor]:
+    """Top-K якорей по ``importance × recency`` (активация в контекст, §7/§12.3).
+
+    Дедупликация по ``event_id``: один канонический источник порождает не более
+    одного якоря в top-K (уникальность в контексте). ``max_k`` — cap из
+    ``RELATIONSHIP_ANCHOR_MAX`` (по умолчанию 3).
+    """
+    if not anchors or max_k <= 0:
+        return []
+    scored = [(anchor_activation_score(a, now), a) for a in anchors]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    seen_events: set[int] = set()
+    selected: list[models.MemoryAnchor] = []
+    for score, anchor in scored:
+        event_id = anchor.event_id
+        if event_id is not None and event_id in seen_events:
+            continue
+        if event_id is not None:
+            seen_events.add(event_id)
+        selected.append(anchor)
+        if len(selected) >= max_k:
+            break
+    return selected
+
+
+async def create_memory_anchor(
+    db: AsyncSession,
+    *,
+    relationship_id: int,
+    event_id: int | None = None,
+    emotion: str = "",
+    valence: float = 0.0,
+    intensity: float = 0.0,
+    importance: float = 0.5,
+    timestamp=None,
+) -> models.MemoryAnchor:
+    """Записать эмоциональный якорь направленного отношения (§7).
+
+    Якорь пишется движком из значимых RelationshipEvent (расширение
+    ``_maybe_create_memory_from_event``); Sensors якоря НЕ предлагает.
+    """
+    anchor = models.MemoryAnchor(
+        relationship_id=relationship_id,
+        event_id=event_id,
+        emotion=emotion or "",
+        valence=max(-1.0, min(1.0, float(valence or 0.0))),
+        intensity=max(0.0, min(1.0, float(intensity or 0.0))),
+        importance=max(0.0, min(1.0, float(importance or 0.5))),
+        timestamp=timestamp or datetime.utcnow(),
+    )
+    db.add(anchor)
+    await db.commit()
+    await db.refresh(anchor)
+    return anchor
+
+
+async def get_anchors_for_relationship(
+    db: AsyncSession, relationship_id: int, limit: int | None = None
+) -> list[models.MemoryAnchor]:
+    """Все якоря отношения source→target (по убыванию свежести)."""
+    stmt = (
+        select(models.MemoryAnchor)
+        .where(models.MemoryAnchor.relationship_id == relationship_id)
+        .order_by(models.MemoryAnchor.timestamp.desc(), models.MemoryAnchor.id.desc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_anchors_for_relationships(
+    db: AsyncSession, relationship_ids: list[int], limit: int | None = None
+) -> dict[int, list[models.MemoryAnchor]]:
+    """Загрузить якоря для нескольких отношений одним запросом (для контекста)."""
+    if not relationship_ids:
+        return {}
+    stmt = (
+        select(models.MemoryAnchor)
+        .where(models.MemoryAnchor.relationship_id.in_(relationship_ids))
+        .order_by(models.MemoryAnchor.timestamp.desc(), models.MemoryAnchor.id.desc())
+    )
+    result = await db.execute(stmt)
+    anchors = list(result.scalars().all())
+    grouped: dict[int, list[models.MemoryAnchor]] = {rid: [] for rid in relationship_ids}
+    for anchor in anchors:
+        bucket = grouped.get(anchor.relationship_id)
+        if bucket is None:
+            continue
+        if limit is None or len(bucket) < limit:
+            bucket.append(anchor)
+    return grouped
 
 
 # ------------------------ Character Summary ----------------------

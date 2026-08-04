@@ -369,14 +369,15 @@ Scene-блок (`prompt_builder.build_scene_block`) принимает `characte
 
 ## Поток памяти
 
-1. **Извлечение** (post_round): для каждого персонажа — только наблюдаемый им текст → LLM извлекает 0–3 факта (`ExtractedFact` с `category`, `importance`, `witnessed`).
-2. **Валидация** (`validate_extracted_facts`): длина, generic-паттерны, «чужие мысли», grounding (минимум 22% пересечения с контекстом), near-dup (Jaccard ≥ 0.75), лимит на раунд.
-3. **Сохранение**: `crud.create_memory` с `content_hash` (SHA-256 нормализованного текста) — уникальность на уровне БД; лимит памяти на персонажа (`ensure_memory_limit`).
+1. **Извлечение** (post_round): для каждого персонажа — только наблюдаемый им текст → LLM извлекает 0–3 факта (`ExtractedFact` с `category`, `importance`, `witnessed`). При `sensors_memory_enabled` (Sprint 2, §5.1.3) SensorsService предлагает кандидатов `{facts: [{text, importance}]}` — движок прогоняет их через ту же валидацию и лимиты; Sensors память сам не пишет.
+2. **Валидация** (`validate_extracted_facts`): длина, generic-паттерны, «чужие мысли», grounding (минимум 22% пересечения с контекстом), near-dup (Jaccard ≥ 0.75), лимит на раунд. При `memory_types_enabled` каждому факту присваивается `memory_type` (semantic/episodic/social/story): LLM-тип из промпта, при отсутствии — детерминированный fallback (`memory_service.classify_memory_type` по категории/тексту).
+3. **Сохранение**: `crud.create_memory` с `content_hash` (SHA-256 нормализованного текста) — уникальность на уровне БД; пустой `memory_type` → default 'semantic'; лимит памяти на персонажа (`ensure_memory_limit`).
 4. **Эмбеддинги**: enqueue `embed_memory` → `embedding_service` (Ollama `/api/embed`, bge-m3), хранение float32 BLOB.
 5. **Поиск**: BM25 + вектор + RRF (`get_hybrid_memories_for_characters`), witness-фильтр кандидатов, boost прямых наблюдений.
 6. **Decay**: снижение importance при неиспользовании > 7 дней.
 7. **Саммари**: каждые `summary_interval_messages` сообщений, инкрементальное, на наблюдаемом тексте.
 8. **Консолидация**: кластеризация по Jaccard ≥ 0.65, LLM-слияние кластера в один факт, удаление дубликатов.
+9. **Эмоциональные якоря** (Sprint 2, §7, при `anchors_enabled`): из значимых RelationshipEvent (`_maybe_create_memory_from_event`) движок пишет `memory_anchors` (эмоция, валентность, интенсивность); активация top-K якорей в контекст — Sprint 7 (`crud.select_top_anchors`, importance × recency, дедуп по event_id).
 
 ## Отношения (кратко; подробно — [relations.md](relations.md))
 

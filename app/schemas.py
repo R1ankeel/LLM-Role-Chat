@@ -13,6 +13,8 @@ from .stimuli import parse_stimuli, serialize_stimuli
 Role = Literal["user", "character", "system"]
 PresenceType = Literal["present", "mentioned", "audible", "absent", "told"]
 MemoryCategory = Literal["отношения", "событие", "локация", "предмет", "другое"]
+# Sprint 2 (Plans/update20.md §7): типы памяти на единой таблице memories.
+MemoryType = Literal["semantic", "episodic", "social", "story"]
 EventVisibility = Literal["private", "local", "targeted", "public", "global"]
 CommunicationChannel = Literal["direct", "magic", "phone", "radio", "messenger"]
 
@@ -44,6 +46,25 @@ def normalize_category(value: object) -> Optional[str]:
     if text in settings.memory_categories:
         return text
     return _CATEGORY_ALIASES.get(text, "другое")
+
+
+_MEMORY_TYPES = frozenset({"semantic", "episodic", "social", "story"})
+
+
+def normalize_memory_type(value: object) -> Optional[str]:
+    """Normalize a memory type token; None для пустого/неизвестного значения.
+
+    Пустое значение означает «не задано» — движок применит детерминированный
+    fallback-классификатор (§7). Неизвестное значение также → None (не валидно).
+    """
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text == "" or text == "none":
+        return None
+    if text in _MEMORY_TYPES:
+        return text
+    return None
 
 
 def _normalize_visibility(value: object) -> str:
@@ -383,11 +404,24 @@ class MemoryBase(BaseModel):
     content: str
     importance: Optional[float] = 0.5
     category: Optional[str] = None
+    # Sprint 2 (Plans/update20.md §7): тип памяти (semantic/episodic/social/story),
+    # эмоциональная окраска (valence [-1..1], intensity [0..1]) и проекция на
+    # каноническое `world_events`. Пустое memory_type → движок применит
+    # fallback-классификатор; в БД уходит валидный тип (по умолчанию 'semantic').
+    memory_type: Optional[str] = None
+    valence: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    intensity: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    event_id: Optional[int] = None
 
     @field_validator("category", mode="before")
     @classmethod
     def _normalize_memory_category(cls, value: object) -> Optional[str]:
         return normalize_category(value)
+
+    @field_validator("memory_type", mode="before")
+    @classmethod
+    def _normalize_memory_type(cls, value: object) -> Optional[str]:
+        return normalize_memory_type(value)
 
 
 class MemoryCreate(MemoryBase):
@@ -399,6 +433,10 @@ class MemoryUpdate(BaseModel):
     content: Optional[str] = None
     importance: Optional[float] = None
     category: Optional[str] = None
+    memory_type: Optional[str] = None
+    valence: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    intensity: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    event_id: Optional[int] = None
 
 
 class MemoryRead(MemoryBase):
@@ -426,12 +464,22 @@ class MemoryRead(MemoryBase):
 
 
 class ExtractedFact(BaseModel):
-    """Structured fact from LLM memory extraction (P1)."""
+    """Structured fact from LLM memory extraction (P1).
+
+    Sprint 2 (Plans/update20.md §7): ``memory_type`` — semantic | episodic |
+    social | story. LLM может вернуть тип; если он пуст/не валиден — движок
+    применит детерминированный fallback-классификатор по категории/тексту
+    (``memory_service.classify_memory_type``). ``valence``/``intensity`` —
+    эмоциональная окраска (опционально).
+    """
 
     fact: str
     category: MemoryCategory = "событие"
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     witnessed: bool = True
+    memory_type: Optional[str] = None
+    valence: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    intensity: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("fact", mode="before")
     @classmethod
@@ -445,6 +493,11 @@ class ExtractedFact(BaseModel):
     def _normalize_category(cls, value: object) -> str:
         normalized = normalize_category(value)
         return normalized or "событие"
+
+    @field_validator("memory_type", mode="before")
+    @classmethod
+    def _normalize_fact_memory_type(cls, value: object) -> Optional[str]:
+        return normalize_memory_type(value)
 
     @field_validator("importance", mode="before")
     @classmethod

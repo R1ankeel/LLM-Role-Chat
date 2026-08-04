@@ -395,5 +395,24 @@ class Settings(BaseSettings):
         default=3.0, alias="EVENT_MIN_IMPORTANCE"
     )
 
+    # ----- Memory Architecture v2 (Plans/update20.md §7, Sprint 2) -----
+    # Типы памяти (semantic/episodic/social/story) и эмоциональные якоря на
+    # единой таблице memories + memory_anchors. Флаг выключен по умолчанию:
+    # new-колонки пишутся/читаются только при включённом флаге, legacy-пути
+    # (BM25/vector/RRF/witness) не меняются.
+    memory_types_enabled: bool = Field(
+        default=False, alias="MEMORY_TYPES_ENABLED"
+    )
+    # Эмоциональные якоря (§7/§13): запись из значимых RelationshipEvent
+    # (расширение `_maybe_create_memory_from_event`) и активация top-K в
+    # контексте (Sprint 7). Выключен — якоря не пишутся, memory_anchors пуста.
+    anchors_enabled: bool = Field(
+        default=False, alias="ANCHORS_ENABLED"
+    )
+    # Cap числа активируемых якорей в контексте отношения (≈3, §7).
+    relationship_anchor_max: int = Field(
+        default=3, alias="RELATIONSHIP_ANCHOR_MAX"
+    )
+
 
 settings = Settings()

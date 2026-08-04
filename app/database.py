@@ -127,7 +127,11 @@ def ensure_schema(db_engine) -> None:
             )
         )
 
-        inspector = inspect(db_engine)
+        # Inspector на ТОМ ЖЕ соединении (conn): иначе отдельное соединение не
+        # видит таблицы/колонки, созданные в текущей незакоммиченной транзакции
+        # (например, CREATE scene_states в ensure_schema) — миграция падает на
+        # прод-БД с данными (см. tests/test_memory_types.py).
+        inspector = inspect(conn)
 
         # Add missing columns FIRST (memories before any index using them)
         memories_columns = {col["name"] for col in inspector.get_columns("memories")}
@@ -167,6 +171,39 @@ def ensure_schema(db_engine) -> None:
             )
             logger.info("Added embedding column to memories for vector search (P3)")
 
+        # Sprint 2 (Plans/update20.md §7): типы памяти + эмоциональная окраска +
+        # проекция на каноническое `world_events`. Идемпотентные ALTER: для
+        # существующих строк memory_type получает default 'semantic' (риск из
+        # плана — миграция без дата-потерь); event_id/valence/intensity nullable.
+        if "memory_type" not in memories_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE memories ADD COLUMN memory_type "
+                    "TEXT NOT NULL DEFAULT 'semantic'"
+                )
+            )
+            logger.info(
+                "Added memory_type column to memories (default 'semantic', Sprint 2)"
+            )
+        if "event_id" not in memories_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE memories ADD COLUMN event_id "
+                    "INTEGER REFERENCES world_events(id) ON DELETE SET NULL"
+                )
+            )
+            logger.info("Added event_id column to memories (Sprint 2)")
+        if "valence" not in memories_columns:
+            conn.execute(
+                text("ALTER TABLE memories ADD COLUMN valence REAL")
+            )
+            logger.info("Added valence column to memories (Sprint 2)")
+        if "intensity" not in memories_columns:
+            conn.execute(
+                text("ALTER TABLE memories ADD COLUMN intensity REAL")
+            )
+            logger.info("Added intensity column to memories (Sprint 2)")
+
         _backfill_memory_hashes(conn)
 
         conn.execute(
@@ -187,6 +224,20 @@ def ensure_schema(db_engine) -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_memories_char_last_accessed "
                 "ON memories (character_id, last_accessed_at)"
+            )
+        )
+
+        # Sprint 2: индексы по типу и по проекции на world_events (§E, п.3).
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_memories_char_type "
+                "ON memories (character_id, memory_type)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_memories_event "
+                "ON memories (event_id)"
             )
         )
 

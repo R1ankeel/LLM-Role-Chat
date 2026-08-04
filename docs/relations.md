@@ -63,6 +63,7 @@ LLM Generation               ← получает интерпретацию, dr
 | **Детерминированный decay** | ✅ `apply_decay` в конце раунда, jealousy -3/round, resentment -1/round, events при пересечении десятка | `relationship_service.apply_decay`, `chat_engine._analyze_and_update_relationships`, конфиг `RELATIONSHIP_DECAY_JEALOUSY_PER_ROUND`, `RELATIONSHIP_DECAY_RESENTMENT_PER_ROUND` |
 | **Source attribution для issues** | ✅ `source_message_ids` в `RelationshipIssue`, валидация против round context, fallback на все сообщения раунда | `models.RelationshipIssue`, `relationship_service._validate_source_message_ids`, `create_issue`, `resolve_issue`, `database.ensure_schema` |
 | **Memory integration** | ✅ Memory для значимых LLM-событий (|delta|>=10 или type change), kind=llm, category="отношения" | `relationship_service._maybe_create_memory_from_event`, `_maybe_create_memory_from_resolved_issue`, конфиг `RELATIONSHIP_MEMORY_DELTA_THRESHOLD` |
+| **Emotional anchors** (Sprint 2, §7) | ✅ при `ANCHORS_ENABLED`: из значимого LLM-события движок пишет `memory_anchors` (эмоция/валентность по знаку дельт, intensity=|max_delta|/100, importance=event.importance/10); memory_type="social" при `MEMORY_TYPES_ENABLED` | `relationship_service._maybe_create_memory_from_event` (+ `_anchor_emotion_from_deltas`/`_anchor_valence_from_deltas`), `crud.create_memory_anchor`; активация top-K — Sprint 7 (`crud.select_top_anchors`) |
 | Валидация типа в PUT | ❌ (дефект) | `routers/relationships.py:76` |
 
 ## 3. Конфликты с текущей архитектурой (что ломается)
@@ -627,6 +628,8 @@ source attribution для issues           (source_message_ids с валидац
     ↓
 memory integration                      (Memory создаются для |delta|>=10 или type change, kind=llm)   ✅ (Sprint 3 п.19)
     ↓
+emotional anchors                       (memory_anchors из значимых LLM-событий, ANCHORS_ENABLED)   ✅ (Sprint 2, §7)
+    ↓
 generation context (<behavior_drivers> перед cue + <open_issue data> в user-контекст + интерпретация в <relationships>)
     ↓
 LLM CHARACTER GENERATION
@@ -658,6 +661,7 @@ LLM CHARACTER GENERATION
 17. **Связь событий с `message_id` / `round_id`. ✅** (`source_message_ids`, `round_id` в events)
 18. **Source attribution для issues. ✅** `source_message_ids` в `RelationshipIssue` с валидацией против round context.
 19. **Memory integration. ✅** Memory создаются для значимых LLM-событий (|delta|>=10 или type change).
+19a. **Emotional anchors (Sprint 2, §7). ✅** При `ANCHORS_ENABLED` (`default false`) значимое LLM-событие дополнительно пишет `memory_anchors`: `emotion`/`valence` из знака ведущих дельт, `intensity=|max_delta|/100`, `importance=event.importance/10`; при `MEMORY_TYPES_ENABLED` память отношения получает `memory_type="social"`. Активация top-K якорей в контекст — Sprint 7 (`crud.select_top_anchors`, importance × recency, дедуп по `event_id`).
 
 ### Sprint 4 — инфраструктура
 20. Validation/hygiene. ✅ `relationship_service.validate_relationship_type_update(current, new)` — whitelist по `relationship_valid_types` + граф переходов; вызывается в PUT-эндпоинте до применения (400 при невалидном переходе). PUT больше не коммитит промежуточно: `update_relationship_fields` → prune → один commit.
