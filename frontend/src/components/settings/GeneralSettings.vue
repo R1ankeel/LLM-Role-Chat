@@ -114,7 +114,7 @@ async function onClearChat() {
         <div class="general-settings__danger-text">
           <span class="general-settings__danger-title">Очистить чат</span>
           <span class="general-settings__danger-hint">
-            Удаляет все сообщения и воспоминания. Персонажи и локации сохранятся.
+            Удаляет все сообщения, воспоминания и отношения. Персонажи и локации сохранятся.
           </span>
         </div>
         <button

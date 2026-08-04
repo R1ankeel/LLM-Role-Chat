@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '@/api'
+import { useCharactersStore } from '@/stores/characters'
 import type { WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
 
@@ -40,6 +41,7 @@ export const useSceneStore = defineStore('scene', () => {
     try {
       await api.updatePlayerLocation(chatId, location)
       if (scene.value) scene.value.player_location = location
+      useCharactersStore().syncPlayerLocation(location)
     } finally {
       locationSaving.value = false
     }

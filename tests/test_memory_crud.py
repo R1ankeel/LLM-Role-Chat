@@ -251,6 +251,41 @@ def test_clear_chat_full_scope(client, test_chat, test_character):
     assert len(mem_resp.json()) == 0
 
 
+def test_clear_chat_full_scope_clears_relationships(client, test_chat, test_character):
+    """DELETE /chats/{id}/messages?scope=full clears relationships but keeps characters."""
+    chat_id = test_chat["id"]
+
+    # Second character to pair with test_character
+    second = client.post(
+        f"/api/chats/{chat_id}/characters",
+        json={"name": "Second", "personality": "", "order_index": 1},
+    ).json()
+
+    # Create a relationship between the two characters
+    rel_resp = client.put(
+        f"/api/chats/{chat_id}/relationships/{test_character['id']}/{second['id']}",
+        json={"affection": 80, "trust": 60, "description": "close friends"},
+    )
+    assert rel_resp.status_code == 200
+
+    graph = client.get(f"/api/chats/{chat_id}/relationships/graph").json()
+    assert len(graph["edges"]) == 1
+
+    # Clear with full scope
+    response = client.delete(f"/api/chats/{chat_id}/messages?scope=full")
+    assert response.status_code == 204
+
+    # Relationship graph is now empty
+    graph = client.get(f"/api/chats/{chat_id}/relationships/graph").json()
+    assert graph["edges"] == []
+
+    # Characters and locations are preserved
+    assert len(graph["characters"]) == 3  # player + two NPCs
+    detail = client.get(f"/api/chats/{chat_id}").json()
+    assert len(detail["characters"]) == 3
+    assert len(detail["messages"]) == 0
+
+
 def test_clear_chat_invalid_scope(client, test_chat):
     """DELETE /chats/{id}/messages with invalid scope returns 400."""
     response = client.delete(f"/api/chats/{test_chat['id']}/messages?scope=invalid")

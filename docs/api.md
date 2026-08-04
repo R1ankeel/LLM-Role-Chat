@@ -45,7 +45,9 @@
 Query-параметр `scope` (Literal):
 - `messages` — только сообщения;
 - `messages_memories` — сообщения + воспоминания;
-- `full` — сообщения + воспоминания + summaries.
+- `full` — вся история взаимодействий: сообщения + воспоминания + summaries
+  + отношения (edges/issues/events) + world events + threads + memory jobs.
+  Персонажи и локации сохраняются.
 
 400 при невалидном scope; 404 если чат не найден.
 

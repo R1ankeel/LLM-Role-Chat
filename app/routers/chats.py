@@ -77,7 +77,9 @@ async def clear_messages(
     scope:
       - messages: delete messages only
       - messages_memories: delete messages + memories
-      - full: delete messages + memories + summaries
+      - full: delete all interaction history (messages + memories + summaries
+        + relationships + world events + threads + memory jobs); characters
+        and locations are preserved
     """
     if scope == "messages":
         ok = await crud.clear_chat_messages(db, chat_id)
@@ -90,8 +92,11 @@ async def clear_messages(
         if ok:
             await crud.clear_chat_memories(db, chat_id)
             await crud.reset_character_summaries_for_chat(db, chat_id)
-        else:
-            return
+            await crud.clear_chat_relationships(db, chat_id)
+            await crud.clear_chat_world_events(db, chat_id)
+            await crud.clear_chat_threads(db, chat_id)
+            await crud.clear_chat_memory_jobs(db, chat_id)
+            ctx_state.reset(chat_id)
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

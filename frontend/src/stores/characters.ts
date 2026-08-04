@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from '@/api'
+import { useChatsStore } from '@/stores/chats'
+import { useSceneStore } from '@/stores/scene'
 import type { Character, CharacterSummary } from '@/types/character'
 import type { CharacterCreateInput, CharacterUpdateInput } from '@/api/types'
 import type { Memory } from '@/types/memory'
@@ -71,10 +73,25 @@ export const useCharactersStore = defineStore('characters', () => {
       const updated = await api.updateCharacterLocation(characterId, location)
       const index = characters.value.findIndex((c) => c.id === characterId)
       if (index !== -1) characters.value[index] = updated
+      if (updated.is_player) syncPlayerLocation(updated.location)
       return updated
     } finally {
       locationSaving.value = false
     }
+  }
+
+  /**
+   * Локация игрока живёт в двух местах (chats.player_location и location
+   * player-персонажа) и обе попадают в промпты (presence/isolation и блок
+   * сцены). Синхронизирует все локальные стора после правки из любого места.
+   */
+  function syncPlayerLocation(location: string) {
+    const player = characters.value.find((c) => c.is_player)
+    if (player) player.location = location
+    const scene = useSceneStore()
+    if (scene.scene) scene.scene.player_location = location
+    const chats = useChatsStore()
+    if (chats.currentChat) chats.currentChat.player_location = location
   }
 
   async function create(input: CharacterCreateInput) {
@@ -99,6 +116,9 @@ export const useCharactersStore = defineStore('characters', () => {
       const updated = await api.updateCharacter(characterId, patch)
       const index = characters.value.findIndex((c) => c.id === characterId)
       if (index !== -1) characters.value[index] = updated
+      if (updated.is_player && patch.location != null) {
+        syncPlayerLocation(updated.location)
+      }
       if (selectedId.value === characterId) {
         summary.value = null
         memories.value = []
@@ -176,6 +196,7 @@ export const useCharactersStore = defineStore('characters', () => {
     getById,
     selectCharacter,
     updateLocation,
+    syncPlayerLocation,
     create,
     update,
     remove,

@@ -56,11 +56,56 @@ async def update_chat(
     db_chat = await get_chat(db, chat_id)
     if db_chat is None:
         return None
-    for field, value in chat_update.model_dump(exclude_unset=True).items():
+    update_data = chat_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
         setattr(db_chat, field, value)
+    if "player_location" in update_data:
+        await _sync_player_character_location(
+            db, db_chat, update_data["player_location"]
+        )
     await db.commit()
     await db.refresh(db_chat)
     return db_chat
+
+
+async def _sync_player_character_location(
+    db: AsyncSession, db_chat: models.Chat, location: str
+) -> None:
+    """Sync the player character's ``location`` with ``chats.player_location``.
+
+    The location of the player exists in two places — the chat (edited via the
+    right panel "Локация игрока") and the player character's card (edited via
+    the character card "Локация"). Both feed the LLM prompt (presence /
+    isolation vs the scene block), so they must stay in sync. ``player_location``
+    is the source of truth; the player character mirrors it.
+    """
+    player = await get_player_character(db, db_chat.id)
+    if player is None:
+        return
+    player.location = location
+    player.location_id = None
+    if location.strip():
+        locations = await get_chat_locations(db, db_chat.id)
+        resolved = resolve_location_name(locations, location)
+        if resolved is not None:
+            player.location_id = resolved.id
+
+
+async def _sync_chat_player_location(
+    db: AsyncSession, db_character: models.Character
+) -> None:
+    """Sync ``chats.player_location`` with the player character's ``location``.
+
+    Reverse direction of ``_sync_player_character_location``: when the player
+    character's location is edited from the character card, the chat-level
+    ``player_location`` (used for presence/isolation in prompts) follows it.
+    """
+    if not db_character.is_player:
+        return
+    db_chat = await get_chat(db, db_character.chat_id)
+    if db_chat is None or db_chat.player_location == db_character.location:
+        return
+    db_chat.player_location = db_character.location
 
 
 async def delete_chat(db: AsyncSession, chat_id: int) -> bool:
@@ -92,6 +137,57 @@ async def clear_chat_memories(db: AsyncSession, chat_id: int) -> bool:
         )
     await db.commit()
     return True
+
+
+async def clear_chat_relationships(db: AsyncSession, chat_id: int) -> None:
+    """Delete all relationship data (edges, events, issues) for a chat."""
+    rel_ids = select(models.CharacterRelationship.id).where(
+        models.CharacterRelationship.chat_id == chat_id
+    )
+    await db.execute(
+        delete(models.RelationshipEvent).where(
+            models.RelationshipEvent.relationship_id.in_(rel_ids)
+        )
+    )
+    await db.execute(
+        delete(models.RelationshipIssue).where(
+            models.RelationshipIssue.relationship_id.in_(rel_ids)
+        )
+    )
+    await db.execute(
+        delete(models.CharacterRelationship).where(
+            models.CharacterRelationship.chat_id == chat_id
+        )
+    )
+    await db.commit()
+
+
+async def clear_chat_world_events(db: AsyncSession, chat_id: int) -> None:
+    """Delete all world events (WPE journal) for a chat."""
+    await db.execute(
+        delete(models.WorldEvent).where(models.WorldEvent.chat_id == chat_id)
+    )
+    await db.commit()
+
+
+async def clear_chat_threads(db: AsyncSession, chat_id: int) -> None:
+    """Delete all threads (and participant states) for a chat."""
+    thread_ids = select(models.Thread.id).where(models.Thread.chat_id == chat_id)
+    await db.execute(
+        delete(models.ThreadParticipantState).where(
+            models.ThreadParticipantState.thread_id.in_(thread_ids)
+        )
+    )
+    await db.execute(delete(models.Thread).where(models.Thread.chat_id == chat_id))
+    await db.commit()
+
+
+async def clear_chat_memory_jobs(db: AsyncSession, chat_id: int) -> None:
+    """Delete all memory processing jobs for a chat."""
+    await db.execute(
+        delete(models.MemoryJob).where(models.MemoryJob.chat_id == chat_id)
+    )
+    await db.commit()
 
 
 # ---------------------------- Character ----------------------------
@@ -191,11 +287,16 @@ async def create_player_character(
     existing = await get_player_character(db, chat_id)
     if existing:
         return existing
+    db_chat = await get_chat(db, chat_id)
+    player_location = ""
+    if db_chat is not None:
+        player_location = getattr(db_chat, "player_location", "") or ""
     player = models.Character(
         chat_id=chat_id,
         name=name,
         is_player=True,
         order_index=9999,
+        location=player_location,
     )
     db.add(player)
     await db.commit()
@@ -231,6 +332,8 @@ async def update_character(
             raise ValueError(f"order_index={new_index} уже занят в этом чате")
     for field, value in update_data.items():
         setattr(db_character, field, value)
+    if "location" in update_data:
+        await _sync_chat_player_location(db, db_character)
     await db.commit()
     await db.refresh(db_character)
     return db_character
@@ -1205,6 +1308,7 @@ async def update_character_location(
         resolved = resolve_location_name(locations, location)
         if resolved is not None:
             db_character.location_id = resolved.id
+    await _sync_chat_player_location(db, db_character)
     await db.commit()
     await db.refresh(db_character)
     return db_character

@@ -311,6 +311,12 @@ export const mockApi: Api = {
       const char = list.find((c) => c.id === characterId)
       if (char) {
         char.location = location
+        if (char.is_player) {
+          const chat = mockChats.find((c) => c.id === char.chat_id)
+          if (chat) chat.player_location = location
+          const scene = mockScene[char.chat_id]
+          if (scene) scene.player_location = location
+        }
         return delay(clone(char))
       }
     }
@@ -321,6 +327,8 @@ export const mockApi: Api = {
     const chat = mockChats.find((c) => c.id === chatId)
     if (chat) chat.player_location = location
     if (mockScene[chatId]) mockScene[chatId].player_location = location
+    const player = (mockCharacters[chatId] ?? []).find((c) => c.is_player)
+    if (player) player.location = location
     return delay(undefined)
   },
 
@@ -510,6 +518,12 @@ export const mockApi: Api = {
     if (scope === 'messages_memories' || scope === 'full') {
       delete mockMemories[chatId]
       delete mockSummaries[chatId]
+    }
+    if (scope === 'full') {
+      delete mockRelationships[chatId]
+      delete mockRelationshipGraph[chatId]
+      delete mockRelationshipIssues[chatId]
+      delete mockRelationshipEvents[chatId]
     }
     return delay(undefined)
   },

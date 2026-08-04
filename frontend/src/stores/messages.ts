@@ -10,6 +10,7 @@ import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useSceneStore } from '@/stores/scene'
 import { useInterventionStore } from '@/stores/intervention'
+import { useRelationshipsStore } from '@/stores/relationships'
 
 export type GenerationStatus = 'idle' | 'sending' | 'waiting' | 'streaming'
 
@@ -301,7 +302,7 @@ export const useMessagesStore = defineStore('messages', () => {
     const id = chatId()
     if (!id || isGenerating.value) return
     try {
-      await api.clearMessages(id, 'messages_memories')
+      await api.clearMessages(id, 'full')
     } catch (e) {
       throw e
     }
@@ -316,6 +317,8 @@ export const useMessagesStore = defineStore('messages', () => {
     const characters = useCharactersStore()
     characters.memories = []
     characters.summary = null
+
+    useRelationshipsStore().reset()
 
     const scene = useSceneStore()
     scene.worldEvents = []
