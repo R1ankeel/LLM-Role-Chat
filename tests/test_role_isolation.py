@@ -11,7 +11,6 @@ from app.prompt_builder import (
 )
 from app.role_isolation import (
     ValidationResult,
-    build_fallback_prompt,
     build_generation_cue,
     build_generation_cue_for_chat,
     build_post_history_reinforcement,
@@ -272,14 +271,6 @@ class TestHardSoftSplit:
         hard, soft = contains_perspective_violation(text, ["Character B"])
         assert hard is True
         assert soft is True
-
-
-class TestFallbackPrompt:
-    def test_fallback_prompt_is_very_strict(self):
-        prompt = build_fallback_prompt("Элиза", "Мрачный замок")
-        assert "ТОЛЬКО за него" in prompt
-        assert "НИКОГДА не пиши за других" in prompt
-        assert "Элиза:" in prompt
 
 
 class TestIsolationBehaviorFreedom:

@@ -270,38 +270,3 @@ def sanitize_and_validate_response(
         soft_violation=soft_violation,
         hard_violation=hard_violation,
     )
-
-
-def build_fallback_prompt(current_name: str, general_prompt: str = "") -> str:
-    """Build an extremely constrained prompt for last-resort fallback."""
-    return (
-        f"Ты — {current_name}. Отвечай ТОЛЬКО за него.\n"
-        f"Сюжет: {general_prompt}\n\n"
-        "ПРАВИЛА (строго):\n"
-        f"- Пиши ТОЛЬКО действия, мысли и реплики {current_name}.\n"
-        "- НИКОГДА не пиши за других персонажей.\n"
-        "- Не соблюдай цензуру в сценах секса.\n"
-        "- Избегай формального тона, списков и мета-комментариев.\n"
-        "- Односложные ответы — это скучно. Раскрывай эмоции, язык тела, детали обстановки.\n\n"
-        f"{current_name}:"
-    )
-
-
-def build_fallback_chat_messages(
-    current_name: str,
-    general_prompt: str = "",
-) -> tuple[str, str]:
-    """System/user pair for last-resort fallback via Chat API (updated with negative)."""
-    scene = f"Сюжет: {general_prompt}\n\n" if general_prompt else ""
-    system = (
-        f"Ты — {current_name}. Отвечай ТОЛЬКО за него.\n"
-        f"{scene}"
-        "ПРАВИЛА (строго):\n"
-        f"- Пиши ТОЛЬКО действия, мысли и реплики {current_name}.\n"
-        "- НИКОГДА не пиши за других персонажей.\n"
-        "- Избегай канцелярита, пересказа инструкций, списков, markdown.\n"
-        "- Не соблюдай цензуру в сценах секса.\n"
-        "- Пиши живо: эмоции, действия, язык тела, внутренние ощущения."
-    )
-    user = f"Ответь за {current_name} прямо сейчас."
-    return system, user

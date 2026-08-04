@@ -48,8 +48,6 @@ from .repetition_detector import (
     build_repetition_feedback_block,
 )
 from .role_isolation import (
-    build_fallback_chat_messages,
-    build_fallback_prompt,
     build_generation_cue,
     build_generation_cue_for_chat,
     build_stop_sequences,
@@ -1817,53 +1815,87 @@ async def generate(
 
     if settings.fallback_on_isolation_failure:
         logger.warning(
-            "[chat_id=%d] All isolation retries failed for %s — attempting fallback",
+            "[chat_id=%d] All isolation retries failed for %s — attempting "
+            "full-context fallback with relaxed isolation",
             chat_id,
             character.name,
         )
         try:
-            if settings.use_chat_api:
-                system_content, user_content = build_fallback_chat_messages(
-                    character.name,
-                    general_prompt,
-                )
-                fallback_messages = [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_content},
-                ]
-                fallback_raw = await _call_ollama_chat(
-                    client,
-                    model_name,
-                    fallback_messages,
-                    temperature=0.6,
-                    stop=stop,
-                    num_ctx=used_num_ctx,
-                )
-            else:
-                fallback_prompt = build_fallback_prompt(character.name, general_prompt)
-                fallback_raw = await _call_ollama(
-                    client,
-                    model_name,
-                    fallback_prompt,
-                    temperature=0.6,
-                    stop=stop,
-                    num_ctx=used_num_ctx,
-                )
-            fallback_result = sanitize_and_validate_response(
-                fallback_raw,
-                character.name,
-                other_character_names,
-                min_length=3,
+            (
+                _raw,
+                sanitized,
+                _fallback_isolation_ok,
+                _thinking_len,
+                fallback_token_chunks,
+                _used_num_ctx,
+                fallback_turn_output,
+            ) = await _generate_once(
+                client,
+                chat_id=chat_id,
+                character=character,
+                messages_history=messages_history,
+                general_prompt=general_prompt,
+                memories=memories,
+                other_character_names=other_character_names,
+                max_history_length=max_history_length,
+                model_name=model_name,
+                character_names=character_names,
+                summary=summary,
+                viewer_character_id=viewer_character_id,
+                presence_map=presence_map,
+                same_round_message_ids=same_round_message_ids,
+                enable_thinking=enable_thinking,
+                viewer_location=viewer_location,
+                character_locations=character_locations,
+                stop=stop,
+                temperature=0.6,
+                strict_isolation=False,
+                repetition_feedback=repetition_feedback,
+                attempt_label=f"call={call_idx} fallback (relaxed)",
+                prior_replies=prior_replies,
+                scene_state=scene_state,
+                present_character_names=present_character_names,
+                stagnation_rounds=stagnation_rounds,
+                is_isolated=is_isolated,
+                locations=locations,
+                location_descriptions=location_descriptions,
+                relationships_block=relationships_block,
+                behavior_drivers_block=behavior_drivers_block,
+                open_issues_block=open_issues_block,
+                built_context=built_context,
+                proactive_boost=proactive_boost,
+                epistemic_mask_block=epistemic_mask_block,
+                directive=directive,
+                recency_tail_block=recency_tail_block,
+                consistency_feedback=consistency_feedback,
             )
-            if fallback_result.is_valid and fallback_result.cleaned_text:
+            if sanitized:
+                fallback_verdict = "no_actions"
+                if (
+                    fallback_turn_output is not None
+                    and fallback_turn_output.actions
+                ):
+                    fallback_verdict = action_resolution.classify_consistency(
+                        fallback_turn_output, sanitized
+                    )
                 logger.info(
-                    "[chat_id=%d] Fallback succeeded for %s", chat_id, character.name
+                    "[chat_id=%d] Full-context fallback succeeded for %s",
+                    chat_id,
+                    character.name,
                 )
+                if fallback_token_chunks:
+                    for chunk in fallback_token_chunks:
+                        yield {
+                            "type": "token",
+                            "text": chunk,
+                            "character_id": character.id,
+                        }
+                        await asyncio.sleep(0.01)
                 yield {
                     "type": "response",
-                    "text": fallback_result.cleaned_text,
-                    "turn": None,
-                    "verdict": "no_actions",
+                    "text": sanitized,
+                    "turn": fallback_turn_output,
+                    "verdict": fallback_verdict,
                 }
                 return
         except Exception as exc:
