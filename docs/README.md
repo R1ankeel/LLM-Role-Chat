@@ -23,6 +23,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [locations.md](locations.md) | «Локации 2.0»: модель Location, миграция, CRUD API, синхронизация ссылок |
 | [story.md](story.md) | Dynamic Story State (Sprint 8/9): Original Plot + Current Story State, write-path из раундных событий, блок STORY, API + Story Consolidation (LLM-обновление с валидацией) + Plot Engine (Sprint 10): NPC Intent (детерминированный, перед генерацией), долгоживущие планы NPC (не GOAP), story pressure, архивация завершённых линий |
 | [crisis.md](crisis.md) | Crisis Engine (Sprint 11): мягкое обнаружение кризисов — story pressure → кандидат (правила) → resolution (мягко: story_thread + story_event + boost), LLM-оценка под benchmark gate §27, блок CRISIS в контексте |
+| [adaptive_consolidation.md](adaptive_consolidation.md) | Adaptive Consolidation (Sprint 12): замена 24h-таймера на score-based soft/hard/critical — `consolidation_state` counters, `compute_consolidation_score`, `is_critical_event` (детерм.), idle-чат не консолидируется, critical → немедленно (дедуп ≤ N/раунд), полный набор memory+summary+relationship+anchors+story+index |
 
 ## Краткий обзор
 

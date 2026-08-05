@@ -106,26 +106,79 @@ async def _memory_jobs_worker():
             logger.exception("memory_jobs_worker_error")
 
 
+async def _adaptive_consolidation_pass(app: FastAPI) -> None:
+    """Score-based consolidation pass (§20, Sprint 12).
+
+    For every chat evaluate soft/hard/critical since the last consolidation and
+    enqueue a background job when triggered. Idle chats (score≈0, no critical
+    event) are skipped — no timer-based consolidation. Marking happens at
+    enqueue time, so repeated passes for the same events do not re-trigger.
+    """
+    from . import crud
+    from .database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        chats = await crud.get_chats(db, skip=0, limit=1000)
+        for chat in chats:
+            try:
+                decision = await memory_service.schedule_adaptive_consolidation(
+                    db,
+                    chat_id=chat.id,
+                    model_name=getattr(chat, "model_name", None) or None,
+                )
+                level = decision.get("level")
+                if level == "skip":
+                    continue
+                job = decision.get("job")
+                if job is not None:
+                    asyncio.create_task(task_queue.memory_job_queue.run_job(job))
+                logger.info(
+                    "adaptive_consolidation_triggered",
+                    chat_id=chat.id,
+                    level=level,
+                    score_hard=decision.get("score_hard"),
+                    job_id=decision.get("job_id"),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "adaptive_consolidation_error", chat_id=chat.id
+                )
+
+
 async def _consolidation_scheduler(app: FastAPI):
-    """Background task: enqueue memory consolidation job periodically."""
-    client: httpx.AsyncClient = app.state.ollama_client
+    """Background task: score-based adaptive consolidation (Sprint 12).
+
+    Replaces the fixed 24h timer. When ``adaptive_consolidation_enabled`` is
+    on, poll every ``consolidation_poll_seconds`` and trigger by score/critical
+    per chat. Otherwise fall back to the legacy interval job (canary).
+    """
     while True:
-        await asyncio.sleep(settings.consolidation_interval_hours * 3600)
+        await asyncio.sleep(settings.consolidation_poll_seconds)
         if not settings.consolidation_enabled:
             continue
+        if not settings.adaptive_consolidation_enabled:
+            await asyncio.sleep(max(0.0, settings.consolidation_interval_hours * 3600))
+            if not settings.consolidation_enabled:
+                continue
+            try:
+                logger.info("consolidation_scheduler_triggered")
+                # Enqueue global consolidation job (chat_id=0 means all chats)
+                job = await memory_service.enqueue_consolidation_job(chat_id=0)
+                if job:
+                    asyncio.create_task(task_queue.memory_job_queue.run_job(job))
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("consolidation_scheduler_error")
+            continue
         try:
-            logger.info("consolidation_scheduler_triggered")
-            # Enqueue global consolidation job (chat_id=0 means all chats)
-            job = await memory_service.enqueue_consolidation_job(chat_id=0)
-            if job:
-                # Fire and forget the actual processing
-                asyncio.create_task(
-                    task_queue.memory_job_queue.run_job(job)
-                )
+            await _adaptive_consolidation_pass(app)
         except asyncio.CancelledError:
             break
         except Exception:
-            logger.exception("consolidation_scheduler_error")
+            logger.exception("adaptive_consolidation_pass_error")
 
 
 # --------------------------- Lifespan ---------------------------
@@ -171,7 +224,13 @@ async def lifespan(app: FastAPI):
             app.state.consolidation_task = asyncio.create_task(
                 _consolidation_scheduler(app)
             )
-            logger.info("Consolidation scheduler started (interval=%dh)", settings.consolidation_interval_hours)
+            if settings.adaptive_consolidation_enabled:
+                logger.info(
+                    "Adaptive consolidation scheduler started (poll=%.0fs)",
+                    settings.consolidation_poll_seconds,
+                )
+            else:
+                logger.info("Consolidation scheduler started (interval=%dh)", settings.consolidation_interval_hours)
 
         yield
 

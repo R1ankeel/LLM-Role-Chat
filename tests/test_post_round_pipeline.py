@@ -121,6 +121,7 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
     assert set(report.keys()) == {
         "presence", "event_extraction", "memory", "relationships",
         "character_state", "beliefs", "story", "story_threads", "plans", "crisis",
+        "adaptive_consolidation",
     }
     assert report["presence"]["ok"] is True
     # флаг off по умолчанию → стадия извлечения событий — no-op
@@ -130,6 +131,9 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
     assert report["memory"].get("skipped") == "no processor"
     assert report["relationships"]["ok"] is True
     assert report["relationships"].get("skipped") == "analyzer off"
+    # adaptive consolidation — canary-флаг off по умолчанию → no-op
+    assert report["adaptive_consolidation"]["ok"] is True
+    assert report["adaptive_consolidation"].get("skipped") == "flag off"
     # character_state — флаг off по умолчанию → no-op
     assert report["character_state"]["ok"] is True
     assert report["character_state"].get("skipped") == "flag off"

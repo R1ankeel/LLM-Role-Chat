@@ -87,6 +87,33 @@ class Settings(BaseSettings):
     consolidation_max_memories_per_char: int = Field(default=200, alias="CONSOLIDATION_MAX_MEMORIES_PER_CHAR")
     consolidation_llm_model: str = Field(default="", alias="CONSOLIDATION_LLM_MODEL")  # empty = use default model
 
+    # Adaptive Consolidation (Sprint 12, Plans/update20.md §20) — replaces the 24h
+    # timer with a score-based soft/hard/critical trigger. Canary: off by default.
+    adaptive_consolidation_enabled: bool = Field(
+        default=False, alias="ADAPTIVE_CONSOLIDATION_ENABLED"
+    )
+    # Score weights: new_messages, events, facts, rel_events, story_events, anchors.
+    consolidation_weight_messages: float = Field(default=1.0, alias="CONSOLIDATION_WEIGHT_MESSAGES")
+    consolidation_weight_events: float = Field(default=2.0, alias="CONSOLIDATION_WEIGHT_EVENTS")
+    consolidation_weight_facts: float = Field(default=3.0, alias="CONSOLIDATION_WEIGHT_FACTS")
+    consolidation_weight_rel_events: float = Field(default=4.0, alias="CONSOLIDATION_WEIGHT_REL_EVENTS")
+    consolidation_weight_story_events: float = Field(default=5.0, alias="CONSOLIDATION_WEIGHT_STORY_EVENTS")
+    consolidation_weight_anchors: float = Field(default=7.0, alias="CONSOLIDATION_WEIGHT_ANCHORS")
+    # Soft = memories + summary; hard = full set. Critical = immediate hard.
+    consolidation_soft_threshold: float = Field(default=25.0, alias="CONSOLIDATION_SOFT_THRESHOLD")
+    consolidation_hard_threshold: float = Field(default=50.0, alias="CONSOLIDATION_HARD_THRESHOLD")
+    consolidation_critical_importance: float = Field(
+        default=8.0, alias="CONSOLIDATION_CRITICAL_IMPORTANCE"
+    )
+    # Dedup: critical consolidation no more than N times per round.
+    consolidation_critical_max_per_round: int = Field(
+        default=2, alias="CONSOLIDATION_CRITICAL_MAX_PER_ROUND"
+    )
+    # Score-based scheduler poll interval (seconds) when adaptive is on.
+    consolidation_poll_seconds: float = Field(
+        default=600.0, alias="CONSOLIDATION_POLL_SECONDS"
+    )
+
     # Repetition detection
     repetition_detection_enabled: bool = Field(default=True, alias="REPETITION_DETECTION_ENABLED")
     repetition_window_size: int = Field(default=6, alias="REPETITION_WINDOW_SIZE")

@@ -494,6 +494,38 @@ async def get_messages_since(
     return list(result.scalars().all())
 
 
+async def get_messages_since_ts(
+    db: AsyncSession,
+    chat_id: int,
+    since: datetime,
+    *,
+    role: str | None = None,
+    character_id: int | None = None,
+    limit: int | None = None,
+) -> list[models.Message]:
+    """Messages of a chat created strictly after ``since`` (Sprint 12).
+
+    Used by the adaptive-consolidation summary component to gather new dialogue
+    since the last consolidation. ``character_id`` restricts to one character.
+    """
+    stmt = (
+        select(models.Message)
+        .where(
+            models.Message.chat_id == chat_id,
+            models.Message.timestamp > since,
+        )
+        .order_by(models.Message.timestamp, models.Message.id)
+    )
+    if role is not None:
+        stmt = stmt.where(models.Message.role == role)
+    if character_id is not None:
+        stmt = stmt.where(models.Message.character_id == character_id)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def delete_message(
     db: AsyncSession, message_id: int, *, cascade_after: bool = False
 ) -> bool:
@@ -1206,6 +1238,105 @@ async def get_anchors_for_relationships(
         if limit is None or len(bucket) < limit:
             bucket.append(anchor)
     return grouped
+
+
+# ------------------------ Consolidation State (Sprint 12) ----------------------
+async def get_consolidation_state(
+    db: AsyncSession, chat_id: int
+) -> models.ConsolidationState | None:
+    """Read `consolidation_state` row for a chat (§20, Sprint 12)."""
+    stmt = select(models.ConsolidationState).where(
+        models.ConsolidationState.chat_id == chat_id
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def upsert_consolidation_state(
+    db: AsyncSession,
+    chat_id: int,
+    *,
+    last_soft_at: datetime | None = None,
+    last_hard_at: datetime | None = None,
+    counters: dict | None = None,
+) -> models.ConsolidationState:
+    """Create-or-update `consolidation_state` row (Sprint 12).
+
+    ``counters`` is the JSON snapshot of new-input counts since the last
+    consolidation plus dedup metadata (``critical_round``/``critical_count``).
+    """
+    state = await get_consolidation_state(db, chat_id)
+    now = datetime.utcnow()
+    if state is None:
+        state = models.ConsolidationState(
+            chat_id=chat_id,
+            last_soft_at=last_soft_at,
+            last_hard_at=last_hard_at,
+            counters=json.dumps(counters or {}, ensure_ascii=False),
+            updated_at=now,
+        )
+        db.add(state)
+    else:
+        if last_soft_at is not None:
+            state.last_soft_at = last_soft_at
+        if last_hard_at is not None:
+            state.last_hard_at = last_hard_at
+        if counters is not None:
+            state.counters = json.dumps(counters, ensure_ascii=False)
+        state.updated_at = now
+    await db.commit()
+    await db.refresh(state)
+    return state
+
+
+async def reset_consolidation_state(db: AsyncSession, chat_id: int) -> None:
+    """Delete the `consolidation_state` row for a chat (Sprint 12)."""
+    state = await get_consolidation_state(db, chat_id)
+    if state is not None:
+        await db.delete(state)
+        await db.commit()
+
+
+# (table, timestamp column, extra join predicate) triples for the consolidation
+# score inputs (§20). `relationship_events`/`memory_anchors` carry no chat_id —
+# they are scoped through `character_relationships`.
+_CONSOLIDATION_INPUTS: tuple[tuple[Any, str, Any], ...] = (
+    (models.Message, "timestamp", None),
+    (models.WorldEvent, "created_at", None),
+    (models.Memory, "created_at", None),
+    (models.RelationshipEvent, "timestamp", models.CharacterRelationship),
+    (models.StoryEvent, "created_at", None),
+    (models.MemoryAnchor, "timestamp", models.CharacterRelationship),
+)
+
+
+async def count_consolidation_inputs(
+    db: AsyncSession, chat_id: int, since: datetime | None
+) -> dict[str, int]:
+    """Count new rows per consolidation input since ``since`` (§20).
+
+    Returns ``{"messages", "events", "facts", "rel_events", "story_events",
+    "anchors"}`` — new rows across the six consolidation tables created after
+    ``since`` (or all rows when ``since`` is None). Cheap indexed counts.
+    """
+    if since is None:
+        since = datetime.min
+    keys = ("messages", "events", "facts", "rel_events", "story_events", "anchors")
+    counts: dict[str, int] = {}
+    for (model, ts_col, join_model), key in zip(_CONSOLIDATION_INPUTS, keys):
+        ts = getattr(model, ts_col)
+        stmt = select(func.count()).select_from(model)
+        if join_model is not None:
+            # relationship_events / memory_anchors -> join through relationships
+            stmt = stmt.join(
+                join_model,
+                join_model.id == model.relationship_id,
+            ).where(join_model.chat_id == chat_id, ts > since)
+        else:
+            stmt = stmt.where(model.chat_id == chat_id, ts > since)
+        result = await db.execute(stmt)
+        counts[key] = result.scalar() or 0
+    return counts
 
 
 # ------------------------ Character Summary ----------------------

@@ -90,6 +90,18 @@
 | `CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.65` | порог схожести |
 | `CONSOLIDATION_MAX_MEMORIES_PER_CHAR` | `200` | потолок воспоминаний |
 | `CONSOLIDATION_LLM_MODEL` | (пусто) | модель; пусто = default model |
+| `ADAPTIVE_CONSOLIDATION_ENABLED` | `false` | score-based триггер (Sprint 12, §20) вместо 24h-таймера |
+| `CONSOLIDATION_WEIGHT_MESSAGES` | `1` | вес новых сообщений в score |
+| `CONSOLIDATION_WEIGHT_EVENTS` | `2` | вес world-событий |
+| `CONSOLIDATION_WEIGHT_FACTS` | `3` | вес фактов памяти |
+| `CONSOLIDATION_WEIGHT_REL_EVENTS` | `4` | вес relationship-событий |
+| `CONSOLIDATION_WEIGHT_STORY_EVENTS` | `5` | вес story-событий |
+| `CONSOLIDATION_WEIGHT_ANCHORS` | `7` | вес эмоциональных якорей |
+| `CONSOLIDATION_SOFT_THRESHOLD` | `25` | порог soft-консолидации |
+| `CONSOLIDATION_HARD_THRESHOLD` | `50` | порог hard-консолидации |
+| `CONSOLIDATION_CRITICAL_IMPORTANCE` | `8.0` | порог критического события |
+| `CONSOLIDATION_CRITICAL_MAX_PER_ROUND` | `2` | дедуп critical N/раунд |
+| `CONSOLIDATION_POLL_SECONDS` | `600` | интервал poll score-схедьюлера |
 
 ## Детекция повторов
 

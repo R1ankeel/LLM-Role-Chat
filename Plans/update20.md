@@ -78,6 +78,18 @@
 > **1087 passed / 29 pre-existing / 0 новых** (31 новый тест). См.
 > «Sprint 11 — Статус».
 >
+> **Sprint 12 (2026-08-05)**: ✅ ВЫПОЛНЕН — Adaptive Consolidation (§20): замена
+> 24h-таймера на score-based soft/hard/critical
+> (`messages×1 + events×2 + facts×3 + rel_events×4 + story_events×5 +
+> anchors×7`); `consolidation_state` counters + `compute_consolidation_score` +
+> `is_critical_event` (детерм., importance/whitelist); idle-чат НЕ
+> консолидируется (score≈0 → skip); critical → немедленно (дедуп ≤ N/раунд);
+> `consolidate_memories_job` расширен до полного набора (memory+summary+
+> relationship+anchors+story+index); scheduler заменён на score-проход; canary
+> `ADAPTIVE_CONSOLIDATION_ENABLED` (default false). Тесты:
+> **1107 passed / 29 pre-existing / 0 новых** (20 новых тестов). См.
+> «Sprint 12 — Статус».
+>
 > Принцип: **не строить новые подсистемы поверх существующих**. Сначала найти
 > существующую реализацию, расширять её; если она мешает развитию — явно
 > вынести миграцию/рефакторинг в отдельный спринт. Дублирование запрещено.
@@ -2342,6 +2354,92 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: Scenario 5 (consolidation) проходит.
 - **НЕ делать**: не смешивать summary и consolidation.
 
+#### Sprint 12 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (всё под canary-флагом `adaptive_consolidation_enabled`; при
+  выключенном — стадия `adaptive_consolidation` в пост-раунд пайплайне — no-op,
+  scheduler возвращается к legacy 24h-интервалу):
+  1. `app/config.py` + `.env.example`: блок «Adaptive Consolidation» —
+     `ADAPTIVE_CONSOLIDATION_ENABLED=false` (canary),
+     `CONSOLIDATION_WEIGHT_MESSAGES=1`, `CONSOLIDATION_WEIGHT_EVENTS=2`,
+     `CONSOLIDATION_WEIGHT_FACTS=3`, `CONSOLIDATION_WEIGHT_REL_EVENTS=4`,
+     `CONSOLIDATION_WEIGHT_STORY_EVENTS=5`, `CONSOLIDATION_WEIGHT_ANCHORS=7`,
+     `CONSOLIDATION_SOFT_THRESHOLD=25`, `CONSOLIDATION_HARD_THRESHOLD=50`,
+     `CONSOLIDATION_CRITICAL_IMPORTANCE=8`, `CONSOLIDATION_CRITICAL_MAX_PER_ROUND=2`,
+     `CONSOLIDATION_POLL_SECONDS=600`;
+  2. `app/crud.py`: `get_consolidation_state`/`upsert_consolidation_state`/
+     `reset_consolidation_state` (upsert `consolidation_state`, JSON counters +
+     `last_soft_at`/`last_hard_at`); `count_consolidation_inputs` (новые строки
+     по 6 таблицам score-входа: messages/world_events/memories/
+     relationship_events/story_events/memory_anchors; rel-история и якоря
+     скоупятся через `character_relationships`, т.к. не имеют `chat_id`);
+     `get_messages_since_ts` (диалог с `timestamp > since`, опц. character_id);
+  3. `app/memory_service.py` (§20):
+     - `compute_consolidation_score(counts, weights)` — формула
+       `messages×1 + events×2 + facts×3 + rel_events×4 + story_events×5 +
+       anchors×7` (веса из конфига);
+     - `is_critical_event(event)` — детерминированно: `importance >=
+       CONSOLIDATION_CRITICAL_IMPORTANCE` ИЛИ whitelist-ключевые слова в
+       action/type/description (`CRITICAL_ACTION_KEYWORDS`: смерть, предательство,
+       признание, свадьба, раскрытие, milestone, завершение главной цели и т.п.);
+     - `evaluate_consolidation` — чистое решение: `level ∈ {critical, hard,
+       soft, skip}`; soft/hard считаются от своих базовых точек
+       (`last_soft_at`/`last_hard_at` или `chats.created_at`); критическое
+       событие → `critical` немедленно, независимо от score; дедупликация
+       critical не чаще `CONSOLIDATION_CRITICAL_MAX_PER_ROUND`/раунд
+       (`critical_round`/`critical_count` в counters) с деградацией на score;
+     - `schedule_adaptive_consolidation` — trigger: при уровне ≠ skip помечает
+       базовые точки (`last_soft_at`/`last_hard_at`) и enqueue-ит job
+       (`enqueue_consolidation_job(chat_id, model_name, level)`), что
+       дедуплицирует повторные poll'ы тех же событий; idle-чат (score≈0, без
+       critical) → skip без enqueue;
+     - `consolidate_chat_adaptive` — полный набор: **soft** = memory
+       (clustering+merge) + summary; **hard/critical** = + relationship evidence
+       (`prune_relationship_events` fold) + anchors (дедуп по
+       (relationship_id, event_id), держим max importance) + story
+       (`maybe_consolidate_story`, canary `story_consolidation_enabled`) +
+       embedding/index refresh (canary `embedding_enabled`); каждая компонента
+       изолирована (try/except), падение не роняет набор;
+     - `consolidate_memories_job` расширен параметром `chat_id` (0 = все чаты,
+       legacy), `_process_consolidation_job`/`enqueue_consolidation_job` —
+       параметром `level`;
+  4. `app/post_round_pipeline.py`: стадия `adaptive_consolidation` ПОСЛЕ
+     `crisis` — `_stage_adaptive_consolidation` (no-op при флаге off;
+     try/except — падение не роняет раунд); добавлена в набор стадий
+     `run_post_round_pipeline`; «критическое событие → немедленно» обеспечивает
+     пост-раундный вызов `schedule_adaptive_consolidation`;
+  5. `app/main.py`: `_consolidation_scheduler` заменён на score-based — при
+     `adaptive_consolidation_enabled` poll каждые `CONSOLIDATION_POLL_SECONDS`,
+     проход по чатам (`_adaptive_consolidation_pass`: `schedule_adaptive_
+     consolidation` + fire-and-forget `run_job`); при выключенном флаге —
+     прежний 24h-интервальный глобальный job (legacy, canary-фолбэк).
+- **Тесты**: `tests/test_adaptive_consolidation.py` (20): `compute_consolidation_
+  score` (defaults/кастомные веса), `is_critical_event` (importance/ключевые
+  слова), `evaluate_consolidation` (idle → skip score=0; soft 30 msgs → soft;
+  hard 60 msgs → hard; critical → немедленно; дедуп-кап раунда → skip;
+  другой раунд → critical), `schedule_adaptive_consolidation` (флаг off → skip
+  без enqueue; idle → skip без job; soft → enqueued, повторный вызов → skip
+  (базовая точка сдвинута); critical → enqueued c `level=critical`;
+  `critical_count` растёт в counters), `consolidate_chat_adaptive` (soft —
+  редуцированный набор без relationship/anchors/story/index; hard — полный
+  набор: summary обновлён, anchors дедуплицированы, relationship/стory/index
+  отчёты), legacy `consolidate_memories_job` с фильтром `chat_id`,
+  `_stage_adaptive_consolidation` (флаг off → skipped; idle → level=skip).
+- **Полный прогон**: **1107 passed / 29 failed** — все 29 пред-существующие
+  (context_state, embeddings, memory_perception, memory_service,
+  repetition_detector, stream_disconnect, task_queue, token_counter — те же
+  модули, что на master/Sprint 11), регрессий Sprint 12 нет (20 новых тестов
+  проходят; до спринта — 1087/29). Затронутые модули
+  (`test_consolidation`, `test_post_round_pipeline`, `test_story_consolidation`,
+  `test_chat_engine`, `test_context_builder`, `test_ollama_chat`,
+  `test_prompt_builder`, `test_sprint0/1_schema`, `test_memory_crud`,
+  `test_character_state`, `test_beliefs`, `test_sensors`, `test_story_state`,
+  `test_story_threads`, `test_crisis_engine`, `test_npc_plans`) — 289 passed.
+- **НЕ сделано** (задел §20/§27): LLM-suggestion critical (`suspicion` до
+  подтверждения), включение `ADAPTIVE_CONSOLIDATION_ENABLED` в `full_state_driven`
+  профиль (Sprint 13), eval-сценарий Scenario 5 на реальной модели (нужен
+  Ollama, `--mode real`), прогон `benchmark_structured` на consolidation.
+
 ### Sprint 13 — Context Builder Evolution (P2)
 
 - **Цель**: финальная приоритизированная сборка с новыми блоками.
@@ -2770,7 +2868,7 @@ Sprint 8  — Dynamic Story State (P0) ✅ (2026-08-05)
 Sprint 9  — Story Consolidation (P1) ✅ (2026-08-05)
 Sprint 10 — Plot Engine + NPC Intent + NPC Plans (P1) ✅ (2026-08-05)
 Sprint 11 — Crisis Engine (P2) ✅ (2026-08-05)
-Sprint 12 — Adaptive Consolidation (P1)
+Sprint 12 — Adaptive Consolidation (P1) ✅ (2026-08-05)
 Sprint 13 — Context Builder Evolution (P2)
 (опционально) — Perception 2.0 расширение PerceivedResult, WorldState-агрегатор
 ```

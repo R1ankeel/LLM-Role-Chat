@@ -473,6 +473,59 @@ async def _stage_character_state(
         return {"ok": False, "stage": "character_state", "error": str(exc)}
 
 
+async def _stage_adaptive_consolidation(
+    db,
+    *,
+    chat_id: int,
+    model_name: str,
+    round_id: str | None,
+) -> dict:
+    """Stage 11: adaptive consolidation trigger (Sprint 12, Plans/update20.md §20).
+
+    Score-based replacement of the 24h timer: evaluates soft/hard/critical for
+    the chat since the last consolidation and, when triggered, marks the
+    ``consolidation_state`` baseline and enqueues a background job. Critical
+    events trigger an immediate hard consolidation. Idle chats are skipped
+    (score≈0). No-op when ``adaptive_consolidation_enabled`` is off; the stage
+    never blocks or fails the round.
+    """
+    if not settings.adaptive_consolidation_enabled:
+        return {
+            "ok": True,
+            "stage": "adaptive_consolidation",
+            "skipped": "flag off",
+        }
+    try:
+        from . import memory_service
+        from . import task_queue
+
+        decision = await memory_service.schedule_adaptive_consolidation(
+            db,
+            chat_id=chat_id,
+            model_name=model_name,
+            round_id=round_id,
+        )
+        # Enqueued jobs are dispatched fire-and-forget so a critical event
+        # triggers an immediate hard consolidation (never blocks the round).
+        job = decision.get("job")
+        if job is not None:
+            asyncio.create_task(task_queue.memory_job_queue.run_job(job))
+        return {
+            "ok": True,
+            "stage": "adaptive_consolidation",
+            "decision": decision,
+        }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning(
+            "Post-round pipeline: adaptive_consolidation stage failed: %s", exc
+        )
+        return {
+            "ok": False,
+            "stage": "adaptive_consolidation",
+            "error": str(exc),
+        }
+
+
 async def run_post_round_pipeline(
     *,
     client: Any,
@@ -510,6 +563,7 @@ async def run_post_round_pipeline(
         "story_threads",
         "plans",
         "crisis",
+        "adaptive_consolidation",
     }
     report: dict[str, Any] = {}
 
@@ -604,6 +658,14 @@ async def run_post_round_pipeline(
             round_id=round_id,
             characters=characters,
             character_names=character_names,
+        )
+
+    if "adaptive_consolidation" in enabled:
+        report["adaptive_consolidation"] = await _stage_adaptive_consolidation(
+            db,
+            chat_id=chat_id,
+            model_name=model_name,
+            round_id=round_id,
         )
 
     failed = [k for k, v in report.items() if not v.get("ok")]
