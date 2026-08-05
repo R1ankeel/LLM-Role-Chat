@@ -381,6 +381,48 @@ async def _stage_plans(
         return {"ok": False, "stage": "plans", "error": str(exc)}
 
 
+async def _stage_crisis(
+    db,
+    *,
+    chat_id: int,
+    round_id: str | None,
+    characters: list[Any],
+    character_names: dict | None = None,
+) -> dict:
+    """Stage 10: crisis engine (Sprint 11, Plans/update20.md §19).
+
+    Мягкое обнаружение кризисов: детерминированный pressure → кандидат →
+    resolution (story_event + story_thread «Кризис» + boost). No-op при
+    выключенном ``crisis_engine_enabled``; падение стадии не роняет раунд.
+    """
+    if not settings.crisis_engine_enabled:
+        return {
+            "ok": True,
+            "stage": "crisis",
+            "skipped": "flag off",
+        }
+    if not round_id or not characters:
+        return {
+            "ok": True,
+            "stage": "crisis",
+            "skipped": "no characters/round",
+        }
+    try:
+        from .plot import crisis_engine
+
+        report = await crisis_engine.run_crisis_engine(
+            db,
+            chat_id=chat_id,
+            round_id=round_id,
+            characters=characters,
+            character_names=character_names or {},
+        )
+        return {"ok": True, "stage": "crisis", "crisis": report}
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning("Post-round pipeline: crisis stage failed: %s", exc)
+        return {"ok": False, "stage": "crisis", "error": str(exc)}
+
+
 async def _stage_character_state(
     client: Any,
     db,
@@ -450,7 +492,8 @@ async def run_post_round_pipeline(
     stages: set[str] | None = None,
 ) -> dict:
     """Оркестратор пост-раундных стадий (§15, Sprint 1, +character_state Sprint 3,
-    +beliefs Sprint 5, +story Sprint 8, +story_threads/plans Sprint 10).
+    +beliefs Sprint 5, +story Sprint 8, +story_threads/plans Sprint 10,
+    +crisis Sprint 11).
 
     Вызывается из ``chat_engine.process_user_message_streaming`` ПОСЛЕ генерации
     раунда и scene extraction. Каждая стадия изолирована: исключение одной не
@@ -466,6 +509,7 @@ async def run_post_round_pipeline(
         "story",
         "story_threads",
         "plans",
+        "crisis",
     }
     report: dict[str, Any] = {}
 
@@ -551,6 +595,15 @@ async def run_post_round_pipeline(
             chat_id=chat_id,
             round_id=round_id,
             characters=characters,
+        )
+
+    if "crisis" in enabled:
+        report["crisis"] = await _stage_crisis(
+            db,
+            chat_id=chat_id,
+            round_id=round_id,
+            characters=characters,
+            character_names=character_names,
         )
 
     failed = [k for k, v in report.items() if not v.get("ok")]

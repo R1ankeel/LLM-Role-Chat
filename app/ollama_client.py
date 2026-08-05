@@ -1020,6 +1020,7 @@ def _build_generation_messages(
     story_block: str = "",
     active_goal_block: str = "",
     active_plan_block: str = "",
+    crisis_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -1045,6 +1046,7 @@ def _build_generation_messages(
         story_block,
         active_goal_block,
         active_plan_block,
+        crisis_block,
         behavior_drivers_block,
         open_issues_block,
         epistemic_mask_block,
@@ -1124,6 +1126,7 @@ async def _generate_once(
     story_block: str = "",
     active_goal_block: str = "",
     active_plan_block: str = "",
+    crisis_block: str = "",
 ) -> tuple[str, str, bool, int, list[str], schemas.TurnOutput | None]:
     """One LLM call + isolation sanitize.
 
@@ -1230,6 +1233,12 @@ async def _generate_once(
     if not active_plan_block and built_context is not None:
         active_plan_block = built_context.active_plan_text
 
+    # CRISIS block (Sprint 11, §19) — активные кризисные линии («давление в
+    # контексте», data-only). Рендер только при crisis_engine_enabled; фолбэк
+    # на переданный параметр (non-context-путь).
+    if not crisis_block and built_context is not None:
+        crisis_block = built_context.crisis_text
+
     # Vocabulary fingerprinting block — prevents style contamination (Phase 5)
     vocabulary_block = build_vocabulary_block(character, prior_replies)
 
@@ -1286,6 +1295,7 @@ async def _generate_once(
             story_block=story_block,
             active_goal_block=active_goal_block,
             active_plan_block=active_plan_block,
+            crisis_block=crisis_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -1310,6 +1320,8 @@ async def _generate_once(
             context_parts.append(active_goal_block)
         if active_plan_block:
             context_parts.append(active_plan_block)
+        if crisis_block:
+            context_parts.append(crisis_block)
         if anti_mimicry_block:
             context_parts.append(anti_mimicry_block)
         if vocabulary_block:
@@ -1679,6 +1691,7 @@ async def generate(
     story_block: str = "",
     active_goal_block: str = "",
     active_plan_block: str = "",
+    crisis_block: str = "",
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1786,6 +1799,7 @@ async def generate(
             story_block=story_block,
             active_goal_block=active_goal_block,
             active_plan_block=active_plan_block,
+            crisis_block=crisis_block,
         )
 
         if not isolation_ok:

@@ -682,5 +682,54 @@ class Settings(BaseSettings):
         default=0.5, alias="STORY_THREAD_ARCHIVE_OVERLAP"
     )
 
+    # ----- Crisis Engine (Plans/update20.md §19, Sprint 11) -----
+    # Мягкое обнаружение кризисов: детерминированный story pressure (6
+    # компонентов §19) → кандидат (правила) → resolution (мягко: story_event +
+    # story_thread «Кризис» + boost proactive). Запрещён паттерн
+    # `if trust<30: force_argument`: кризис — вероятность, не команда (риск
+    # Sprint 11). LLM-оценка типа кризиса — ТОЛЬКО под benchmark gate §27.
+    crisis_engine_enabled: bool = Field(
+        default=False, alias="CRISIS_ENGINE_ENABLED"
+    )
+    # Benchmark gate §27: LLM-оценка кризиса (JSON-schema, мягко) включается
+    # только после прохождения `benchmark_structured` на crisis-evaluation;
+    # иначе — детерминированный pressure + type из правил, без LLM.
+    crisis_evaluation_enabled: bool = Field(
+        default=False, alias="CRISIS_EVALUATION_ENABLED"
+    )
+    # Порог совокупного crisis pressure (0..1) для формирования кандидата.
+    crisis_pressure_threshold: float = Field(
+        default=0.5, alias="CRISIS_PRESSURE_THRESHOLD"
+    )
+    # «Проблема долго не разрешена»: open issue без упоминания ≥ N раундов
+    # (rounds_since_last_mention) — сигнал неразрешённости конфликта.
+    crisis_min_issue_age_rounds: int = Field(
+        default=4, alias="CRISIS_MIN_ISSUE_AGE_ROUNDS"
+    )
+    # Веса компонентов crisis pressure (§19): базовая story pressure
+    # (issues/goals/stagnation/recent), траектория отношений, конфликт
+    # убеждений. Сумма нормируется — не обязана быть 1.
+    crisis_weight_base: float = Field(
+        default=0.5, alias="CRISIS_WEIGHT_BASE"
+    )
+    crisis_weight_trajectory: float = Field(
+        default=0.3, alias="CRISIS_WEIGHT_TRAJECTORY"
+    )
+    crisis_weight_beliefs: float = Field(
+        default=0.2, alias="CRISIS_WEIGHT_BELIEFS"
+    )
+    # Cap мягкого proactive boost, добавляемого вовлечённым в кризис персонажам.
+    crisis_boost_cap: float = Field(
+        default=0.3, alias="CRISIS_BOOST_CAP"
+    )
+    # Минимальная важность story_event/thread кризиса (importance записи).
+    crisis_event_importance: float = Field(
+        default=7.0, alias="CRISIS_EVENT_IMPORTANCE"
+    )
+    # Префикс имени сюжетной линии кризиса («Кризис: ...»).
+    crisis_thread_prefix: str = Field(
+        default="Кризис", alias="CRISIS_THREAD_PREFIX"
+    )
+
 
 settings = Settings()

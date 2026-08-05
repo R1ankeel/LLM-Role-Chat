@@ -68,6 +68,16 @@
 > **946 passed / 28 pre-existing / 0 новых** (24 новых теста). См.
 > «Sprint 6 — Статус».
 >
+> **Sprint 11 (2026-08-05)**: ✅ ВЫПОЛНЕН — Crisis Engine (§19): мягкое
+> обнаружение кризисов — детерминированный story pressure (base + trajectory +
+> beliefs), кандидат ТОЛЬКО при pressure+неразрешённый старый issue+
+> взаимодействие пары, resolution мягко (story_thread «Кризис» + story_event,
+> boost proactive вовлечённым, НЕ world_events — нет форсированных аргументов);
+> LLM-оценка типа — только под `CRISIS_EVALUATION_ENABLED` (benchmark gate §27,
+> default false); canary-флаг `CRISIS_ENGINE_ENABLED` (default false). Тесты:
+> **1087 passed / 29 pre-existing / 0 новых** (31 новый тест). См.
+> «Sprint 11 — Статус».
+>
 > Принцип: **не строить новые подсистемы поверх существующих**. Сначала найти
 > существующую реализацию, расширять её; если она мешает развитию — явно
 > вынести миграцию/рефакторинг в отдельный спринт. Дублирование запрещено.
@@ -2218,6 +2228,100 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: на scenario с затянутым конфликтом engine предложит crisis.
 - **НЕ делать**: `if trust<30: force_argument`.
 
+#### Sprint 11 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (всё под canary-флагом `crisis_engine_enabled`; при выключенном —
+  стадия `crisis` в пост-раунд пайплайне — no-op, кризис-блок не рендерится,
+  boost не считается):
+  1. Новый `app/plot/crisis_engine.py` (§19 pipeline):
+     - `CRISIS_TYPES` (9 типов) + `CRISIS_EVALUATION_SCHEMA` (JSON-schema, формат Ollama);
+     - **STORY PRESSURE**: `trajectory_score_from_events` (отрицательная
+       траектория отношений: resentment/jealousy рост, trust/affection падение,
+       усреднение по негативным событиям), `beliefs_conflict_score`
+       (suspicion/conflict с confidence, доля), `compute_crisis_pressure`
+       (6 компонентов §19: base story pressure + trajectory + beliefs; веса
+       нормируются, пустой вклад не «съедает» долю);
+     - **CRISIS CANDIDATE** (правила, детерминированные): `build_crisis_candidate`
+       — кандидат ТОЛЬКО при `pressure >= CRISIS_PRESSURE_THRESHOLD` И
+       неразрешённый старый конфликт (open issue с
+       `rounds_since_last_mention >= CRISIS_MIN_ISSUE_AGE_ROUNDS`) И пара
+       взаимодействовала ≥ 1 раунда; `type` = `direct_conflict` при
+       противоположных интентах (`opposing_intents`), иначе `discovery`;
+       «затянутый конфликт» — это кандидат, а НЕ форсированный аргумент;
+     - **CRISIS EVALUATION** (LLM, мягко, benchmark gate §27):
+       `validate_crisis_evaluation` (нормализация/валидация, невалидная верхняя
+       структура → None), `_evaluate_crisis_llm` — вызов только при
+       `crisis_evaluation_enabled` + `client` + `model_name`; невалидный/ошибка
+       LLM → детерминированный кандидат (graceful degradation), раунд не падает;
+     - **CRISIS RESOLUTION** (детерминированная, мягко): `_apply_crisis_softly` —
+       находит/создаёт `story_thread` «Кризис: <issue>» (префикс
+       `CRISIS_THREAD_PREFIX`, важность `CRISIS_EVENT_IMPORTANCE`) + пишет
+       `story_event` (идемпотентно в рамках раунда), НЕ пишет `world_events` —
+       кризис не форсирует сюжет;
+     - **Read-path**: `compute_crisis_boost` (активный кризис-поток вовлечённого
+       персонажа даёт `min(cap, ...)` к proactive-boost — вероятность, не
+       команда; 0.0 при флаге off; падение → 0.0), `build_crisis_block`
+       (data-only блок `<crisis data> ... </crisis data>`, пусто при флаге off);
+     - Оркестратор `run_crisis_engine(db, *, chat_id, round_id, characters,
+       character_names, client, model_name)` — pressure → candidate → evaluation
+       → resolution; no-op при `crisis_engine_enabled=false`/без round;
+       падение стадии не роняет раунд.
+  2. `app/config.py` + `.env.example`/`.env`: блок «Crisis Engine» —
+     `CRISIS_ENGINE_ENABLED=false` (canary), `CRISIS_EVALUATION_ENABLED=false`
+     (LLM-оценка, benchmark gate §27), `CRISIS_PRESSURE_THRESHOLD=0.5`,
+     `CRISIS_MIN_ISSUE_AGE_ROUNDS=4`, `CRISIS_WEIGHT_BASE=0.5`,
+     `CRISIS_WEIGHT_TRAJECTORY=0.3`, `CRISIS_WEIGHT_BELIEFS=0.2`,
+     `CRISIS_BOOST_CAP=0.3`, `CRISIS_EVENT_IMPORTANCE=7.0`,
+     `CRISIS_THREAD_PREFIX=Кризис`;
+  3. `app/post_round_pipeline.py`: стадия `crisis` ПОСЛЕ `plans` —
+     `_stage_crisis` (no-op при флаге off/без characters/round; try/except —
+     падение не роняет раунд); `_stage_crisis` добавлена в набор стадий
+     `run_post_round_pipeline` (подмножество `stages={"crisis"}` работает);
+  4. `app/chat_engine.py`: crisis boost добавляется к proactive-boost
+     (`proactive_boost + crisis_boosts[c.id]`), `crisis_block` собирается
+     (try/except) и пробрасывается в `context_builder.build` и
+     `ollama_client.generate`; флаг off → boost 0.0/пустой блок, генерация не
+     меняется;
+  5. `app/context_builder.py`: параметр `crisis_block` в `build()`, self-build
+     `_build_crisis_block` при `crisis_engine_enabled`, токены в
+     `component_tokens["crisis"]`, поле `BuiltContext.crisis_text`;
+  6. `app/ollama_client.py`: `crisis_block` прокинут через
+     `_build_generation_messages` → `_generate_once` → `generate` + non-chat
+     `context_parts` (фолбэк на `built_context.crisis_text`);
+  7. `app/schemas.py`: `BuiltContext.crisis_text`;
+  8. `app/crud.py`: `count_pair_interaction_rounds` (distinct round_id
+     relationship events пары — сигнал «продолжительное взаимодействие» для
+     кандидата);
+  9. БД: новых таблиц/миграций НЕ требуется — используются существующие
+     `story_events`/`story_threads` (§19).
+- **Benchmark gate (§27)**: `CRISIS_EVALUATION_ENABLED` остаётся `false`;
+  LLM-оценка кризиса включается только после прохождения
+  `benchmark_structured` на crisis-evaluation (schema-validity ≥ 90% +
+  grounding) — иначе полностью детерминированный pressure + type из правил,
+  без LLM.
+- **Тесты**: `tests/test_crisis_engine.py` (31): trajectory (негативные дельты,
+  позитивные → 0, пустые), beliefs_conflict (suspicion+confidence,
+  низкая confidence → 0, пустые), pressure (нормировка весов, trajectory-only,
+  все нули → 0), opposing_intents, кандидат (ТОЛЬКО при pressure+неразрешённый
+  старый issue+взаимодействие; низкий pressure/свежий issue/нет взаимодействия
+  → None; `direct_conflict` при противоположных интентах; characters из edges),
+  validate_crisis_evaluation (валидный, fallback типа, невалидный верхний
+  уровень → None, клампинг confidence), run_crisis_engine (flag off → skipped;
+  нет кандидата без stale issue; resolution пишет thread «Кризис» + story_event
+  и НЕ пишет world_events — «нет форсированных аргументов»), compute_crisis_boost
+  (только вовлечённые, 0.0 при флаге off), build_crisis_block (рендер активных
+  линий, пусто при флаге off), _stage_crisis (skipped при флаге off) +
+  `test_post_round_pipeline.py` (стадия crisis в наборе).
+- **Полный прогон**: **1087 passed / 29 failed** — все 29 пред-существующие
+  (context_state, embeddings, memory_perception, memory_service,
+  repetition_detector, stream_disconnect, task_queue, token_counter — те же
+  модули, что на master), регрессий Sprint 11 нет (31 новый тест проходит;
+  до спринта — 1056/29).
+- **НЕ сделано** (задел §19/§27): eval-сценарий + quality-метрика для crisis
+  (§27: каждый спринт добавляет ≥1 метрику/сценарий) — не добавлялись в этом
+  спринте; прогон `benchmark_structured` на реальной модели (нужен Ollama,
+  `--mode real`) — `CRISIS_EVALUATION_ENABLED` остаётся `false`.
+
 ### Sprint 12 — Adaptive Consolidation (P1)
 
 - **Цель**: замена 24h-таймера на score-based soft/hard/critical.
@@ -2659,13 +2763,13 @@ Sprint 1  — Structured World Events (P0) ✅ (2026-08-05)
 Sprint 2  — Memory Architecture v2: типы + якоря (P0) ✅ (2026-08-05)
 Sprint 3  — Character State (P0) ✅ (2026-08-05)
 Sprint 4  — Attention (P1) ✅ (2026-08-05)
-Sprint 5  — Belief System (P0)
+Sprint 5  — Belief System (P0) ✅ (2026-08-05)
 Sprint 6  — Hybrid Retrieval v2 (P1) ✅ (2026-08-05)
 Sprint 7  — Relationship Evolution v2 (P1) ✅ (2026-08-05)
-Sprint 8  — Dynamic Story State (P0)
-Sprint 9  — Story Consolidation (P1)
-Sprint 10 — Plot Engine + NPC Intent + NPC Plans (P1)
-Sprint 11 — Crisis Engine (P2)
+Sprint 8  — Dynamic Story State (P0) ✅ (2026-08-05)
+Sprint 9  — Story Consolidation (P1) ✅ (2026-08-05)
+Sprint 10 — Plot Engine + NPC Intent + NPC Plans (P1) ✅ (2026-08-05)
+Sprint 11 — Crisis Engine (P2) ✅ (2026-08-05)
 Sprint 12 — Adaptive Consolidation (P1)
 Sprint 13 — Context Builder Evolution (P2)
 (опционально) — Perception 2.0 расширение PerceivedResult, WorldState-агрегатор

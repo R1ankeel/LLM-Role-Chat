@@ -140,6 +140,7 @@ class ContextBuilder:
         story_block: str = "",
         active_goal_block: str = "",
         active_plan_block: str = "",
+        crisis_block: str = "",
         rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
     ) -> schemas.BuiltContext:
         counter = self._token_counter
@@ -345,6 +346,11 @@ class ContextBuilder:
         # ACTIVE GOAL (Sprint 10, §21): intent NPC формируется в chat_engine
         # (перед генерацией) и передаётся сюда; no-op без intent.
         # ACTIVE PLAN (Sprint 10, §22): план NPC передаётся из chat_engine.
+        # CRISIS (Sprint 11, §19): активные кризисные линии — «давление в
+        # контексте» (data-only, мягкий сигнал). Передаётся из chat_engine;
+        # иначе — сборка здесь при crisis_engine_enabled.
+        if not crisis_block and settings.crisis_engine_enabled:
+            crisis_block = await self._build_crisis_block(db, chat_id)
         instructions_text = self._build_instructions_text(
             character,
             scene_state,
@@ -360,6 +366,7 @@ class ContextBuilder:
         story_tokens = counter.count(story_block)
         active_goal_tokens = counter.count(active_goal_block)
         active_plan_tokens = counter.count(active_plan_block)
+        crisis_tokens = counter.count(crisis_block)
         instructions_tokens = counter.count(instructions_text)
 
         # ---- 6. summary (P2, budgeted) ---------------------------------
@@ -427,6 +434,7 @@ class ContextBuilder:
             + story_tokens
             + active_goal_tokens
             + active_plan_tokens
+            + crisis_tokens
             + instructions_tokens
         )
         content_available = max(
@@ -528,6 +536,7 @@ class ContextBuilder:
             "story": story_tokens,
             "active_goal": active_goal_tokens,
             "active_plan": active_plan_tokens,
+            "crisis": crisis_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -552,6 +561,7 @@ class ContextBuilder:
             story_text=story_block,
             active_goal_text=active_goal_block,
             active_plan_text=active_plan_block,
+            crisis_text=crisis_block,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,
@@ -865,6 +875,23 @@ class ContextBuilder:
         except Exception as exc:  # noqa: BLE001 — блок не роняет контекст
             logger.warning(
                 "Failed to build story block for chat %s: %s", chat_id, exc,
+            )
+            return ""
+
+    async def _build_crisis_block(self, db: AsyncSession, chat_id: int) -> str:
+        """CRISIS block (Sprint 11, §19): активные кризисные линии.
+
+        «Давление в контексте» — data-only мягкий сигнал, не инструкция.
+        Рендер только при ``crisis_engine_enabled`` (canary).
+        """
+        try:
+            from . import crud
+            from .plot import crisis_engine as plot_crisis
+
+            return await plot_crisis.build_crisis_block(db, chat_id)
+        except Exception as exc:  # noqa: BLE001 — блок не роняет контекст
+            logger.warning(
+                "Failed to build crisis block for chat %s: %s", chat_id, exc,
             )
             return ""
 

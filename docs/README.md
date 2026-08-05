@@ -22,6 +22,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [intervention.md](intervention.md) | Одноразовое «Вмешательство» игрока: жизнь инструкции, API, промпт |
 | [locations.md](locations.md) | «Локации 2.0»: модель Location, миграция, CRUD API, синхронизация ссылок |
 | [story.md](story.md) | Dynamic Story State (Sprint 8/9): Original Plot + Current Story State, write-path из раундных событий, блок STORY, API + Story Consolidation (LLM-обновление с валидацией) + Plot Engine (Sprint 10): NPC Intent (детерминированный, перед генерацией), долгоживущие планы NPC (не GOAP), story pressure, архивация завершённых линий |
+| [crisis.md](crisis.md) | Crisis Engine (Sprint 11): мягкое обнаружение кризисов — story pressure → кандидат (правила) → resolution (мягко: story_thread + story_event + boost), LLM-оценка под benchmark gate §27, блок CRISIS в контексте |
 
 ## Краткий обзор
 

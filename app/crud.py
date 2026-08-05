@@ -3856,3 +3856,31 @@ async def get_relationship_target_id(
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def count_pair_interaction_rounds(
+    db: AsyncSession,
+    chat_id: int,
+    source_character_id: int,
+    target_character_id: int,
+) -> int:
+    """Число раундов взаимодействия пары (relationship events, §19 Sprint 11).
+
+    Distinct ``round_id`` направленных events source→target. Детерминированный
+    сигнал «продолжительное взаимодействие пары» для crisis candidate.
+    """
+    stmt = (
+        select(func.count(func.distinct(models.RelationshipEvent.round_id)))
+        .join(
+            models.CharacterRelationship,
+            models.CharacterRelationship.id == models.RelationshipEvent.relationship_id,
+        )
+        .where(
+            models.CharacterRelationship.chat_id == chat_id,
+            models.CharacterRelationship.source_character_id == source_character_id,
+            models.CharacterRelationship.target_character_id == target_character_id,
+            models.RelationshipEvent.round_id.isnot(None),
+        )
+    )
+    result = await db.execute(stmt)
+    return int(result.scalar_one() or 0)

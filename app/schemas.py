@@ -938,6 +938,9 @@ class BuiltContext(BaseModel):
     # ACTIVE PLAN (Sprint 10, §22/§23): компактная строка плана NPC.
     # Рендер — по флагу npc_plans_enabled.
     active_plan_text: str = ""
+    # CRISIS (Sprint 11, §19): активные кризисные линии («давление в контексте»,
+    # data-only). Рендер — по флагу crisis_engine_enabled.
+    crisis_text: str = ""
     total_tokens: int = 0
     token_count_mode: str = "estimated"
     component_tokens: dict[str, int] = Field(default_factory=dict)

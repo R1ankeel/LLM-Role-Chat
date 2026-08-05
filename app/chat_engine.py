@@ -673,6 +673,23 @@ async def process_user_message_streaming(
         logger.warning("[chat_id=%d] Failed to compute proactive boost: %s", chat_id, exc)
         proactive_boosts = {c.id: 0.0 for c in characters}
 
+    # Crisis boost (Sprint 11, §19): активный кризис-поток мягко повышает шанс
+    # proactive action вовлечённых персонажей (кризис = вероятность, не команда).
+    crisis_boosts: dict[int, float] = {}
+    if settings.crisis_engine_enabled:
+        try:
+            from .plot import crisis_engine as crisis_engine_mod
+
+            for c in characters:
+                crisis_boosts[c.id] = await crisis_engine_mod.compute_crisis_boost(
+                    db, chat_id, c,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[chat_id=%d] Failed to compute crisis boost: %s", chat_id, exc
+            )
+            crisis_boosts = {c.id: 0.0 for c in characters}
+
     # Track prior replies in this round for anti-mimicry (P2).
     # We keep the underlying Message events (not just name/text) so that
     # availability of each reply can be decided per viewer via perception (§10).
@@ -763,6 +780,23 @@ async def process_user_message_streaming(
 
         # STORY block (Sprint 8, §16): сюжет чата (общий для всех персонажей).
         story_block = await _chat_story_block(db, chat)
+
+        # CRISIS block (Sprint 11, §19): активные кризисные линии — «давление
+        # в контексте» (общий для всех персонажей, data-only). Пусто при
+        # выключенном crisis_engine_enabled; падение не роняет раунд.
+        crisis_block = ""
+        if settings.crisis_engine_enabled:
+            try:
+                from .plot import crisis_engine as crisis_engine_mod
+
+                crisis_block = await crisis_engine_mod.build_crisis_block(
+                    db, chat.id
+                )
+            except Exception as exc:  # noqa: BLE001 — блок не роняет раунд
+                logger.warning(
+                    "[chat_id=%d] Failed to build crisis block: %s",
+                    chat_id, exc,
+                )
 
         # NPC Intent + Plans (Sprint 10, §21/§22): детерминированный intent
         # формируется ПЕРЕД генерацией (правила, без LLM) + долгоживущий план
@@ -880,6 +914,7 @@ async def process_user_message_streaming(
                 story_block=story_block,
                 active_goal_block=active_goal_block,
                 active_plan_block=active_plan_block,
+                crisis_block=crisis_block,
             )
 
         response_text = ""
@@ -919,13 +954,17 @@ async def process_user_message_streaming(
                 relationships_block=relationships_blocks.get(current_character.id, ""),
                 behavior_drivers_block=drivers_blocks.get(current_character.id, ""),
                 open_issues_block=open_issues_blocks.get(current_character.id, ""),
-                proactive_boost=proactive_boosts.get(current_character.id, 0.0),
+                proactive_boost=(
+                    proactive_boosts.get(current_character.id, 0.0)
+                    + crisis_boosts.get(current_character.id, 0.0)
+                ),
                 built_context=built_context,
                 epistemic_mask_block=epistemic_mask_block,
                 directive=directive,
                 story_block=story_block,
                 active_goal_block=active_goal_block,
                 active_plan_block=active_plan_block,
+                crisis_block=crisis_block,
                 recency_tail_block=(
                     built_context.recency_tail_text
                     if built_context is not None
