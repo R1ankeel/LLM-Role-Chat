@@ -637,5 +637,50 @@ class Settings(BaseSettings):
         default=30, alias="STORY_CONSOLIDATION_MAX_RECENT_EVENTS"
     )
 
+    # ----- NPC Intent + Plans (Plans/update20.md §21/§22, Sprint 10) -----
+    # Детерминированный intent перед генерацией (goal/target/approach/urgency/
+    # emotion/risk) + долгоживущие маленькие планы NPC. Оба под canary-флагами;
+    # при off — legacy-пути не тронуты. Intent — тенденция, не команда (риск
+    # Sprint 10, по образцу behavior drivers); планы — «хочу X, но мешает Y»,
+    # НЕ GOAP/planner.
+    npc_intent_enabled: bool = Field(default=False, alias="NPC_INTENT_ENABLED")
+    npc_plans_enabled: bool = Field(default=False, alias="NPC_PLANS_ENABLED")
+    # Число последних intent-строк персонажа, читаемых для контекста (топ-N).
+    intent_history_max: int = Field(default=3, alias="INTENT_HISTORY_MAX")
+    # Пороги approach (§21): risk >= avoid → избегать; risk >= delay и
+    # urgency < 0.5 → отложить. Ниже min_urgency цель-кандидат (issue/thread)
+    # intent не формирует (не каждый ход имеет intent — §21).
+    intent_risk_avoid: float = Field(default=0.8, alias="INTENT_RISK_AVOID")
+    intent_risk_delay: float = Field(default=0.6, alias="INTENT_RISK_DELAY")
+    intent_min_urgency: float = Field(default=0.15, alias="INTENT_MIN_URGENCY")
+    # Веса детерминированного story pressure (§19, Sprint 10 plot_pressure).
+    # Сумма нормируется — не обязательно равна 1.
+    plot_pressure_weight_issues: float = Field(
+        default=0.25, alias="PLOT_PRESSURE_WEIGHT_ISSUES"
+    )
+    plot_pressure_weight_goals: float = Field(
+        default=0.25, alias="PLOT_PRESSURE_WEIGHT_GOALS"
+    )
+    plot_pressure_weight_stagnation: float = Field(
+        default=0.25, alias="PLOT_PRESSURE_WEIGHT_STAGNATION"
+    )
+    plot_pressure_weight_recent: float = Field(
+        default=0.25, alias="PLOT_PRESSURE_WEIGHT_RECENT"
+    )
+    # Число раундов блокировки, после которых goals_blocked_score ≈ 1 (0..1).
+    plot_pressure_goal_blocked_rounds: int = Field(
+        default=8, alias="PLOT_PRESSURE_GOAL_BLOCKED_ROUNDS"
+    )
+    # Порог важности сюжетного события, при котором цель плана считается
+    # достигнутой пост-раунд (mark done) — и порог снятия блокировки.
+    npc_plan_resolve_importance: float = Field(
+        default=7.0, alias="NPC_PLAN_RESOLVE_IMPORTANCE"
+    )
+    # Порог overlap (доля значимых токенов) для сопоставления имени
+    # story_thread с completed_goal при архивации завершённых линий.
+    story_thread_archive_overlap: float = Field(
+        default=0.5, alias="STORY_THREAD_ARCHIVE_OVERLAP"
+    )
+
 
 settings = Settings()

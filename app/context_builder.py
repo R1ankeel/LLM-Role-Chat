@@ -138,6 +138,8 @@ class ContextBuilder:
         character_state: Any = None,
         what_you_know_block: str = "",
         story_block: str = "",
+        active_goal_block: str = "",
+        active_plan_block: str = "",
         rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
     ) -> schemas.BuiltContext:
         counter = self._token_counter
@@ -340,6 +342,9 @@ class ContextBuilder:
         # для всех персонажей чата); иначе — сборка здесь при story_enabled.
         if not story_block and settings.story_enabled:
             story_block = await self._build_story_block(db, chat_id)
+        # ACTIVE GOAL (Sprint 10, §21): intent NPC формируется в chat_engine
+        # (перед генерацией) и передаётся сюда; no-op без intent.
+        # ACTIVE PLAN (Sprint 10, §22): план NPC передаётся из chat_engine.
         instructions_text = self._build_instructions_text(
             character,
             scene_state,
@@ -353,6 +358,8 @@ class ContextBuilder:
         state_tokens = counter.count(state_block)
         what_you_know_tokens = counter.count(what_you_know_block)
         story_tokens = counter.count(story_block)
+        active_goal_tokens = counter.count(active_goal_block)
+        active_plan_tokens = counter.count(active_plan_block)
         instructions_tokens = counter.count(instructions_text)
 
         # ---- 6. summary (P2, budgeted) ---------------------------------
@@ -418,6 +425,8 @@ class ContextBuilder:
             + state_tokens
             + what_you_know_tokens
             + story_tokens
+            + active_goal_tokens
+            + active_plan_tokens
             + instructions_tokens
         )
         content_available = max(
@@ -478,6 +487,8 @@ class ContextBuilder:
             + state_tokens
             + what_you_know_tokens
             + story_tokens
+            + active_goal_tokens
+            + active_plan_tokens
             + summary_tokens
             + mem_tokens
             + retrieved_tokens
@@ -515,6 +526,8 @@ class ContextBuilder:
             "character_state": state_tokens,
             "what_you_know": what_you_know_tokens,
             "story": story_tokens,
+            "active_goal": active_goal_tokens,
+            "active_plan": active_plan_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -537,6 +550,8 @@ class ContextBuilder:
             state_text=state_block,
             what_you_know_text=what_you_know_block,
             story_text=story_block,
+            active_goal_text=active_goal_block,
+            active_plan_text=active_plan_block,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,

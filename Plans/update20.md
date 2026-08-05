@@ -2120,6 +2120,84 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: intent формируется без LLM-фантазий о мире; планы живут.
 - **НЕ делать**: не строить GOAP.
 
+#### Sprint 10 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (всё под canary-флагами `npc_intent_enabled`/`npc_plans_enabled`;
+  при выключенных — генерация/пост-раундный пайплайн не меняются):
+  1. `app/config.py`: блок «NPC Intent + Plans» —
+     `NPC_INTENT_ENABLED=false`, `NPC_PLANS_ENABLED=false`,
+     `INTENT_HISTORY_MAX=3`, `INTENT_RISK_AVOID=0.8`, `INTENT_RISK_DELAY=0.6`,
+     `INTENT_MIN_URGENCY=0.15`, `PLOT_PRESSURE_WEIGHT_{ISSUES,GOALS,STAGNATION,RECENT}=0.25`,
+     `PLOT_PRESSURE_GOAL_BLOCKED_ROUNDS=8`, `NPC_PLAN_RESOLVE_IMPORTANCE=7.0`,
+     `STORY_THREAD_ARCHIVE_OVERLAP=0.5`;
+  2. Новый `app/plot/plot_pressure.py` (§19): `compute_story_pressure`
+     (взвешенная сумма, веса нормируются, пустой вклад не съедает долю),
+     `issues_score_from_issues` (importance × salience, затухание по
+     `issue_salience_decay_rounds`, /3), `goals_blocked_score` (без цели — 0;
+     план-блокировка + долгое неразрешение → к 1), `recent_intensity_score`;
+  3. Новый `app/plot/intent.py` (§21): `compute_intent` — источник цели по
+     приоритету (активный план > `active_goal` > топ-open-issue > story_thread
+     с участием персонажа), urgency = priority + pressure, risk = stress/
+     blocked/pressure, approach (direct/indirect/delay/avoid по suspicion и
+     рискам), `min_urgency` отсекает слабые issue/thread-цели (не каждый ход
+     имеет intent); `compute_intent_for_character` — write-path в `intents`
+     под флагом (canary); `intent_to_dict`; target резолвится по направленному
+     отношению (`get_relationship_target_id`), SQLAlchemy-модель issue не
+     мутируется (отдельная карта `issue_targets`);
+  4. Новый `app/npc_plans.py` (§22): `get_or_create_active_plan` (один активный
+     план на персонажа — второй не создаётся; canary), `update_plan_from_round`
+     (детерминированное продвижение по событиям раунда: overlap значимых
+     токенов ≥ 0.4 → важность ≥ `npc_plan_resolve_importance` → `done`, иначе
+     `next_step`=текст события + снятие блокировки; событие, пересекающееся с
+     `blocked_by` → unblock), `build_active_plan_block` (data-only блок,
+     не приказ), `plan_to_dict`; НЕ GOAP;
+  5. Новый `app/plot/story_threads.py`: `significant_tokens`/`token_overlap`
+     (общие детерминированные helpers для intent/plans, стоп-слова),
+     `archive_completed_threads` — активные линии, чьё имя пересекается с
+     `completed_goals` из `story_state.current_story` (overlap ≥ порога),
+     переводятся в `status=archived`;
+  6. `app/crud.py`: `save_intent`, `get_intents_for_character`,
+     `get_active_npc_plan`, `get_npc_plans_for_character`, `create_npc_plan`,
+     `update_npc_plan`, `get_relationship_target_id`;
+  7. `app/prompt_builder.py`: `build_active_goal_block` (A>B-формат, подходы
+     по-русски, «данные, а не приказ»), `build_active_plan_block` (делегирует
+     npc_plans);
+  8. `app/schemas.py`: `BuiltContext` + `active_goal_text`/`active_plan_text`;
+  9. `app/context_builder.py`: `build()` принимает `active_goal_block`/
+     `active_plan_block` (фиксированные блоки, не усекаются), токены в
+     `component_tokens`, поля в `BuiltContext`;
+  10. `app/ollama_client.py`: `generate`/`_generate_once`/`_build_generation_messages`
+      + `active_goal_block`/`active_plan_block` (после `story_block`; фолбэк на
+      `built_context.active_goal_text`/`active_plan_text`); non-chat путь тоже;
+  11. `app/chat_engine.py`: `_round_step` — intent формируется ДО генерации
+      (детерминированные правила, без LLM), блок `ACTIVE GOAL` рендерится из
+      intent; план создаётся/читается из active_goal; блоки пробрасываются в
+      context_builder + ollama_client; падение intent/plans не роняет раунд;
+  12. `app/post_round_pipeline.py`: стадии `story_threads` (архивация
+      завершённых линий) и `plans` (продвижение планов по событиям раунда) —
+      обе no-op при выключенных флагах, падение не роняет раунд.
+- **Benchmark gate (§27)**: `NPC_INTENT_ENABLED`/`NPC_PLANS_ENABLED` остаются
+  `false` (canary); перед включением обязателен прогон `benchmark_structured`
+  на intent-блоке (intent не выглядит «режиссёром»: тенденция, не команда) и
+  plans (нет GOAP-инструкций) — иначе флаги остаются off.
+- **Тесты**: `test_intent.py` (14) — приоритет источника цели, target из issue,
+  approach (direct/delay/avoid/indirect), min_urgency отсекает слабую цель,
+  блок ACTIVE GOAL (данные, не приказ), write-path под флагом, canary no-op;
+  `test_npc_plans.py` (9) — один активный план, canary, next_step/done/unblock
+  по событиям раунда, блок ACTIVE PLAN; `test_story_threads.py` (11) — token
+  overlap, архивация завершённых линий, no-op без целей/флага; plot_pressure
+  компоненты. Итого 34 новых теста.
+- **Полный прогон**: **1056 passed / 29 failed** — все 29 пред-существующие
+  (task_queue, memory_service/perception, embeddings, context_state,
+  token_counter, stream_disconnect, repetition_detector), регрессий Sprint 10
+  нет. Затронутые модули (story/consolidation/context/character_state/
+  relationships/pipeline/intent/plans/story_threads) — без регрессий.
+- **НЕ сделано** (задел §19/§21/§22/§27): crisis engine — Sprint 11
+  (использует `compute_story_pressure`); intent-история в read-path (сейчас
+  блок рендерится из текущего intent, топ-N история — потенциальный апгрейд
+  контекста); прогон `benchmark_structured` на реальной модели (нужен Ollama,
+  `--mode real`).
+
 ### Sprint 11 — Crisis Engine (P2)
 
 - **Цель**: мягкое обнаружение кризисов.

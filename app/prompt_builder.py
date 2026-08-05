@@ -407,6 +407,63 @@ def build_story_consolidation_system() -> str:
     return str(_TEMPLATES.get("story_consolidation", {}).get("system", ""))
 
 
+def build_active_goal_block(intent: dict | None) -> str:
+    """Build the ``<active_goal data>`` block (Plans/update20.md §21/§23, Sprint 10).
+
+    Детерминированный intent NPC (goal/target/approach/urgency/emotion/risk) —
+    ДАННЫЕ, а не приказ (риск Sprint 10, по образцу behavior drivers: intent —
+    тенденция, LLM решает, как её реализовать). Пустой intent → пустой блок.
+    """
+    if not intent:
+        return ""
+    goal = (intent.get("goal") or "").strip()
+    if not goal:
+        return ""
+    parts = [f"Ты нацелен: {goal}"]
+
+    approach = intent.get("approach") or "direct"
+    approach_ru = {
+        "direct": "действовать прямо",
+        "indirect": "действовать осторожно, не раскрываясь",
+        "avoid": "избегать",
+        "delay": "отложить до лучшего момента",
+    }.get(approach, approach)
+    parts.append(f"Склонность: {approach_ru}")
+
+    target_name = intent.get("target_name")
+    if target_name:
+        parts.append(f"Относится к: {target_name}")
+
+    urgency = intent.get("urgency")
+    if urgency is not None:
+        try:
+            u = float(urgency)
+            label = "слабо" if u < 0.33 else ("умеренно" if u < 0.66 else "сильно")
+            parts.append(f"Настойчивость: {label}")
+        except (TypeError, ValueError):
+            pass
+
+    body = "\n".join(f"- {part}" for part in parts)
+    return (
+        "<active_goal data>\n"
+        f"{body}\n"
+        "(это твоя текущая цель и склонность, а не приказ — ты сам решаешь, как её достичь)\n"
+        "</active_goal data>"
+    )
+
+
+def build_active_plan_block(plan: Any) -> str:
+    """Build the ``<active_plan data>`` block (Plans/update20.md §22/§23, Sprint 10).
+
+    Компактная строка долгоживущего плана NPC (goal / next_step / blocked_by).
+    Данные, не инструкция. Пустой/None план → пустой блок.
+    """
+    from .npc_plans import build_active_plan_block as _render
+
+    return _render(plan)
+
+
+
 def build_story_consolidation_user(
     original_plot: str,
     current_story: str,

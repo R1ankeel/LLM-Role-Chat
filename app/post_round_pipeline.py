@@ -296,6 +296,91 @@ async def _stage_story(
         return {"ok": False, "stage": "story", "error": str(exc)}
 
 
+async def _stage_story_threads(
+    db,
+    *,
+    chat_id: int,
+) -> dict:
+    """Stage 8: story thread archiving (Sprint 10, Plans/update20.md §19/§21).
+
+    Детерминированно архивирует завершённые активные story_threads: линия
+    считается завершённой, если её имя пересекается с ``completed_goals`` из
+    ``story_state.current_story`` (token overlap ≥ ``story_thread_archive_overlap``).
+    No-op при выключенном ``story_enabled``; падение стадии не роняет раунд.
+    """
+    if not settings.story_enabled:
+        return {
+            "ok": True,
+            "stage": "story_threads",
+            "skipped": "flag off",
+        }
+    try:
+        from .plot import story_threads
+
+        archived = await story_threads.archive_completed_threads(db, chat_id)
+        return {
+            "ok": True,
+            "stage": "story_threads",
+            "archived": archived,
+        }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning(
+            "Post-round pipeline: story_threads stage failed: %s", exc
+        )
+        return {"ok": False, "stage": "story_threads", "error": str(exc)}
+
+
+async def _stage_plans(
+    db,
+    *,
+    chat_id: int,
+    round_id: str | None,
+    characters: list[Any],
+) -> dict:
+    """Stage 9: NPC plans update (Sprint 10, Plans/update20.md §22).
+
+    Детерминированный пост-раунд: для каждого персонажа с активным планом
+    сопоставить события раунда с целью/блокировкой и продвинуть план
+    (next_step / done / снятие блокировки). Только при ``npc_plans_enabled``.
+    """
+    if not settings.npc_plans_enabled:
+        return {
+            "ok": True,
+            "stage": "plans",
+            "skipped": "flag off",
+        }
+    if not round_id or not characters:
+        return {
+            "ok": True,
+            "stage": "plans",
+            "skipped": "no characters/round",
+        }
+    try:
+        from . import npc_plans
+
+        round_events = await crud.get_story_round_world_events(
+            db, chat_id, round_id
+        )
+        updated = 0
+        for character in characters:
+            plan = await crud.get_active_npc_plan(db, chat_id, character.id)
+            if plan is None:
+                continue
+            report = await npc_plans.update_plan_from_round(
+                db, plan, round_events, round_id=round_id
+            )
+            if report.get("status") or report.get("next_step_changed") or report.get("unblocked"):
+                updated += 1
+        return {
+            "ok": True,
+            "stage": "plans",
+            "updated": updated,
+        }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning("Post-round pipeline: plans stage failed: %s", exc)
+        return {"ok": False, "stage": "plans", "error": str(exc)}
+
+
 async def _stage_character_state(
     client: Any,
     db,
@@ -365,7 +450,7 @@ async def run_post_round_pipeline(
     stages: set[str] | None = None,
 ) -> dict:
     """Оркестратор пост-раундных стадий (§15, Sprint 1, +character_state Sprint 3,
-    +beliefs Sprint 5).
+    +beliefs Sprint 5, +story Sprint 8, +story_threads/plans Sprint 10).
 
     Вызывается из ``chat_engine.process_user_message_streaming`` ПОСЛЕ генерации
     раунда и scene extraction. Каждая стадия изолирована: исключение одной не
@@ -379,6 +464,8 @@ async def run_post_round_pipeline(
         "character_state",
         "beliefs",
         "story",
+        "story_threads",
+        "plans",
     }
     report: dict[str, Any] = {}
 
@@ -450,6 +537,20 @@ async def run_post_round_pipeline(
             chat_id=chat_id,
             round_id=round_id,
             character_names=character_names,
+        )
+
+    if "story_threads" in enabled:
+        report["story_threads"] = await _stage_story_threads(
+            db,
+            chat_id=chat_id,
+        )
+
+    if "plans" in enabled:
+        report["plans"] = await _stage_plans(
+            db,
+            chat_id=chat_id,
+            round_id=round_id,
+            characters=characters,
         )
 
     failed = [k for k, v in report.items() if not v.get("ok")]

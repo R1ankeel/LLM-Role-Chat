@@ -120,7 +120,7 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
 
     assert set(report.keys()) == {
         "presence", "event_extraction", "memory", "relationships",
-        "character_state", "beliefs", "story",
+        "character_state", "beliefs", "story", "story_threads", "plans",
     }
     assert report["presence"]["ok"] is True
     # флаг off по умолчанию → стадия извлечения событий — no-op
@@ -137,6 +137,11 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
     assert report["beliefs"]["ok"] is True
     assert report["beliefs"].get("skipped") == "flag off"
     assert report["story"]["ok"] is True
+    # Sprint 10: story_threads/plans — флаг off по умолчанию → no-op
+    assert report["story_threads"]["ok"] is True
+    assert report["story_threads"].get("skipped") == "flag off"
+    assert report["plans"]["ok"] is True
+    assert report["plans"].get("skipped") == "flag off"
 
 
 @pytest.mark.asyncio

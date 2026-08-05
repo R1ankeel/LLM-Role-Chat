@@ -764,6 +764,72 @@ async def process_user_message_streaming(
         # STORY block (Sprint 8, §16): сюжет чата (общий для всех персонажей).
         story_block = await _chat_story_block(db, chat)
 
+        # NPC Intent + Plans (Sprint 10, §21/§22): детерминированный intent
+        # формируется ПЕРЕД генерацией (правила, без LLM) + долгоживущий план
+        # NPC. Intent — тенденция, не команда (риск Sprint 10). Падение любой
+        # части не роняет раунд (блоки остаются пустыми).
+        character_state = None
+        if settings.character_state_enabled:
+            try:
+                character_state = await crud.get_character_state(
+                    db, current_character.id
+                )
+            except Exception as exc:  # noqa: BLE001 — state не роняет раунд
+                logger.warning(
+                    "[chat_id=%d] Failed to load character state for %s: %s",
+                    chat_id, current_character.name, exc,
+                )
+        active_goal_block = ""
+        active_plan_block = ""
+        intent_data = None
+        if settings.npc_intent_enabled:
+            try:
+                from .plot import intent as plot_intent
+                from .prompt_builder import (
+                    build_active_goal_block,
+                )
+
+                intent_data = await plot_intent.compute_intent_for_character(
+                    db,
+                    chat_id,
+                    current_character,
+                    round_id=round_id,
+                    character_state=character_state,
+                    character_names=character_names,
+                )
+                if intent_data:
+                    active_goal_block = build_active_goal_block(intent_data)
+            except Exception as exc:  # noqa: BLE001 — intent не роняет раунд
+                logger.warning(
+                    "[chat_id=%d] Failed to compute intent for %s: %s",
+                    chat_id, current_character.name, exc,
+                )
+        if settings.npc_plans_enabled:
+            try:
+                from . import npc_plans as npc_plans_mod
+
+                goal_for_plan = (intent_data or {}).get("goal") or (
+                    (character_state.active_goal if character_state is not None else "")
+                    or ""
+                )
+                if goal_for_plan:
+                    plan = await npc_plans_mod.get_or_create_active_plan(
+                        db,
+                        chat_id,
+                        current_character.id,
+                        goal_for_plan,
+                        next_step="",
+                        priority=5,
+                        round_id=round_id,
+                    )
+                    if plan is not None:
+                        active_plan_block = npc_plans_mod.build_active_plan_block(plan)
+            except Exception as exc:  # noqa: BLE001 — план не роняет раунд
+                logger.warning(
+                    "[chat_id=%d] Failed to build active plan for %s: %s",
+                    chat_id, current_character.name, exc,
+                )
+
         # Assemble token-aware context within the budget (TZ §11–§21)
         built_context = None
         if context_enabled:
@@ -771,17 +837,6 @@ async def process_user_message_streaming(
                 getattr(chat, "max_context_tokens", None)
                 or settings.max_context_tokens
             )
-            character_state = None
-            if settings.character_state_enabled:
-                try:
-                    character_state = await crud.get_character_state(
-                        db, current_character.id
-                    )
-                except Exception as exc:  # noqa: BLE001 — state не роняет раунд
-                    logger.warning(
-                        "[chat_id=%d] Failed to load character state for %s: %s",
-                        chat_id, current_character.name, exc,
-                    )
             built_context = await context_builder.build(
                 db=db,
                 chat_id=chat_id,
@@ -823,6 +878,8 @@ async def process_user_message_streaming(
                 max_tokens=max_tokens,
                 character_state=character_state,
                 story_block=story_block,
+                active_goal_block=active_goal_block,
+                active_plan_block=active_plan_block,
             )
 
         response_text = ""
@@ -867,6 +924,8 @@ async def process_user_message_streaming(
                 epistemic_mask_block=epistemic_mask_block,
                 directive=directive,
                 story_block=story_block,
+                active_goal_block=active_goal_block,
+                active_plan_block=active_plan_block,
                 recency_tail_block=(
                     built_context.recency_tail_text
                     if built_context is not None

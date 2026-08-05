@@ -1018,6 +1018,8 @@ def _build_generation_messages(
     your_state_block: str = "",
     what_you_know_block: str = "",
     story_block: str = "",
+    active_goal_block: str = "",
+    active_plan_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -1041,6 +1043,8 @@ def _build_generation_messages(
         your_state_block,
         what_you_know_block,
         story_block,
+        active_goal_block,
+        active_plan_block,
         behavior_drivers_block,
         open_issues_block,
         epistemic_mask_block,
@@ -1118,6 +1122,8 @@ async def _generate_once(
     consistency_feedback: str = "",
     what_you_know_block: str = "",
     story_block: str = "",
+    active_goal_block: str = "",
+    active_plan_block: str = "",
 ) -> tuple[str, str, bool, int, list[str], schemas.TurnOutput | None]:
     """One LLM call + isolation sanitize.
 
@@ -1216,6 +1222,14 @@ async def _generate_once(
     if not story_block and built_context is not None:
         story_block = built_context.story_text
 
+    # ACTIVE GOAL / ACTIVE PLAN (Sprint 10, §21/§22) — intent и план NPC.
+    # Рендер только при включённых флагах (решает chat_engine); фолбэк на
+    # переданные параметры (non-context-путь).
+    if not active_goal_block and built_context is not None:
+        active_goal_block = built_context.active_goal_text
+    if not active_plan_block and built_context is not None:
+        active_plan_block = built_context.active_plan_text
+
     # Vocabulary fingerprinting block — prevents style contamination (Phase 5)
     vocabulary_block = build_vocabulary_block(character, prior_replies)
 
@@ -1270,6 +1284,8 @@ async def _generate_once(
             your_state_block=your_state_block,
             what_you_know_block=what_you_know_block,
             story_block=story_block,
+            active_goal_block=active_goal_block,
+            active_plan_block=active_plan_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -1290,6 +1306,10 @@ async def _generate_once(
             context_parts.append(what_you_know_block)
         if story_block:
             context_parts.append(story_block)
+        if active_goal_block:
+            context_parts.append(active_goal_block)
+        if active_plan_block:
+            context_parts.append(active_plan_block)
         if anti_mimicry_block:
             context_parts.append(anti_mimicry_block)
         if vocabulary_block:
@@ -1657,6 +1677,8 @@ async def generate(
     recency_tail_block: str = "",
     what_you_know_block: str = "",
     story_block: str = "",
+    active_goal_block: str = "",
+    active_plan_block: str = "",
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1762,6 +1784,8 @@ async def generate(
             consistency_feedback=consistency_feedback,
             what_you_know_block=what_you_know_block,
             story_block=story_block,
+            active_goal_block=active_goal_block,
+            active_plan_block=active_plan_block,
         )
 
         if not isolation_ok:

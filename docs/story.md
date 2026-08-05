@@ -162,3 +162,93 @@ canary (флаг и перчатовый тумблер), completed_goals ухо
 new_threads только grounded, progress сохраняется и клампится, фаза только из
 original_plot, original_plot не искажается, low confidence не применяется,
 rollback (невалидный JSON / ошибка LLM / без изменений), version bump.
+
+---
+
+# Plot Engine: Intent, Plans, Pressure (Sprint 10)
+
+Plot-слой поверх story (Plans/update20.md §19, §21, §22): у NPC появляется
+**цель** (intent) и **мешающие обстоятельства** (план). Всё детерминированное
+(без LLM-фантазий о мире); intent — **тенденция, а не команда** (LLM решает,
+как её реализовать, по образцу behavior drivers). Не каждый ход имеет intent.
+
+## NPC Intent (§21) — `app/plot/intent.py`
+
+Формируется **перед генерацией** в `chat_engine._round_step` правилами из
+`character_states.active_goal` + активного плана + топ-open-issues + beliefs +
+story threads + story pressure.
+
+Источник цели по приоритету: активный план > `active_goal` > топ-open-issue >
+активный story_thread (с участием персонажа). У каждого intent:
+`goal`, `target`/`target_name`, `approach` (direct/indirect/avoid/delay),
+`urgency`, `emotion`, `risk`.
+
+- **approach**: blocked план → `delay`; suspicion (belief про цель) → `indirect`;
+  риск ≥ `INTENT_RISK_AVOID` → `avoid`; риск ≥ `INTENT_RISK_DELAY` при
+  слабой настойчивости → `delay`.
+- **min_urgency**: слабая issue/thread-цель ниже `INTENT_MIN_URGENCY` intent
+  не формирует (не каждый ход).
+- Write-path: `intents` (только при `NPC_INTENT_ENABLED`, canary); read-path —
+  блок `ACTIVE GOAL` рендерится из текущего intent.
+
+## NPC Plans (§22) — `app/npc_plans.py`
+
+«Я хочу сделать X, но сейчас мне мешает Y». **НЕ GOAP/planner** — один активный
+план на персонажа; второй не создаётся, пока предыдущий жив. status:
+`active | blocked | done | abandoned`.
+
+- Создание детерминированное (из intent/active_goal) при `NPC_PLANS_ENABLED`;
+- **Пост-раунд продвижение** (стадия `plans`): события раунда сопоставляются с
+  целью/блокировкой по token overlap (≥ 0.4). Событие, пересекающееся с целью:
+  важность ≥ `NPC_PLAN_RESOLVE_IMPORTANCE` → план `done`; иначе → `next_step` =
+  текст события + снятие блокировки. Событие, пересекающееся с `blocked_by` →
+  unblock.
+
+## Story pressure (§19) — `app/plot/plot_pressure.py`
+
+`pressure = Σ w_i × component_i` (веса нормируются), компоненты:
+нерешённость issues (importance × salience с затуханием), блокировка личных
+целей, застой (rounds без событий), интенсивность недавних событий. Сигнал
+для urgency/risk intent; не форсирует сюжет (нет `if trust<30: force_argument`).
+
+## Story threads archiving — `app/plot/story_threads.py`
+
+Активные линии, чьё имя пересекается с `completed_goals` из
+`story_state.current_story` (token overlap ≥ `STORY_THREAD_ARCHIVE_OVERLAP`),
+переводятся в `status=archived` (стадия `story_threads`). Общие helpers
+`significant_tokens`/`token_overlap` используются intent и планами.
+
+## Блоки ACTIVE GOAL / ACTIVE PLAN (context)
+
+`context_builder.build()` принимает `active_goal_block`/`active_plan_block`
+(фиксированные блоки, не усекаются); `BuiltContext.active_goal_text`/
+`active_plan_text` → `ollama_client` (оба пути). Блоки рендерятся только при
+включённых флагах.
+
+## Флаги
+
+| переменная | default | смысл |
+|---|---|---|
+| `NPC_INTENT_ENABLED` | `false` | формировать intent + писать в `intents` (canary) |
+| `NPC_PLANS_ENABLED` | `false` | создавать/продвигать планы NPC (canary) |
+| `INTENT_RISK_AVOID` | `0.8` | порог риска для approach=avoid |
+| `INTENT_RISK_DELAY` | `0.6` | порог риска для approach=delay |
+| `INTENT_MIN_URGENCY` | `0.15` | ниже — слабая цель не даёт intent |
+| `PLOT_PRESSURE_WEIGHT_*` | `0.25` | веса компонентов pressure |
+| `PLOT_PRESSURE_GOAL_BLOCKED_ROUNDS` | `8` | нормировка застоя/блокировки |
+| `NPC_PLAN_RESOLVE_IMPORTANCE` | `7.0` | порог важности события → план done |
+| `STORY_THREAD_ARCHIVE_OVERLAP` | `0.5` | overlap имени линии с completed_goal |
+
+## Benchmark gate (§27)
+
+`NPC_INTENT_ENABLED`/`NPC_PLANS_ENABLED` по умолчанию выключены. Перед
+включением обязателен прогон `benchmark_structured` на intent-блоке
+(intent — тенденция, не «режиссёр») и plans (нет GOAP-инструкций).
+
+## Тесты
+
+`tests/test_intent.py` (14), `tests/test_npc_plans.py` (9),
+`tests/test_story_threads.py` (11): приоритет источника цели, approach,
+min_urgency, write-path + canary, один активный план, продвижение/разрешение/
+unblock по событиям, token overlap, архивация завершённых линий, plot pressure.
+

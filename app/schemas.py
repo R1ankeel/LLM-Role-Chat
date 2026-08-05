@@ -932,6 +932,12 @@ class BuiltContext(BaseModel):
     # STORY (Sprint 8, §16): сюжетный блок (фаза + активные потоки top-K +
     # прогресс). Заполняется context_builder, рендер — по флагу story_enabled.
     story_text: str = ""
+    # ACTIVE GOAL (Sprint 10, §21/§23): детерминированный intent NPC.
+    # Заполняется context_builder/chat_engine, рендер — по флагу npc_intent_enabled.
+    active_goal_text: str = ""
+    # ACTIVE PLAN (Sprint 10, §22/§23): компактная строка плана NPC.
+    # Рендер — по флагу npc_plans_enabled.
+    active_plan_text: str = ""
     total_tokens: int = 0
     token_count_mode: str = "estimated"
     component_tokens: dict[str, int] = Field(default_factory=dict)

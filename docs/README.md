@@ -21,7 +21,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [retrieval.md](retrieval.md) | Hybrid Retrieval v2 (Sprint 6): детерминированный rerank memories после RRF — оси (lexical/semantic/emotional/story/relationship/recency/salience) + сигналы контекста |
 | [intervention.md](intervention.md) | Одноразовое «Вмешательство» игрока: жизнь инструкции, API, промпт |
 | [locations.md](locations.md) | «Локации 2.0»: модель Location, миграция, CRUD API, синхронизация ссылок |
-| [story.md](story.md) | Dynamic Story State (Sprint 8/9): Original Plot + Current Story State, write-path из раундных событий, блок STORY, API + Story Consolidation (LLM-обновление с валидацией) |
+| [story.md](story.md) | Dynamic Story State (Sprint 8/9): Original Plot + Current Story State, write-path из раундных событий, блок STORY, API + Story Consolidation (LLM-обновление с валидацией) + Plot Engine (Sprint 10): NPC Intent (детерминированный, перед генерацией), долгоживущие планы NPC (не GOAP), story pressure, архивация завершённых линий |
 
 ## Краткий обзор
 
