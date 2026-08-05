@@ -1427,6 +1427,12 @@ async def process_user_message_streaming(
             memory_processor=memory_service.process_post_round,
             relationship_analyzer=_analyze_and_update_relationships,
         )
+        try:
+            from .routers.debug import remember_pipeline_report
+
+            remember_pipeline_report(chat_id, _pipeline_report)
+        except Exception:
+            pass
     except Exception as exc:
         logger.warning(
             "[chat_id=%d] Post-round pipeline failed: %s", chat_id, exc

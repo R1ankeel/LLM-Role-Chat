@@ -19,7 +19,15 @@ from . import task_queue
 from . import avatar_service
 from .config import settings
 from .database import async_engine, Base, ensure_schema, init_db
-from .routers import characters, chat_engine, chats, jobs, locations, relationships
+from .routers import (
+    characters,
+    chat_engine,
+    chats,
+    debug,
+    jobs,
+    locations,
+    relationships,
+)
 
 
 class JSONFormatter(logging.Formatter):
@@ -296,6 +304,7 @@ api_router.include_router(locations.router)
 api_router.include_router(chat_engine.router)
 api_router.include_router(jobs.router)
 api_router.include_router(relationships.router)
+api_router.include_router(debug.router)
 
 app.include_router(api_router)
 

@@ -188,7 +188,7 @@ def build_recent_dialogue_block(history_text: str) -> str:
     return f"<recent_dialogue>\n{header}\n{text}\n</recent_dialogue>"
 
 
-def build_scene_block(
+def _build_scene_parts(
     general_prompt: str,
     scene_state: Any = None,
     present_character_names: list[str] | None = None,
@@ -198,20 +198,11 @@ def build_scene_block(
     character_appearances: dict[str, str] | None = None,
     locations: str = "[]",
     location_descriptions: dict[str, str] | None = None,
-) -> str:
-    """Build scene block with per-character location tracking (P3).
+) -> list[str]:
+    """Shared scene/WORLD content (P3 + Локации 2.0 §18). Returns raw parts.
 
-    Args:
-        general_prompt: The chat's general prompt / plot description.
-        scene_state: SceneState object with time_of_day, custom_state, character_locations.
-        present_character_names: Deprecated — kept for backward compat.
-        current_character_name: Name of the character whose prompt is being built.
-        character_locations: Map of character_name -> current_location.
-        character_appearances: Map of character_name -> appearance, shown only for
-            characters co-present with the current character (knowledge isolation).
-        locations: JSON array of allowed locations for this chat.
-        location_descriptions: Map of location_name -> description (Локации 2.0,
-            §18). Shown under the current character's location when non-empty.
+    Used by both ``build_scene_block`` (legacy wrapper) and ``build_world_block``
+    (Context Builder v2, Sprint 13 §23). Args mirror ``build_scene_block``.
     """
     parts = []
     text = (general_prompt or "").strip()
@@ -307,8 +298,144 @@ def build_scene_block(
                     parts.append(f"Прогрессия времени: {custom_state['time_progression']}")
 
     if not parts:
+        return parts
+    return parts
+
+
+def build_scene_block(
+    general_prompt: str,
+    scene_state: Any = None,
+    present_character_names: list[str] | None = None,
+    *,
+    current_character_name: str | None = None,
+    character_locations: dict[str, str] | None = None,
+    character_appearances: dict[str, str] | None = None,
+    locations: str = "[]",
+    location_descriptions: dict[str, str] | None = None,
+) -> str:
+    """Build scene block with per-character location tracking (P3).
+
+    Legacy wrapper (Context Builder v1): renders ``<scene>``. Under Context
+    Builder v2 (Sprint 13, §23) the same content is emitted as ``<world>`` via
+    ``build_world_block`` and the legacy block is not rendered (no duplication).
+    """
+    parts = _build_scene_parts(
+        general_prompt,
+        scene_state,
+        present_character_names,
+        current_character_name=current_character_name,
+        character_locations=character_locations,
+        character_appearances=character_appearances,
+        locations=locations,
+        location_descriptions=location_descriptions,
+    )
+    if not parts:
         return ""
     return f"<scene>\n{chr(10).join(parts)}\n</scene>"
+
+
+def build_world_block(
+    general_prompt: str,
+    scene_state: Any = None,
+    present_character_names: list[str] | None = None,
+    *,
+    current_character_name: str | None = None,
+    character_locations: dict[str, str] | None = None,
+    character_appearances: dict[str, str] | None = None,
+    locations: str = "[]",
+    location_descriptions: dict[str, str] | None = None,
+) -> str:
+    """WORLD block (Context Builder v2, Plans/update20.md §23, Sprint 13).
+
+    Сцена персонажа: время, погода, локация, co-present — из ``scene_states``
+    (P0). Данные, не инструкция. То же содержимое, что legacy ``<scene>``, но
+    в отдельном v2-блоке; при ``context_v2_enabled`` рендерится ТОЛЬКО он
+    (legacy ``<scene>`` не рендерится — нет дублирования). Никакой World Truth:
+    только то, что персонаж видит вокруг себя.
+    """
+    parts = _build_scene_parts(
+        general_prompt,
+        scene_state,
+        present_character_names,
+        current_character_name=current_character_name,
+        character_locations=character_locations,
+        character_appearances=character_appearances,
+        locations=locations,
+        location_descriptions=location_descriptions,
+    )
+    if not parts:
+        return ""
+    body = "\n".join(parts)
+    return (
+        "<world>\n"
+        f"{body}\n"
+        "(это мир и то, что ты видишь вокруг себя прямо сейчас)\n"
+        "</world>"
+    )
+
+
+def build_perceive_block(perceive_lines: list[str]) -> str:
+    """WHAT YOU PERCEIVE block (Context Builder v2, §23, Sprint 13).
+
+    Perception-строки текущего раунда (present/audible/…) — P0. Данные, не
+    инструкция. Пустой список → пустой блок.
+    """
+    lines = [str(line).strip() for line in perceive_lines if str(line).strip()]
+    if not lines:
+        return ""
+    body = "\n".join(f"- {line}" for line in lines)
+    return (
+        "<what_you_perceive>\n"
+        f"{body}\n"
+        "(это то, что ты воспринимаешь в этом раунде, а не мировая истина)\n"
+        "</what_you_perceive>"
+    )
+
+
+def build_relationship_block(relationship_text: str) -> str:
+    """RELATIONSHIP block (Context Builder v2, §23, Sprint 13).
+
+    Интерпретации отношений персонажа (топ-K рёбер + anchors) — P1. Данные,
+    не инструкция. Legacy ``<relationships>`` остаётся в system-промпте только
+    при выключенном ``context_v2_enabled``.
+    """
+    text = (relationship_text or "").strip()
+    if not text:
+        return ""
+    return (
+        "<relationship>\n"
+        f"{text}\n"
+        "(это твои отношения с другими персонажами, как ты их понимаешь)\n"
+        "</relationship>"
+    )
+
+
+def build_relevant_memory_block(memories: list) -> str:
+    """RELEVANT MEMORY block (Context Builder v2, §23, Sprint 13).
+
+    Reranked memories (п.14) — P2, retrieval-based. Данные, не инструкция.
+    Legacy ``<character_memories>`` остаётся при выключенном
+    ``context_v2_enabled``.
+    """
+    if not memories:
+        return ""
+    lines: list[str] = []
+    for m in memories:
+        content = getattr(m, "content", m.get("content", str(m)) if isinstance(m, dict) else str(m))
+        importance = getattr(m, "importance", None) or (m.get("importance") if isinstance(m, dict) else None)
+        if importance and float(importance) > 0.6:
+            lines.append(f"- {content} (важность: {float(importance):.1f})")
+        else:
+            lines.append(f"- {content}")
+    if not lines:
+        return ""
+    body = "\n".join(lines)
+    return (
+        "<relevant_memory>\n"
+        f"{body}\n"
+        "(это твои воспоминания, релевантные текущему моменту)\n"
+        "</relevant_memory>"
+    )
 
 
 def build_user_context_message(*blocks: str) -> str:

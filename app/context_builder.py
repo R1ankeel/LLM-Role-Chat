@@ -32,12 +32,16 @@ from .prompt_builder import (
     build_personality_consistency_block,
     build_recent_dialogue_block,
     build_reinforcement_block,
+    build_relevant_memory_block,
     build_scene_advancement_block,
     build_scene_block,
     build_story_block,
     build_system_prompt,
     build_vocabulary_block,
+    build_world_block,
     build_your_state_block,
+    build_perceive_block,
+    build_relationship_block,
     merge_char_locations,
 )
 from .repetition_detector import build_repetition_feedback_block
@@ -147,6 +151,15 @@ class ContextBuilder:
         budget = build_budget(max_tokens)
         dropped: list[schemas.DroppedItem] = []
         diagnostics = schemas.ContextDiagnostics()
+
+        # Context Builder v2 (Sprint 13, §23): новые блоки WORLD / WHAT YOU
+        # PERCEIVE / RELATIONSHIP / RELEVANT MEMORY; legacy-блоки (scene →
+        # relationships в system) остаются только при off.
+        v2 = bool(settings.context_v2_enabled)
+        world_block = ""
+        perceive_block = ""
+        relationship_block = ""
+        relevant_memory_block = ""
 
         char_id = int(character.id)
         char_name = character.name
@@ -311,20 +324,39 @@ class ContextBuilder:
             character,
             general_prompt,
             strict=False,
-            relationships_block=relationships_block or "",
+            relationships_block="" if v2 else (relationships_block or ""),
         )
-        scene_block = build_scene_block(
-            general_prompt,
-            scene_state,
-            present_character_names,
-            current_character_name=char_name,
-            character_locations=merge_char_locations(
-                scene_state, character_locations, character_names
-            ),
-            character_appearances=character_appearances,
-            locations=locations,
-            location_descriptions=location_descriptions,
-        )
+        if v2:
+            # WORLD (P0): сцена — время/погода/локация/co-present. Заменяет
+            # legacy `<scene>` (нет дублирования). RELATIONSHIP (P1) — в
+            # отдельном user-блоке, а не в system.
+            world_block = build_world_block(
+                general_prompt,
+                scene_state,
+                present_character_names,
+                current_character_name=char_name,
+                character_locations=merge_char_locations(
+                    scene_state, character_locations, character_names
+                ),
+                character_appearances=character_appearances,
+                locations=locations,
+                location_descriptions=location_descriptions,
+            )
+            scene_block = ""
+        else:
+            world_block = ""
+            scene_block = build_scene_block(
+                general_prompt,
+                scene_state,
+                present_character_names,
+                current_character_name=char_name,
+                character_locations=merge_char_locations(
+                    scene_state, character_locations, character_names
+                ),
+                character_appearances=character_appearances,
+                locations=locations,
+                location_descriptions=location_descriptions,
+            )
         # YOUR STATE (Sprint 3, Plans/update20.md §23): runtime-состояние
         # персонажа. Заполняется пост-раунд emotion_engine'ом; рендер только
         # при character_state_enabled. Часть фиксированных блоков — не усекается.
@@ -351,6 +383,26 @@ class ContextBuilder:
         # иначе — сборка здесь при crisis_engine_enabled.
         if not crisis_block and settings.crisis_engine_enabled:
             crisis_block = await self._build_crisis_block(db, chat_id)
+
+        # WHAT YOU PERCEIVE (P0, v2): perception-строки текущего раунда.
+        # Только строки, которые персонаж реально воспринял (presence ≠ absent);
+        # берутся из уже построенной presence-лестницы `lines`.
+        if v2:
+            round_ids = {
+                int(m.id)
+                for m in round_messages
+                if getattr(m, "id", None) is not None
+            }
+            perceive_lines = [
+                l["line"]
+                for l in lines
+                if l["message_id"] in round_ids and l["presence"] != "absent"
+            ]
+            perceive_block = build_perceive_block(perceive_lines)
+            # RELATIONSHIP (P1, v2): интерпретации + anchors из переданного
+            # relationships_block (top-K рёбер уже применён вызывающим).
+            relationship_block = build_relationship_block(relationships_block or "")
+
         instructions_text = self._build_instructions_text(
             character,
             scene_state,
@@ -361,6 +413,9 @@ class ContextBuilder:
         )
         system_tokens = counter.count(system_block)
         scene_tokens = counter.count(scene_block)
+        world_tokens = counter.count(world_block)
+        perceive_tokens = counter.count(perceive_block)
+        relationship_tokens = counter.count(relationship_block)
         state_tokens = counter.count(state_block)
         what_you_know_tokens = counter.count(what_you_know_block)
         story_tokens = counter.count(story_block)
@@ -410,25 +465,35 @@ class ContextBuilder:
                     active_threads=builder_signals.active_threads,
                 ),
             )
-        mem_block = build_memories_block(mem_list)
+        mem_block = (
+            build_relevant_memory_block(mem_list) if v2 else build_memories_block(mem_list)
+        )
         mem_tokens = counter.count(mem_block)
         while mem_list and mem_tokens > budget.memory_budget:
             mem = mem_list.pop()
             dropped.append(
                 schemas.DroppedItem(
-                    component="memories",
+                    component="relevant_memory" if v2 else "memories",
                     reason="budget",
                     item_id=getattr(mem, "id", None),
                     preview=(getattr(mem, "content", "") or "")[:60],
                 )
             )
-            mem_block = build_memories_block(mem_list)
+            mem_block = (
+                build_relevant_memory_block(mem_list)
+                if v2
+                else build_memories_block(mem_list)
+            )
             mem_tokens = counter.count(mem_block)
+        if v2:
+            relevant_memory_block = mem_block
 
         # ---- 8. final enforcement pass (priority order) ----------------
         fixed_tokens = (
             system_tokens
-            + scene_tokens
+            + (world_tokens if v2 else scene_tokens)
+            + perceive_tokens
+            + relationship_tokens
             + state_tokens
             + what_you_know_tokens
             + story_tokens
@@ -445,9 +510,9 @@ class ContextBuilder:
         if fixed_tokens > budget.total_tokens - budget.reserve_tokens:
             dropped.append(
                 schemas.DroppedItem(
-                    component="scene",
+                    component="world" if v2 else "scene",
                     reason="fixed_budget_exceeded",
-                    preview=scene_block[:60],
+                    preview=(world_block if v2 else scene_block)[:60],
                 )
             )
 
@@ -462,7 +527,14 @@ class ContextBuilder:
             retrieved_tokens = sum(counter.count(l["line"]) for l in retrieved_selected)
             # b) memories (P2)
             overrun = self._trim_memories(mem_list, overrun, counter, dropped)
-            mem_tokens = counter.count(build_memories_block(mem_list))
+            mem_block = (
+                build_relevant_memory_block(mem_list)
+                if v2
+                else build_memories_block(mem_list)
+            )
+            mem_tokens = counter.count(mem_block)
+            if v2:
+                relevant_memory_block = mem_block
             # c) summary (P2)
             if overrun > 0 and summary_text:
                 summary_tokens = counter.count(build_character_summary_block(summary_text))
@@ -491,7 +563,9 @@ class ContextBuilder:
 
         total_tokens = (
             system_tokens
-            + scene_tokens
+            + (world_tokens if v2 else scene_tokens)
+            + perceive_tokens
+            + relationship_tokens
             + state_tokens
             + what_you_know_tokens
             + story_tokens
@@ -531,6 +605,9 @@ class ContextBuilder:
         component_tokens = {
             "system": system_tokens,
             "scene": scene_tokens,
+            "world": world_tokens,
+            "perceive": perceive_tokens,
+            "relationship": relationship_tokens,
             "character_state": state_tokens,
             "what_you_know": what_you_know_tokens,
             "story": story_tokens,
@@ -562,6 +639,10 @@ class ContextBuilder:
             active_goal_text=active_goal_block,
             active_plan_text=active_plan_block,
             crisis_text=crisis_block,
+            world_text=world_block,
+            perceive_text=perceive_block,
+            relationship_text=relationship_block,
+            relevant_memory_text=relevant_memory_block,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,
@@ -898,12 +979,16 @@ class ContextBuilder:
     def _log_context(self, built: schemas.BuiltContext) -> None:
         t = built.component_tokens
         logger.info(
-            "Context budget: %d | system=%d scene=%d character_state=%d "
-            "relationships=%d summary=%d memories=%d retrieved_history=%d "
-            "recent_history=%d instructions=%d story=%d reserve=%d | TOTAL=%d mode=%s dropped=%d",
+            "Context budget: %d | system=%d scene=%d world=%d perceive=%d "
+            "relationship=%d character_state=%d relationships=%d summary=%d "
+            "memories=%d retrieved_history=%d recent_history=%d instructions=%d "
+            "story=%d reserve=%d | TOTAL=%d mode=%s dropped=%d v2=%s",
             built.budget.total_tokens,
             t.get("system", 0),
-            t.get("scene_state", 0),
+            t.get("scene", 0),
+            t.get("world", 0),
+            t.get("perceive", 0),
+            t.get("relationship", 0),
             t.get("character_state", 0),
             t.get("relationships", 0),
             t.get("summary", 0),
@@ -916,6 +1001,7 @@ class ContextBuilder:
             built.total_tokens,
             built.token_count_mode,
             len(built.dropped_items),
+            bool(settings.context_v2_enabled),
         )
         if settings.context_debug:
             d = built.diagnostics

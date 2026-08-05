@@ -38,6 +38,7 @@ from .prompt_builder import (
     build_take_actions_instruction,
     build_user_context_message,
     build_vocabulary_block,
+    build_world_block,
     format_character_descriptor,
     merge_char_locations,
 )
@@ -1021,8 +1022,15 @@ def _build_generation_messages(
     active_goal_block: str = "",
     active_plan_block: str = "",
     crisis_block: str = "",
+    perceive_block: str = "",
+    relationship_block: str = "",
 ) -> list[ChatMessage]:
-    """Build messages for /api/chat with localized blocks (P1 complete)."""
+    """Build messages for /api/chat with localized blocks (P1 complete).
+
+    Context Builder v2 (Sprint 13, §23): ``perceive_block`` (WHAT YOU
+    PERCEIVE) и ``relationship_block`` (RELATIONSHIP) — отдельные user-блоки,
+    ``scene_block`` в v2 несёт WORLD.
+    """
     feedback_block = build_repetition_feedback_block(repetition_feedback)
     consistency_feedback_block = build_consistency_feedback_block(
         consistency_feedback
@@ -1041,12 +1049,14 @@ def _build_generation_messages(
         feedback_block,
         consistency_feedback_block,
         scene_block,
+        perceive_block,
         your_state_block,
         what_you_know_block,
         story_block,
         active_goal_block,
         active_plan_block,
         crisis_block,
+        relationship_block,
         behavior_drivers_block,
         open_issues_block,
         epistemic_mask_block,
@@ -1145,9 +1155,13 @@ async def _generate_once(
         )
     if not settings.world_engine_recency_tail_enabled:
         recency_tail_block = ""
+    # Context Builder v2 (Sprint 13, §23): при включённом флаге relationships
+    # уходят из system-промпта в отдельный user-блок RELATIONSHIP; legacy
+    # `<relationships>` в system остаётся только при off.
+    v2 = bool(settings.context_v2_enabled)
     system_prompt = build_system_prompt(
         character, general_prompt, strict=strict_isolation,
-        relationships_block=relationships_block,
+        relationships_block="" if v2 else (relationships_block or ""),
         take_actions_instruction=(
             build_take_actions_instruction()
             if settings.world_engine_tools_enabled
@@ -1177,9 +1191,14 @@ async def _generate_once(
     summary_block = build_character_summary_block(
         (built_context.summary_text if built_context is not None else summary) or ""
     )
-    memories_block = build_memories_block(
-        built_context.memories if built_context is not None else memories
-    )
+    # RELEVANT MEMORY (v2, §23): reranked memories в отдельном блоке; при off —
+    # legacy `<character_memories>`.
+    if v2 and built_context is not None:
+        memories_block = built_context.relevant_memory_text
+    else:
+        memories_block = build_memories_block(
+            built_context.memories if built_context is not None else memories
+        )
     dialogue_block = build_recent_dialogue_block(dialogue_text)
 
     # Anti-mimicry block for sequential generation
@@ -1195,20 +1214,43 @@ async def _generate_once(
     if settings.enable_post_history_reinforcement:
         reinforcement = build_reinforcement_block(character.name)
 
-    # Scene block with world tracking — per-character location (P3)
+    # Scene block with world tracking — per-character location (P3).
+    # WORLD (v2, §23): заменяет legacy `<scene>`; legacy рендерится только off.
     if built_context is not None:
-        scene_block = built_context.scene_text
+        scene_block = built_context.world_text if v2 else built_context.scene_text
     else:
-        char_locs = merge_char_locations(scene_state, character_locations, character_names)
-        scene_block = build_scene_block(
-            general_prompt,
-            scene_state,
-            present_character_names,
-            current_character_name=character.name,
-            character_locations=char_locs,
-            locations=locations,
-            location_descriptions=location_descriptions,
-        )
+        if v2:
+            scene_block = build_world_block(
+                general_prompt,
+                scene_state,
+                present_character_names,
+                current_character_name=character.name,
+                character_locations=merge_char_locations(
+                    scene_state, character_locations, character_names
+                ),
+                locations=locations,
+                location_descriptions=location_descriptions,
+            )
+        else:
+            char_locs = merge_char_locations(scene_state, character_locations, character_names)
+            scene_block = build_scene_block(
+                general_prompt,
+                scene_state,
+                present_character_names,
+                current_character_name=character.name,
+                character_locations=char_locs,
+                locations=locations,
+                location_descriptions=location_descriptions,
+            )
+
+    # WHAT YOU PERCEIVE / RELATIONSHIP (v2, §23): user-блоки из built_context;
+    # при off — пустые (legacy-пути не меняются).
+    perceive_block = built_context.perceive_text if (v2 and built_context is not None) else ""
+    relationship_user_block = (
+        built_context.relationship_text
+        if (v2 and built_context is not None)
+        else ""
+    )
 
     # YOUR STATE block (Sprint 3, §23) — runtime-состояние персонажа.
     # Рендер только когда context_builder получил state (флаг
@@ -1296,6 +1338,8 @@ async def _generate_once(
             active_goal_block=active_goal_block,
             active_plan_block=active_plan_block,
             crisis_block=crisis_block,
+            perceive_block=perceive_block,
+            relationship_block=relationship_user_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -1310,6 +1354,8 @@ async def _generate_once(
             context_parts.append(dialogue_block)
         if scene_block:
             context_parts.append(scene_block)
+        if perceive_block:
+            context_parts.append(perceive_block)
         if your_state_block:
             context_parts.append(your_state_block)
         if what_you_know_block:
@@ -1322,6 +1368,8 @@ async def _generate_once(
             context_parts.append(active_plan_block)
         if crisis_block:
             context_parts.append(crisis_block)
+        if relationship_user_block:
+            context_parts.append(relationship_user_block)
         if anti_mimicry_block:
             context_parts.append(anti_mimicry_block)
         if vocabulary_block:

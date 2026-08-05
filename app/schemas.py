@@ -881,6 +881,15 @@ class ContextBudget(BaseModel):
     recent_history_min_tokens: int
     recent_history_max_tokens: int
     reserve_tokens: int
+    # Context Builder v2 (Sprint 13, Plans/update20.md §23): per-block
+    # sub-budgets. Zero when context_v2_enabled is off (legacy budget).
+    world_budget: int = 0
+    perceive_budget: int = 0
+    relationship_budget: int = 0
+    goal_budget: int = 0
+    story_budget: int = 0
+    knowledge_budget: int = 0
+    relevant_memory_budget: int = 0
 
 
 class DroppedItem(BaseModel):
@@ -941,6 +950,15 @@ class BuiltContext(BaseModel):
     # CRISIS (Sprint 11, §19): активные кризисные линии («давление в контексте»,
     # data-only). Рендер — по флагу crisis_engine_enabled.
     crisis_text: str = ""
+    # Context Builder v2 (Sprint 13, §23): WORLD (сцена), WHAT YOU PERCEIVE
+    # (perception-строки раунда), RELATIONSHIP (интерпретации + anchors),
+    # RELEVANT MEMORY (reranked memories). Заполняются только при
+    # context_v2_enabled; иначе пустые (legacy-блоки остаются в scene_text /
+    # relationships_block / memories).
+    world_text: str = ""
+    perceive_text: str = ""
+    relationship_text: str = ""
+    relevant_memory_text: str = ""
     total_tokens: int = 0
     token_count_mode: str = "estimated"
     component_tokens: dict[str, int] = Field(default_factory=dict)

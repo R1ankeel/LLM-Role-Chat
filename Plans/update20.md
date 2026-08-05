@@ -2462,6 +2462,12 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: контекст соответствует целевой структуре п.23; регрессий нет.
 - **НЕ делать**: не увеличивать max_context без причины; не выдавать персонажу
   World Truth.
+- **Статус**: ✅ (2026-08-05) — реализовано; `context_v2_enabled=false` по
+  умолчанию (canary); 18 новых тестов (`test_context_v2.py` 13 + `test_debug_router.py` 5)
+  зелёные; legacy-путь не сломан (golden/интеграционные тесты); полный `pytest` —
+  только pre-existing падения (25, на baseline те же); debug-контур §29.1 (state/
+  beliefs/threads/events/anchors/pipeline + `static/debug.html`) добавлен.
+  Детали: `docs/context_v2.md`.
 
 ---
 
@@ -2869,7 +2875,7 @@ Sprint 9  — Story Consolidation (P1) ✅ (2026-08-05)
 Sprint 10 — Plot Engine + NPC Intent + NPC Plans (P1) ✅ (2026-08-05)
 Sprint 11 — Crisis Engine (P2) ✅ (2026-08-05)
 Sprint 12 — Adaptive Consolidation (P1) ✅ (2026-08-05)
-Sprint 13 — Context Builder Evolution (P2)
+Sprint 13 — Context Builder Evolution (P2) ✅ (2026-08-05)
 (опционально) — Perception 2.0 расширение PerceivedResult, WorldState-агрегатор
 ```
 

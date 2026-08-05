@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Debug — State Summary</title>
+  <style>
+    :root {
+      --bg: #1a1a2e; --panel: #16213e; --card: #1e2a4a;
+      --border: #2a3a5e; --text: #eee; --muted: #aab; --accent: #e94560;
+      --green: #2ecc71; --blue: #4a9eff; --amber: #f5a623;
+      --font: 'Segoe UI', system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font); background: var(--bg); color: var(--text);
+      padding: 24px; min-height: 100vh;
+    }
+    header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
+    h1 { font-size: 22px; }
+    #chatId { color: var(--muted); font-size: 14px; }
+    .controls { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .controls label { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+    .controls input, .controls select {
+      background: var(--panel); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 6px 10px; font-size: 14px;
+    }
+    button {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 14px;
+    }
+    button:hover { border-color: var(--accent); }
+    button.active { background: var(--accent); border-color: var(--accent); }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .panel h2 { font-size: 16px; margin-bottom: 12px; color: var(--blue); }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+    .card:last-child { margin-bottom: 0; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 4px 12px; font-size: 13px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { word-break: break-word; }
+    pre {
+      background: #0d1b2a; border: 1px solid var(--border); border-radius: 4px;
+      padding: 12px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+    .badge.ok { background: rgba(46,204,113,.15); color: var(--green); }
+    .badge.err { background: rgba(233,69,96,.15); color: var(--accent); }
+    .badge.info { background: rgba(74,158,255,.15); color: var(--blue); }
+    .badge.warn { background: rgba(245,166,35,.15); color: var(--amber); }
+    .empty { color: var(--muted); font-style: italic; }
+    #error { color: var(--accent); background: rgba(233,69,96,.12); border: 1px solid var(--accent); border-radius: 6px; padding: 12px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Debug — State Summary</h1>
+    <span id="chatId"></span>
+  </header>
+
+  <div id="error" class="hidden" style="display:none"></div>
+
+  <div class="controls">
+    <label>Chat ID: <input id="idInput" type="number" min="1" value="1"></label>
+    <button id="btnGo">Обновить</button>
+    <button id="btnState" class="active">State</button>
+    <button id="btnBeliefs">Beliefs</button>
+    <button id="btnThreads">Threads</button>
+    <button id="btnEvents">Events</button>
+    <button id="btnAnchors">Anchors</button>
+    <button id="btnPipeline">Pipeline</button>
+  </div>
+
+  <div id="content" class="grid"></div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    let view = 'state';
+    let chatId = 1;
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    }[c]));
+
+    async function load() {
+      const base = '/api';
+      let url = `${base}/chats/${chatId}/debug/${view}`;
+      if (view === 'beliefs' || view === 'anchors') url = `${base}/chats/${chatId}/debug/${view}`;
+      try {
+        const resp = await fetch(url);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || resp.statusText);
+        render(view, data);
+      } catch (err) {
+        $('#error').textContent = 'Ошибка: ' + err.message;
+        $('#error').style.display = 'block';
+      }
+    }
+
+    function kv(obj) {
+      if (!obj || typeof obj !== 'object') return `<dd>${esc(obj)}</dd>`;
+      return Object.entries(obj).map(([k, v]) => {
+        let val = v;
+        if (typeof v === 'object') val = `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
+        else if (typeof v === 'boolean') val = `<span class="badge ${v ? 'ok' : 'info'}">${v}</span>`;
+        return `<dt>${esc(k)}</dt><dd>${val}</dd>`;
+      }).join('');
+    }
+
+    function panel(title, html) {
+      return `<div class="panel"><h2>${title}</h2>${html}</div>`;
+    }
+
+    function listCards(title, items, rowFn) {
+      if (!items || !items.length) return panel(title, `<div class="empty">Нет данных</div>`);
+      return panel(title, items.map((it, i) => `<div class="card"><b>#${i + 1}</b><dl class="kv">${rowFn(it)}</dl></div>`).join(''));
+    }
+
+    function renderState(d) {
+      const out = [];
+      if (d.story_state) {
+        out.push(panel('Story State', `<dl class="kv">${kv({
+          phase: d.story_state.story_phase, version: d.story_state.version,
+          last_consolidation_rounds: d.story_state.last_consolidation_rounds,
+          updated_round_id: d.story_state.updated_round_id,
+          current_story: d.story_state.current_story,
+        })}</dl>`));
+      }
+      out.push(listCards('Character States', d.character_states, (s) => kv({
+        character_id: s.character_id, mood: s.mood, stress: s.stress,
+        attention: s.attention, active_goal: s.active_goal,
+        emotional_state: s.emotional_state, personal_goals: s.personal_goals,
+        updated_round_id: s.updated_round_id,
+      })));
+      out.push(listCards('Beliefs', d.beliefs, (b) => kv({
+        character_id: b.character_id, subject: b.subject, predicate: b.predicate,
+        object: b.object, source: b.source, confidence: b.confidence,
+        type: b.type, world_truth_ref: b.world_truth_ref,
+      })));
+      out.push(listCards('Intents', d.intents, (i) => kv({
+        character_id: i.character_id, goal: i.goal, target: i.target,
+        approach: i.approach, urgency: i.urgency, emotion: i.emotion, risk: i.risk,
+        round: i.created_round_id,
+      })));
+      out.push(listCards('Active Story Threads', d.active_story_threads, (t) => kv({
+        name: t.name, actors: t.actors, importance: t.importance, status: t.status,
+        round: t.created_round_id,
+      })));
+      $('#content').innerHTML = out.join('');
+    }
+
+    function renderBeliefs(d) {
+      $('#content').innerHTML = listCards('Beliefs', d.beliefs, (b) => kv({
+        character_id: b.character_id, subject: b.subject, predicate: b.predicate,
+        object: b.object, source: b.source, confidence: b.confidence,
+        type: b.type, world_truth_ref: b.world_truth_ref, updated_at: b.updated_at,
+      }));
+    }
+
+    function renderThreads(d) {
+      $('#content').innerHTML = listCards('Story Threads', d.story_threads, (t) => kv({
+        name: t.name, actors: t.actors, importance: t.importance, status: t.status,
+        round: t.created_round_id, created_at: t.created_at,
+      }));
+    }
+
+    function renderEvents(d) {
+      const links = d.event_links || [];
+      const byEvent = {};
+      links.forEach((l) => { (byEvent[l.event_id] = byEvent[l.event_id] || []).push(l.caused_by_event_id); });
+      const html = panel('World Events', (d.world_events || []).map((e) => `<div class="card"><dl class="kv">${kv({
+        id: e.id, event_type: e.event_type, character_id: e.character_id,
+        location: e.location, location_to: e.location_to, round_id: e.round_id,
+        importance: e.importance, story_salience: e.story_salience,
+        action: e.action,
+        caused_by: byEvent[e.id] || '—',
+      })}</dl></div>`).join('') || `<div class="empty">Нет данных</div>`);
+      $('#content').innerHTML = html;
+    }
+
+    function renderAnchors(d) {
+      $('#content').innerHTML = listCards('Memory Anchors', d.memory_anchors, (a) => kv({
+        relationship_id: a.relationship_id, event_id: a.event_id, emotion: a.emotion,
+        valence: a.valence, intensity: a.intensity, importance: a.importance,
+        timestamp: a.timestamp,
+      }));
+    }
+
+    function renderPipeline(d) {
+      const r = d.last_report;
+      if (!r) { $('#content').innerHTML = panel('Pipeline', `<div class="empty">Нет отчёта — раунд ещё не запускался</div>`); return; }
+      const rows = Object.entries(r).map(([stage, val]) => {
+        const ok = !!(val && val.error === undefined);
+        const badge = ok ? '<span class="badge ok">ok</span>' : '<span class="badge err">error</span>';
+        return `<div class="card"><b>${esc(stage)}</b> ${badge}<pre>${esc(JSON.stringify(val, null, 2))}</pre></div>`;
+      }).join('');
+      $('#content').innerHTML = panel('Post-round Pipeline', rows);
+    }
+
+    const renderers = { state: renderState, beliefs: renderBeliefs, threads: renderThreads, events: renderEvents, anchors: renderAnchors, pipeline: renderPipeline };
+
+    function setView(v) {
+      view = v;
+      ['btnState','btnBeliefs','btnThreads','btnEvents','btnAnchors','btnPipeline'].forEach((id) => {
+        document.getElementById(id).classList.toggle('active', id === 'btn' + v[0].toUpperCase() + v.slice(1));
+      });
+      $('#error').style.display = 'none';
+      load();
+    }
+
+    $('#btnGo').addEventListener('click', () => {
+      chatId = parseInt($('#idInput').value, 10) || 1;
+      $('#chatId').textContent = 'Chat #' + chatId;
+      load();
+    });
+    $('#btnState').addEventListener('click', () => setView('state'));
+    $('#btnBeliefs').addEventListener('click', () => setView('beliefs'));
+    $('#btnThreads').addEventListener('click', () => setView('threads'));
+    $('#btnEvents').addEventListener('click', () => setView('events'));
+    $('#btnAnchors').addEventListener('click', () => setView('anchors'));
+    $('#btnPipeline').addEventListener('click', () => setView('pipeline'));
+
+    chatId = parseInt(new URLSearchParams(location.search).get('chat_id') || '1', 10) || 1;
+    $('#idInput').value = chatId;
+    $('#chatId').textContent = 'Chat #' + chatId;
+    load();
+  </script>
+</body>
+</html>

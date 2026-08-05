@@ -3674,6 +3674,20 @@ async def get_story_round_world_events(
     return events
 
 
+async def get_world_events_for_chat(
+    db: AsyncSession, chat_id: int, limit: int = 50
+) -> list[models.WorldEvent]:
+    """World events чата (новые сначала) — для debug/observability (§29.1)."""
+    stmt = (
+        select(models.WorldEvent)
+        .where(models.WorldEvent.chat_id == chat_id)
+        .order_by(models.WorldEvent.created_at.desc(), models.WorldEvent.id.desc())
+        .limit(max(0, int(limit)))
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def get_world_events_by_ids(
     db: AsyncSession, ids: list[int]
 ) -> dict[int, dict]:
@@ -3692,6 +3706,23 @@ async def get_world_events_by_ids(
             action = {}
         out[event.id] = {"event_type": event.event_type or "", "action": action}
     return out
+
+
+async def get_event_links_for_events(
+    db: AsyncSession, chat_id: int, event_ids: list[int]
+) -> list[tuple[int, int]]:
+    """Пары (event_id, caused_by_event_id) — причинные связи событий."""
+    if not event_ids:
+        return []
+    stmt = (
+        select(models.EventLink.event_id, models.EventLink.caused_by_event_id)
+        .where(
+            models.EventLink.chat_id == chat_id,
+            models.EventLink.event_id.in_(list(set(event_ids))),
+        )
+    )
+    result = await db.execute(stmt)
+    return [(int(event_id), int(caused_by)) for event_id, caused_by in result.all()]
 
 
 async def get_caused_by_ids_for_events(
@@ -3729,6 +3760,35 @@ async def get_active_story_threads(
     )
     if top_k:
         stmt = stmt.limit(top_k)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_story_threads_for_chat(
+    db: AsyncSession, chat_id: int
+) -> list[models.StoryThread]:
+    """Все story_threads чата (active + archived) — для debug (§29.1)."""
+    stmt = (
+        select(models.StoryThread)
+        .where(models.StoryThread.chat_id == chat_id)
+        .order_by(models.StoryThread.importance.desc(), models.StoryThread.id.desc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_story_threads_by_status(
+    db: AsyncSession, chat_id: int, status: str
+) -> list[models.StoryThread]:
+    """story_threads чата по статусу (active|archived) — для debug (§29.1)."""
+    stmt = (
+        select(models.StoryThread)
+        .where(
+            models.StoryThread.chat_id == chat_id,
+            models.StoryThread.status == status,
+        )
+        .order_by(models.StoryThread.importance.desc(), models.StoryThread.id.desc())
+    )
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

@@ -48,14 +48,75 @@ def build_budget(max_tokens: int | None = None) -> ContextBudget:
     recent_max = min(settings.context_recent_max_tokens, remaining)
     recent_min = min(settings.context_recent_min_tokens, recent_max)
 
+    if not settings.context_v2_enabled:
+        return ContextBudget(
+            total_tokens=total,
+            system_budget=total,
+            state_budget=state,
+            summary_budget=summary,
+            memory_budget=memory,
+            retrieved_history_budget=retrieval,
+            recent_history_min_tokens=recent_min,
+            recent_history_max_tokens=recent_max,
+            reserve_tokens=reserve,
+        )
+
+    # ---- Context Builder v2 (Sprint 13, §23) ---------------------------
+    # Per-block sub-budgets carved from the same `available` pool. Priority
+    # (§23): reserve → state/P0 (scene) → perception/recent(P0, не усекается) →
+    # intent/goal(P1) → relationship(P1) → story(P1) → summary(P2) → memories(P2)
+    # → beliefs(P2) → retrieved history(P3). Recent dialogue is a P0 floor:
+    # it is reserved BEFORE the P1/P2 blocks so a tight budget never starves it.
+    v2_state = min(settings.context_state_budget, available)
+    available -= v2_state
+
+    # perception/recent (P0): keep the recent_min floor, cap at recent_max.
+    v2_recent_max = min(settings.context_recent_max_tokens, available)
+    v2_recent_min = min(settings.context_recent_min_tokens, v2_recent_max)
+    available -= v2_recent_max
+
+    world = min(settings.context_v2_world_budget, available)
+    available -= world
+
+    perceive = min(settings.context_v2_perceive_budget, available)
+    available -= perceive
+
+    goal = min(settings.context_v2_goal_budget, available)
+    available -= goal
+
+    relationship = min(settings.context_v2_relationship_budget, available)
+    available -= relationship
+
+    story = min(settings.context_v2_story_budget, available)
+    available -= story
+
+    v2_summary = min(settings.context_summary_budget, available)
+    available -= v2_summary
+
+    relevant_memory = min(settings.context_v2_memory_budget, available)
+    available -= relevant_memory
+
+    knowledge = min(settings.context_v2_knowledge_budget, available)
+    available -= knowledge
+
+    v2_retrieval = min(settings.context_retrieval_budget, available)
+    available -= v2_retrieval
+
     return ContextBudget(
         total_tokens=total,
         system_budget=total,
-        state_budget=state,
-        summary_budget=summary,
-        memory_budget=memory,
-        retrieved_history_budget=retrieval,
-        recent_history_min_tokens=recent_min,
-        recent_history_max_tokens=recent_max,
+        state_budget=v2_state,
+        summary_budget=v2_summary,
+        memory_budget=relevant_memory,
+        retrieved_history_budget=v2_retrieval,
+        recent_history_min_tokens=v2_recent_min,
+        recent_history_max_tokens=v2_recent_max,
         reserve_tokens=reserve,
+        world_budget=world,
+        perceive_budget=perceive,
+        relationship_budget=relationship,
+        goal_budget=goal,
+        story_budget=story,
+        knowledge_budget=knowledge,
+        relevant_memory_budget=relevant_memory,
     )
