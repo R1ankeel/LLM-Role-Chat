@@ -6,6 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 from sqlalchemy import func, select
@@ -35,6 +36,41 @@ from .witness_model import Presence, resolve_presence
 from . import witness_model
 
 logger = logging.getLogger(__name__)
+
+
+def _chat_plot_text(chat: Any) -> str:
+    """Сюжетный текст для scene-блока (Plans/update20.md §16.1, Sprint 8).
+
+    При включённом story (``story_enabled`` + ``chats.story_enabled``) сцена
+    использует ``story_prompt`` (эволюционирующее story prompt); иначе —
+    legacy ``general_prompt``. Сам ``general_prompt`` НЕ меняется.
+    """
+    if (
+        settings.story_enabled
+        and getattr(chat, "story_enabled", False)
+        and (getattr(chat, "story_prompt", "") or "").strip()
+    ):
+        return chat.story_prompt
+    return chat.general_prompt
+
+
+async def _chat_story_block(db: AsyncSession, chat: Any) -> str:
+    """STORY block для чата (общий для всех персонажей; Sprint 8).
+
+    Пусто при выключенном ``story_enabled`` или ``chats.story_enabled=false``.
+    Падение не роняет раунд — блок пуст.
+    """
+    if not settings.story_enabled or not getattr(chat, "story_enabled", False):
+        return ""
+    try:
+        from .plot import story_state as plot_story
+
+        return await plot_story.build_story_block(db, chat.id)
+    except Exception as exc:  # noqa: BLE001 — блок не должен ронять раунд
+        logger.warning(
+            "[chat_id=%d] Failed to build story block: %s", chat.id, exc
+        )
+        return ""
 
 
 def _message_to_dict(msg) -> dict:
@@ -725,6 +761,9 @@ async def process_user_message_streaming(
             )
             epistemic_mask_block = ""
 
+        # STORY block (Sprint 8, §16): сюжет чата (общий для всех персонажей).
+        story_block = await _chat_story_block(db, chat)
+
         # Assemble token-aware context within the budget (TZ §11–§21)
         built_context = None
         if context_enabled:
@@ -748,7 +787,7 @@ async def process_user_message_streaming(
                 chat_id=chat_id,
                 character=current_character,
                 user_message=user_text,
-                general_prompt=chat.general_prompt,
+                general_prompt=_chat_plot_text(chat),
                 messages_window=pre_round_messages,
                 round_messages=round_messages,
                 character_names=character_names,
@@ -783,6 +822,7 @@ async def process_user_message_streaming(
                 ),
                 max_tokens=max_tokens,
                 character_state=character_state,
+                story_block=story_block,
             )
 
         response_text = ""
@@ -794,7 +834,7 @@ async def process_user_message_streaming(
                 chat_id=chat.id,
                 character=current_character,
                 messages_history=context_messages,
-                general_prompt=chat.general_prompt,
+                general_prompt=_chat_plot_text(chat),
                 memories=memories_by_character.get(current_character.id, []),
                 other_character_names=other_names,
                 max_history_length=history_limit,
@@ -826,6 +866,7 @@ async def process_user_message_streaming(
                 built_context=built_context,
                 epistemic_mask_block=epistemic_mask_block,
                 directive=directive,
+                story_block=story_block,
                 recency_tail_block=(
                     built_context.recency_tail_text
                     if built_context is not None
@@ -2519,6 +2560,7 @@ async def regenerate_message_streaming(
             prior_replies.append((prior_char.name, prior.content))
 
     # Token-aware context for this character (same assembly as the round)
+    story_block = await _chat_story_block(db, chat)
     built_context = None
     if context_enabled:
         max_tokens = (
@@ -2530,7 +2572,7 @@ async def regenerate_message_streaming(
             chat_id=chat_id,
             character=character,
             user_message=user_message.content,
-            general_prompt=chat.general_prompt,
+            general_prompt=_chat_plot_text(chat),
             messages_window=pre_round_messages,
             round_messages=round_messages,
             character_names=character_names,
@@ -2560,6 +2602,7 @@ async def regenerate_message_streaming(
                 player_location,
             ),
             max_tokens=max_tokens,
+            story_block=story_block,
         )
 
     other_names = get_other_character_names(characters, character.id)
@@ -2579,7 +2622,7 @@ async def regenerate_message_streaming(
             chat_id=chat.id,
             character=character,
             messages_history=context_messages,
-            general_prompt=chat.general_prompt,
+            general_prompt=_chat_plot_text(chat),
             memories=memories,
             other_character_names=other_names,
             max_history_length=history_limit,
@@ -2611,6 +2654,7 @@ async def regenerate_message_streaming(
             built_context=built_context,
             epistemic_mask_block=epistemic_mask_block,
             directive=directive,
+            story_block=story_block,
             recency_tail_block=(
                 built_context.recency_tail_text
                 if built_context is not None

@@ -578,5 +578,29 @@ class Settings(BaseSettings):
         default=0.05, alias="HYBRID_RERANK_WEIGHT_SALIENCE"
     )
 
+    # ----- Dynamic Story State (Plans/update20.md §16, Sprint 8) -----
+    # Сюжет как отдельная ось: Original Plot (chats.original_plot, immutable) +
+    # Current Story State (story_states) + Story History (story_events) + Phase.
+    # Пост-раунд детерминированно пишутся story_events (проекция extraction
+    # world_events) и story_state (активные story_threads, summary, progress).
+    # Блок STORY рендерится только при включённом флаге (canary); read-path
+    # story_states/story_events/story_threads — только при `story_enabled`.
+    story_enabled: bool = Field(default=False, alias="STORY_ENABLED")
+    # Cap числа активных потоков в контекст-блоке STORY (top-K, риск R5 —
+    # контекст не разрастается).
+    story_threads_max: int = Field(default=5, alias="STORY_THREADS_MAX")
+    # Порог importance для записи события в story_events (важность сюжета).
+    story_event_min_importance: float = Field(
+        default=4.0, alias="STORY_EVENT_MIN_IMPORTANCE"
+    )
+    # Порог importance для создания/обновления активного story_thread.
+    story_thread_min_importance: float = Field(
+        default=6.0, alias="STORY_THREAD_MIN_IMPORTANCE"
+    )
+    # Max числа последних сюжетных событий в summary текущего story_state.
+    story_summary_max_events: int = Field(
+        default=20, alias="STORY_SUMMARY_MAX_EVENTS"
+    )
+
 
 settings = Settings()

@@ -34,6 +34,7 @@ from .prompt_builder import (
     build_reinforcement_block,
     build_scene_advancement_block,
     build_scene_block,
+    build_story_block,
     build_system_prompt,
     build_vocabulary_block,
     build_your_state_block,
@@ -136,6 +137,7 @@ class ContextBuilder:
         max_tokens: int | None = None,
         character_state: Any = None,
         what_you_know_block: str = "",
+        story_block: str = "",
         rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
     ) -> schemas.BuiltContext:
         counter = self._token_counter
@@ -333,6 +335,11 @@ class ContextBuilder:
             what_you_know_block = await self._build_what_you_know_block(
                 db, char_id
             )
+        # STORY (Sprint 8, Plans/update20.md §16): сюжетный блок (фаза +
+        # активные потоки top-K + прогресс). Передаётся из chat_engine (общий
+        # для всех персонажей чата); иначе — сборка здесь при story_enabled.
+        if not story_block and settings.story_enabled:
+            story_block = await self._build_story_block(db, chat_id)
         instructions_text = self._build_instructions_text(
             character,
             scene_state,
@@ -345,6 +352,7 @@ class ContextBuilder:
         scene_tokens = counter.count(scene_block)
         state_tokens = counter.count(state_block)
         what_you_know_tokens = counter.count(what_you_know_block)
+        story_tokens = counter.count(story_block)
         instructions_tokens = counter.count(instructions_text)
 
         # ---- 6. summary (P2, budgeted) ---------------------------------
@@ -405,7 +413,12 @@ class ContextBuilder:
 
         # ---- 8. final enforcement pass (priority order) ----------------
         fixed_tokens = (
-            system_tokens + scene_tokens + state_tokens + instructions_tokens
+            system_tokens
+            + scene_tokens
+            + state_tokens
+            + what_you_know_tokens
+            + story_tokens
+            + instructions_tokens
         )
         content_available = max(
             0, budget.total_tokens - budget.reserve_tokens - fixed_tokens
@@ -463,6 +476,8 @@ class ContextBuilder:
             system_tokens
             + scene_tokens
             + state_tokens
+            + what_you_know_tokens
+            + story_tokens
             + summary_tokens
             + mem_tokens
             + retrieved_tokens
@@ -499,6 +514,7 @@ class ContextBuilder:
             "scene": scene_tokens,
             "character_state": state_tokens,
             "what_you_know": what_you_know_tokens,
+            "story": story_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -520,6 +536,7 @@ class ContextBuilder:
             recency_tail_text=recency_tail_text,
             state_text=state_block,
             what_you_know_text=what_you_know_block,
+            story_text=story_block,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,
@@ -815,12 +832,33 @@ class ContextBuilder:
             )
             return ""
 
+    async def _build_story_block(self, db: AsyncSession, chat_id: int) -> str:
+        """STORY block (Sprint 8, §16): фаза + активные потоки top-K + прогресс.
+
+        Общий для всех персонажей чата. Рендер только при ``story_enabled``
+        (canary) И ``chats.story_enabled``; активные потоки усекаются до
+        ``story_threads_max``.
+        """
+        try:
+            from . import crud
+            from .plot import story_state as plot_story
+
+            chat = await crud.get_chat(db, chat_id)
+            if chat is None or not getattr(chat, "story_enabled", False):
+                return ""
+            return await plot_story.build_story_block(db, chat_id)
+        except Exception as exc:  # noqa: BLE001 — блок не роняет контекст
+            logger.warning(
+                "Failed to build story block for chat %s: %s", chat_id, exc,
+            )
+            return ""
+
     def _log_context(self, built: schemas.BuiltContext) -> None:
         t = built.component_tokens
         logger.info(
             "Context budget: %d | system=%d scene=%d character_state=%d "
             "relationships=%d summary=%d memories=%d retrieved_history=%d "
-            "recent_history=%d instructions=%d reserve=%d | TOTAL=%d mode=%s dropped=%d",
+            "recent_history=%d instructions=%d story=%d reserve=%d | TOTAL=%d mode=%s dropped=%d",
             built.budget.total_tokens,
             t.get("system", 0),
             t.get("scene_state", 0),
@@ -831,6 +869,7 @@ class ContextBuilder:
             t.get("retrieved_history", 0),
             t.get("recent_history", 0),
             t.get("instructions", 0),
+            t.get("story", 0),
             t.get("reserve", 0),
             built.total_tokens,
             built.token_count_mode,

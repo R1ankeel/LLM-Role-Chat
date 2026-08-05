@@ -1957,6 +1957,68 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: story пишется и рендерится; исходное general_prompt не меняется.
 - **НЕ делать**: не позволять LLM менять original_plot.
 
+#### Sprint 8 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (всё под canary-флагами; при выключенных — legacy-пути не тронуты):
+  1. `app/config.py`: блок «Dynamic Story State» — `STORY_ENABLED=false`,
+     `STORY_THREADS_MAX=5`, `STORY_EVENT_MIN_IMPORTANCE=4.0`,
+     `STORY_THREAD_MIN_IMPORTANCE=6.0`, `STORY_SUMMARY_MAX_EVENTS=20`;
+  2. Новый пакет `app/plot/`:
+     - `story_events.py` — `write_story_events_from_round`: проецирует раундные
+       world_events в `story_events` по порогу важности (важные события пары и
+       мира), идемпотентность по `event_id`, опциональная привязка потока;
+     - `story_state.py` — `update_story_state_from_round` (summary из top-K
+       важных событий, потоки из story_events: создание/рост importance,
+       дедупликация по имени, фаза сохраняется), `build_story_block`
+       (рендер `<story>`: фаза + top-K активных потоков с прогрессом),
+       `story_state_to_dict`/`thread_to_dict`/`story_event_to_dict`;
+  3. `app/crud.py`: story CRUD — `get_story_state`, `get_or_create_story_state`,
+     `update_story_state`, `get_story_events_for_chat`, `count_story_events`,
+     `get_story_event_ids_for_chat`, `create_story_event`,
+     `get_story_round_world_events`, `get_world_events_by_ids`,
+     `get_caused_by_ids_for_events`, `get_active_story_threads`,
+     `find_story_thread_by_name`, `create_story_thread`, `update_story_thread`,
+     `set_story_event_thread`, `_parse_json_list`;
+  4. `app/schemas.py`: `BuiltContext.story_text`; `StoryThreadRead`/`StoryEventRead`
+     (`from_attributes=True`), `StoryStateRead`, `StoryStateUpdate`, `StoryStateResponse`;
+  5. `app/prompt_builder.py`: `build_story_block(state, active_threads=None)` —
+     чистый рендер STORY-блока (фаза + линии с прогрессом), пусто без state;
+  6. `app/context_builder.py`: параметр `story_block` в `build()`, self-build
+     `_build_story_block` (гейт на `story_enabled` + `chat.story_enabled`),
+     учёт `story` в fixed_tokens/total_tokens/component_tokens;
+  7. `app/ollama_client.py`: `story_block` прокинут через
+     `_build_generation_messages` → `_generate_once` → `generate()` и в
+     non-context `context_parts` (fallback `built_context.story_text`);
+  8. `app/post_round_pipeline.py`: стадия story — каркас заменён на
+     `_stage_story(client, db, *, chat_id, round_id, character_names)`: сначала
+     `plot.story_events.write_story_events_from_round`, затем
+     `plot.story_state.update_story_state_from_round`; обе в try/except
+     (падение не роняет раунд);
+  9. `app/chat_engine.py`: helper `_chat_plot_text(chat)` — при включённом
+     story и непустом `story_prompt` сцена берётся из `story_prompt`, иначе
+     legacy `general_prompt` (сам general_prompt не меняется — критерий);
+     `_chat_story_block(db, chat)`; story_block прокинут во все 4 вызова
+     `context_builder.build`/`ollama_client.generate`;
+  10. `app/routers/chats.py`: `GET /chats/{chat_id}/story` и
+      `PATCH /chats/{chat_id}/story` — только пользователь правит
+      `original_plot` (и в `chats`, и в `story_state`), `story_phase`,
+      частичный merge `current_story`, `story_enabled`/`story_prompt`;
+      при включении с пустым `story_prompt` — посев из general_prompt/original_plot.
+- **Тесты**: `test_story_state.py` (19): запись story_events (порог важности,
+  идемпотентность, выключенный флаг), state (summary/потоки/прогресс,
+  дедуп потоков по имени, рост importance, фаза сохраняется, chat-disabled
+  через `_stage_story`), рендер STORY (пусто/top-K), story_text в BuiltContext,
+  `_chat_plot_text` (story_prompt vs general_prompt, general_prompt не меняется),
+  API GET/PATCH/404/merge.
+- **Полный прогон**: 1000 passed; 29 failed — все в НЕ тронутых модулях
+  (task_queue, memory_service/memory_perception, embeddings, context_state,
+  token_counter, stream_disconnect, repetition_detector) — пред-существующие
+  поломки тестов (async-сигнатуры create_characters/run_job, caplog и т.п.),
+  подтверждены в изоляции, к Sprint 8 не относятся.
+- **НЕ сделано** (задел §16.2/§17): LLM-consolidation story state (Sprint 9);
+  запись story_events из всех раундов (не только важных) — по порогу как
+  запланировано; versioned story_states.
+
 ### Sprint 9 — Story Consolidation (P1)
 
 - **Цель**: LLM-обновление Current Story State с валидацией.

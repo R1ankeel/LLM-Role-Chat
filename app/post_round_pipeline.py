@@ -15,7 +15,9 @@
 6. beliefs               — ``belief_service.update_beliefs_from_round`` (Sprint 5):
    детерминированные beliefs из событий раунда, которые персонаж реально
    воспринял (presence+attention); только direct_observation путь;
-7. story                 — каркас под спринты 8-11; в Sprint 1 — no-op.
+7. story                 — Sprint 8: story_events (проекция world_events) +
+   story_state (summary, активные story_threads, progress); только при
+   story_enabled + chats.story_enabled.
 
 Memory и relationship — внешние коллбеки (инъекция), чтобы избежать циклической
 зависимости ``pipeline → chat_engine``; ``chat_engine`` передаёт свои функции.
@@ -222,18 +224,60 @@ async def _stage_beliefs(
 
 
 async def _stage_story(
+    client: Any,
+    db,
     *,
+    chat_id: int,
     round_id: str | None,
-    round_messages: list[Any],
+    character_names: dict[int, str],
 ) -> dict:
-    """Stage 6: story capture — каркас (спринты 8-11); в Sprint 1 — no-op."""
-    return {
-        "ok": True,
-        "stage": "story",
-        "skipped": "wired in Sprint 8-11",
-        "round_id": round_id,
-        "messages": len(round_messages),
-    }
+    """Stage 7: story capture (Sprint 8, Plans/update20.md §16).
+
+    Детерминированный write-path: ``story_events`` (проекция extraction
+    world_events раунда) → ``story_state`` (summary, активные story_threads,
+    progress). Только при включённых ``story_enabled`` (canary) И
+    ``chats.story_enabled`` (перчатовый тумблер пользователя). Исходный
+    ``general_prompt``/``original_plot`` НЕ меняются; падение стадии не
+    роняет раунд.
+    """
+    if not settings.story_enabled:
+        return {
+            "ok": True,
+            "stage": "story",
+            "skipped": "flag off",
+        }
+    try:
+        chat = await crud.get_chat(db, chat_id)
+        if chat is None or not getattr(chat, "story_enabled", False):
+            return {
+                "ok": True,
+                "stage": "story",
+                "skipped": "chat story disabled",
+            }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning("Post-round pipeline: story stage (chat check) failed: %s", exc)
+        return {"ok": False, "stage": "story", "error": str(exc)}
+    try:
+        from .plot import story_events, story_state
+
+        events_report = await story_events.write_story_events_from_round(
+            db, chat_id, round_id, character_names
+        )
+        state_report = await story_state.update_story_state_from_round(
+            db, chat_id, round_id
+        )
+        return {
+            "ok": bool(events_report.get("ok") and state_report.get("ok")),
+            "stage": "story",
+            "events_written": events_report.get("written", 0),
+            "threads_created": state_report.get("threads_created", 0),
+            "threads_updated": state_report.get("threads_updated", 0),
+            "skipped": events_report.get("skipped")
+            or state_report.get("skipped"),
+        }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning("Post-round pipeline: story stage failed: %s", exc)
+        return {"ok": False, "stage": "story", "error": str(exc)}
 
 
 async def _stage_character_state(
@@ -385,8 +429,11 @@ async def run_post_round_pipeline(
 
     if "story" in enabled:
         report["story"] = await _stage_story(
+            client,
+            db,
+            chat_id=chat_id,
             round_id=round_id,
-            round_messages=round_messages,
+            character_names=character_names,
         )
 
     failed = [k for k, v in report.items() if not v.get("ok")]

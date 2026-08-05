@@ -338,6 +338,70 @@ def state_block_from_dict(state: Any) -> str:
     return _render(state)
 
 
+def build_story_block(state: Any, active_threads: list | None = None) -> str:
+    """STORY block (Plans/update20.md §16, Sprint 8).
+
+    Рендер data-only: фаза + активные сюжетные линии (top-K передаёт
+    вызывающий) + прогресс. Рендерится только при включённом ``story_enabled``
+    (решает context_builder); пустой/отсутствующий state → пустой блок. Блок
+    отражает сюжет чата (общий для всех персонажей), НЕ мировую истину
+    конкретного персонажа.
+    """
+    if state is None:
+        return ""
+    parts: list[str] = []
+
+    phase = (getattr(state, "story_phase", "") or "").strip()
+    if phase:
+        parts.append(f"Фаза: {phase}")
+
+    current_story = getattr(state, "current_story", "{}")
+    if isinstance(current_story, str):
+        try:
+            current_story = json.loads(current_story)
+        except (json.JSONDecodeError, TypeError):
+            current_story = {}
+    if not isinstance(current_story, dict):
+        current_story = {}
+
+    threads = active_threads or []
+    lines: list[str] = []
+    for thread in threads:
+        name = (getattr(thread, "name", "") or "").strip()
+        if not name:
+            continue
+        actors_raw = getattr(thread, "actors", "[]")
+        if isinstance(actors_raw, str):
+            try:
+                actors = json.loads(actors_raw)
+            except (json.JSONDecodeError, TypeError):
+                actors = []
+        elif isinstance(actors_raw, list):
+            actors = actors_raw
+        else:
+            actors = []
+        if actors:
+            lines.append(f"- {name} ({', '.join(str(a) for a in actors)})")
+        else:
+            lines.append(f"- {name}")
+    if lines:
+        parts.append("Активные сюжетные линии:\n" + "\n".join(lines))
+
+    progress = current_story.get("progress")
+    if isinstance(progress, dict) and progress:
+        bits = []
+        if progress.get("story_events") is not None:
+            bits.append(f"события сюжета: {progress['story_events']}")
+        if progress.get("active_threads") is not None:
+            bits.append(f"линии: {progress['active_threads']}")
+        if bits:
+            parts.append("Прогресс: " + "; ".join(bits))
+
+    if not parts:
+        return ""
+    return f"<story>\n{chr(10).join(parts)}\n</story>"
+
+
 def build_take_actions_instruction() -> str:
     """Инструкция tool-calling `take_actions` (WPE.md §8, Ул.4, Фаза 2).
 
