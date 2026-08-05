@@ -235,10 +235,11 @@ async def _stage_story(
 
     Детерминированный write-path: ``story_events`` (проекция extraction
     world_events раунда) → ``story_state`` (summary, активные story_threads,
-    progress). Только при включённых ``story_enabled`` (canary) И
-    ``chats.story_enabled`` (перчатовый тумблер пользователя). Исходный
-    ``general_prompt``/``original_plot`` НЕ меняются; падение стадии не
-    роняет раунд.
+    progress). Затем Sprint 9: LLM-консолидация (``story_consolidation``)
+    при включённом флаге и срабатывании trigger. Только при включённых
+    ``story_enabled`` (canary) И ``chats.story_enabled`` (перчатовый тумблер
+    пользователя). Исходный ``general_prompt``/``original_plot`` НЕ меняются;
+    падение любой части стадии не роняет раунд.
     """
     if not settings.story_enabled:
         return {
@@ -246,6 +247,7 @@ async def _stage_story(
             "stage": "story",
             "skipped": "flag off",
         }
+    chat = None
     try:
         chat = await crud.get_chat(db, chat_id)
         if chat is None or not getattr(chat, "story_enabled", False):
@@ -266,6 +268,19 @@ async def _stage_story(
         state_report = await story_state.update_story_state_from_round(
             db, chat_id, round_id
         )
+
+        consolidation_report = {}
+        if settings.story_consolidation_enabled:
+            from .plot import story_consolidation
+
+            consolidation_report = await story_consolidation.maybe_consolidate_story(
+                db,
+                client,
+                chat_id=chat_id,
+                round_id=round_id,
+                model_name=getattr(chat, "model_name", None),
+            )
+
         return {
             "ok": bool(events_report.get("ok") and state_report.get("ok")),
             "stage": "story",
@@ -274,6 +289,7 @@ async def _stage_story(
             "threads_updated": state_report.get("threads_updated", 0),
             "skipped": events_report.get("skipped")
             or state_report.get("skipped"),
+            "consolidation": consolidation_report,
         }
     except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
         logger.warning("Post-round pipeline: story stage failed: %s", exc)

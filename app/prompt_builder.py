@@ -402,6 +402,25 @@ def build_story_block(state: Any, active_threads: list | None = None) -> str:
     return f"<story>\n{chr(10).join(parts)}\n</story>"
 
 
+def build_story_consolidation_system() -> str:
+    """System prompt для Story Consolidation (Plans/update20.md §17, Sprint 9)."""
+    return str(_TEMPLATES.get("story_consolidation", {}).get("system", ""))
+
+
+def build_story_consolidation_user(
+    original_plot: str,
+    current_story: str,
+    recent_events: str,
+) -> str:
+    """User prompt для Story Consolidation: Original Plot + State + Events (§17.2)."""
+    tpl = str(_TEMPLATES.get("story_consolidation", {}).get("user", ""))
+    return tpl.format(
+        original_plot=(original_plot or "").strip() or "(не задан)",
+        current_story=(current_story or "").strip() or "{}",
+        recent_events=(recent_events or "").strip() or "(нет событий в окне)",
+    )
+
+
 def build_take_actions_instruction() -> str:
     """Инструкция tool-calling `take_actions` (WPE.md §8, Ул.4, Фаза 2).
 

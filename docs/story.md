@@ -4,7 +4,6 @@ Original Plot + Current Story State + Story History + Phase (Plans/update20.md �
 Сюжет — отдельная ось поверх World Events: что **важно для истории**, а не всё
 подряд. Хранится в `story_states`, `story_events`, `story_threads`
 (таблицы созданы в Sprint 0, здесь — write-path и рендер).
-
 ## Принципы
 
 - **Original Plot неприкосновенен**: его может менять только пользователь
@@ -78,3 +77,88 @@ try/except — падение не роняет раунд. Гейт: `STORY_ENA
 фаза сохраняется, chat-disabled через `_stage_story`); рендер STORY (пусто/top-K);
 `story_text` в BuiltContext; `_chat_plot_text` (story_prompt vs general_prompt);
 API GET/PATCH/merge/404.
+
+---
+
+# Story Consolidation (Sprint 9)
+
+LLM-обновление Current Story State с валидацией (Plans/update20.md §17).
+Story state должен **эволюционировать**: цели завершаются, линии архивируются,
+появляются новые, фаза сдвигается. Модуль `app/plot/story_consolidation.py`.
+
+## Trigger (§17.1)
+
+Пост-раунд (после детерминированного write-path в `_stage_story`), если:
+
+- с последней консолидации прошло ≥ `STORY_CONSOLIDATION_INTERVAL_ROUNDS`
+  раундов (число раундов = distinct `round_id` в `world_events`, хранится в
+  `story_states.last_consolidation_rounds`), ИЛИ
+- критическое событие в окне (importance ≥ `STORY_CONSOLIDATION_CRITICAL_IMPORTANCE`)
+  затронуло story — консолидация раньше срока.
+
+## Входы → LLM → выход (§17.2)
+
+```text
+Original Plot + Current Story State + Recent Story Events (окно grounding)
+        ↓ (LLM, JSON-schema format, T=0.2)
+Updated Current Story State
+```
+
+Контракт (`CONSOLIDATION_SCHEMA`, `format` при вызове Ollama):
+`completed_goals`, `progress.overall`, `new_threads`,
+`updated_threads` (progress/importance), `archived_threads`,
+`character_state_changes`, `phase_change`, `summary` — каждое поле с
+`confidence` 0..1.
+
+## Валидация и защита (§17.3)
+
+- **Original Plot diff**: консолидация НЕ пишет `original_plot` (нет write-path);
+  смена `phase_change` применяется ТОЛЬКО если новая фаза зарегистрирована в
+  original_plot (иначе остаётся предложением для пользователя, §16.4);
+- **Hallucination guard**: новые/архивированные/updated-линии и цели — только
+  при подтверждении в окне `story_events` (по актёрам или значимым токенам
+  имени); неподтверждённое отбрасывается;
+- **Confidence**: изменение с `confidence < STORY_CONSOLIDATION_MIN_CONFIDENCE`
+  не применяется;
+- **Rollback**: невалидный JSON / нарушение правил / ошибка LLM → предыдущая
+  версия `story_states` остаётся, `version` не растёт, ошибка логируется;
+  раунд не ломается (стадия в try/except).
+
+## Применение
+
+- `new_threads` → `story_threads` (CREATE, dedupe по имени, status=active);
+- `archived_threads` / `completed_goals` → status=archived + вывод из
+  `active_threads`, цели в `completed_goals`;
+- `updated_threads` → importance (max) + `thread_progress` (кламп 0..1);
+- `character_state_changes` → `current_story.characters` (роль/заметки);
+- `phase_change` → `story_phase`; `summary` → `narrative_summary`;
+  `progress.overall` → кламп 0..1.
+- `version` растёт только если что-то реально применилось;
+  `last_consolidation_rounds` фиксируется при каждой состоявшейся консолидации.
+
+## Флаги
+
+| переменная | default | смысл |
+|---|---|---|
+| `STORY_CONSOLIDATION_ENABLED` | `false` | включать LLM-консолидацию (benchmark gate §27) |
+| `STORY_CONSOLIDATION_INTERVAL_ROUNDS` | `15` | минимальный интервал в раундах |
+| `STORY_CONSOLIDATION_CRITICAL_IMPORTANCE` | `8.0` | порог критического события |
+| `STORY_CONSOLIDATION_MODEL` | `` | модель (пустая = модель генерации чата) |
+| `STORY_CONSOLIDATION_TIMEOUT` | `60` | таймаут вызова |
+| `STORY_CONSOLIDATION_MIN_CONFIDENCE` | `0.5` | порог confidence для применения |
+| `STORY_CONSOLIDATION_MAX_RECENT_EVENTS` | `30` | окно grounding |
+
+## Benchmark gate (§27)
+
+`STORY_CONSOLIDATION_ENABLED` по умолчанию выключен. Перед включением
+обязателен прогон `benchmark_structured` на story-update (schema-validity
+≥ 90%, grounding ≥ порога); при неудовлетворительном результате — только
+кандидаты-флаги без применения.
+
+## Тесты
+
+`tests/test_story_consolidation.py`: trigger (interval/critical/not-reached),
+canary (флаг и перчатовый тумблер), completed_goals уходят из active,
+new_threads только grounded, progress сохраняется и клампится, фаза только из
+original_plot, original_plot не искажается, low confidence не применяется,
+rollback (невалидный JSON / ошибка LLM / без изменений), version bump.

@@ -602,5 +602,40 @@ class Settings(BaseSettings):
         default=20, alias="STORY_SUMMARY_MAX_EVENTS"
     )
 
+    # ----- Story Consolidation (Plans/update20.md §17, Sprint 9) -----
+    # LLM-обновление Current Story State с валидацией (original plot diff,
+    # grounding, rollback). Под benchmark gate §27: перед включением — прогон
+    # `benchmark_structured` на story-update; при schema-validity < 90% или
+    # grounding < порога — только кандидаты-флаги без применения. По умолчанию
+    # выключен (canary): legacy-пути не тронуты.
+    story_consolidation_enabled: bool = Field(
+        default=False, alias="STORY_CONSOLIDATION_ENABLED"
+    )
+    # Не чаще чем раз в N раундов (§17.1) — стоимостной лимит.
+    story_consolidation_interval_rounds: int = Field(
+        default=15, alias="STORY_CONSOLIDATION_INTERVAL_ROUNDS"
+    )
+    # Критическое событие (смерть, предательство, свадьба, milestone — §17.1)
+    # затронуло story: importance >= порога в окне → консолидация раньше срока.
+    story_consolidation_critical_importance: float = Field(
+        default=8.0, alias="STORY_CONSOLIDATION_CRITICAL_IMPORTANCE"
+    )
+    # Модель для consolidation (пустая = основная модель генерации чата).
+    story_consolidation_model: str = Field(
+        default="", alias="STORY_CONSOLIDATION_MODEL"
+    )
+    # Таймаут consolidation-вызова (короче генерации — фоновая задача).
+    story_consolidation_timeout: float = Field(
+        default=60.0, alias="STORY_CONSOLIDATION_TIMEOUT"
+    )
+    # Порог confidence: изменение ниже порога не применяется (§17.3).
+    story_consolidation_min_confidence: float = Field(
+        default=0.5, alias="STORY_CONSOLIDATION_MIN_CONFIDENCE"
+    )
+    # Окно последних story_events для grounding (п.17.3 hallucination guard).
+    story_consolidation_max_recent_events: int = Field(
+        default=30, alias="STORY_CONSOLIDATION_MAX_RECENT_EVENTS"
+    )
+
 
 settings = Settings()

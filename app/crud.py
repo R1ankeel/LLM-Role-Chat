@@ -3378,8 +3378,14 @@ async def update_story_state(
     current_story: dict | str | None = None,
     story_phase: str | None = None,
     updated_round_id: str | None = None,
+    version: int | None = None,
+    last_consolidation_rounds: int | None = None,
 ) -> models.StoryState | None:
-    """Обновить story_state чата (частичное; None-поля НЕ сбрасываются)."""
+    """Обновить story_state чата (частичное; None-поля НЕ сбрасываются).
+
+    ``version``/``last_consolidation_rounds`` — для Sprint 9: консолидация
+    пишет новую версию (rollback = предыдущая версия остаётся при сбое).
+    """
     state = await get_story_state(db, chat_id)
     if state is None:
         return None
@@ -3395,6 +3401,10 @@ async def update_story_state(
         state.story_phase = str(story_phase)
     if updated_round_id is not None:
         state.updated_round_id = updated_round_id
+    if version is not None:
+        state.version = int(version)
+    if last_consolidation_rounds is not None:
+        state.last_consolidation_rounds = int(last_consolidation_rounds)
     await db.commit()
     await db.refresh(state)
     return state
@@ -3420,6 +3430,23 @@ async def count_story_events(db: AsyncSession, chat_id: int) -> int:
         select(func.count())
         .select_from(models.StoryEvent)
         .where(models.StoryEvent.chat_id == chat_id)
+    )
+    result = await db.execute(stmt)
+    return int(result.scalar_one() or 0)
+
+
+async def count_distinct_rounds(db: AsyncSession, chat_id: int) -> int:
+    """Число раундов чата (distinct round_id в world_events, Sprint 9 trigger).
+
+    У каждого раунда, дошедшего до event-этапа, есть world_events — это
+    детерминированная мера «сколько раундов прошло» для §17.1.
+    """
+    stmt = (
+        select(func.count(func.distinct(models.WorldEvent.round_id)))
+        .where(
+            models.WorldEvent.chat_id == chat_id,
+            models.WorldEvent.round_id.isnot(None),
+        )
     )
     result = await db.execute(stmt)
     return int(result.scalar_one() or 0)
@@ -3625,8 +3652,12 @@ async def update_story_thread(
     *,
     importance: float | None = None,
     actors: list | None = None,
+    status: str | None = None,
 ) -> models.StoryThread | None:
-    """Обновить thread: importance растёт (max), actors объединяются без дублей."""
+    """Обновить thread: importance растёт (max), actors объединяются без дублей.
+
+    ``status`` — для Sprint 9 (archived после завершения цели).
+    """
     thread = await db.get(models.StoryThread, thread_id)
     if thread is None:
         return None
@@ -3642,6 +3673,8 @@ async def update_story_thread(
             )
         )
         thread.actors = json.dumps(merged, ensure_ascii=False)
+    if status is not None:
+        thread.status = status
     await db.commit()
     await db.refresh(thread)
     return thread

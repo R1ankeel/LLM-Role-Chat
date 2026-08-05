@@ -2041,6 +2041,66 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: story state корректно эволюционирует на scenario 100+ раундов.
 - **НЕ делать**: не давать LLM менять original_plot/фазы без валидации.
 
+#### Sprint 9 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (всё под canary-флагом `story_consolidation_enabled`; при
+  выключенном — post-round story стадия не меняется):
+  1. `app/config.py`: блок «Story Consolidation» — `STORY_CONSOLIDATION_ENABLED=false`,
+     `STORY_CONSOLIDATION_INTERVAL_ROUNDS=15`, `STORY_CONSOLIDATION_CRITICAL_IMPORTANCE=8.0`,
+     `STORY_CONSOLIDATION_MODEL=""` (пустая = модель генерации чата),
+     `STORY_CONSOLIDATION_TIMEOUT=60`, `STORY_CONSOLIDATION_MIN_CONFIDENCE=0.5`,
+     `STORY_CONSOLIDATION_MAX_RECENT_EVENTS=30`;
+  2. Новый `app/plot/story_consolidation.py`:
+     - trigger §17.1: интервал в раундах (distinct round_id в world_events)
+       ИЛИ критическое событие (importance ≥ порога в окне);
+     - контракт §17.2: `CONSOLIDATION_SCHEMA` (Ollama format) +
+       `validate_consolidation_result` — нормализация/валидация, поштучная
+       отбраковка невалидных элементов, невалидная верхняя структура → None;
+     - защита §17.3: original plot diff (смена фазы — только если новая фаза
+       зарегистрирована в original_plot, иначе остаётся предложением),
+       hallucination guard (новые/архивированные/updated-линии и цели —
+       grounding в окне story_events по актёрам/токенам), confidence < порога
+       не применяется, rollback (невалидный JSON/ошибка LLM → предыдущая
+       версия остаётся, `version` не растёт);
+     - применение: `new_threads` → CREATE, `archived_threads` →
+       status=archived, `completed_goals` → архив соответствующей линии +
+       запись, `updated_threads` → importance (max) + `thread_progress`
+       (кламп 0..1), `character_state_changes` → `current_story.characters`,
+       `phase_change` → `story_phase`, `summary` → `narrative_summary`,
+       `progress.overall` → кламп;
+  3. `app/crud.py`: `count_distinct_rounds`; `update_story_state` +параметры
+     `version`/`last_consolidation_rounds`; `update_story_thread` +параметр
+     `status`;
+  4. `app/models.py`/`app/database.py`: колонка `last_consolidation_rounds`
+     (INTEGER NULL) + миграция ALTER TABLE (идемпотентно, проверено);
+  5. `app/prompts/ru.json` + `app/prompt_builder.py`:
+     `story_consolidation` (system+user) → `build_story_consolidation_system`/
+     `build_story_consolidation_user` (Original Plot + State + Events);
+  6. `app/post_round_pipeline.py`: `_stage_story` после детерминированного
+     write-path вызывает `maybe_consolidate_story` (только при включённом
+     флаге; падение не роняет раунд). `main.py` НЕ тронут — таймер/score
+     остаётся на Sprint 12 (как зафиксировано в Sprint 9).
+- **Benchmark gate (§27)**: `STORY_CONSOLIDATION_ENABLED` остаётся `false`;
+  перед включением обязателен прогон `benchmark_structured` на story-update
+  (schema-validity ≥ 90%, grounding ≥ порога) — иначе только кандидаты-флаги.
+- **Тесты**: `test_story_consolidation.py` (17): trigger (interval/critical/
+  skip без LLM), canary (флаг/chat-тумблер), completed_goals уходят из active,
+  new_threads только grounded (не-grounded отбрасывается), progress сохраняется
+  и клампится, фаза только из original_plot, original_plot не искажается,
+  низкий confidence не применяется, rollback при невалидном JSON/ошибке LLM,
+  версия не растёт без изменений и растёт при применении.
+- **Полный прогон** затронутых модулей: `test_story_state` + `test_story_consolidation`
+  + `test_post_round_pipeline` + `test_context_builder` + `test_context_integration`
+  + `test_prompt_builder` + `test_chat_engine` + `test_ollama_chat` +
+  `test_character_state` + `test_beliefs` + `test_sensors` + schema-тесты +
+  `test_memory_types` — 217 passed; пред-существующие поломки (task_queue,
+  memory_service/perception, embeddings, context_state, token_counter,
+  stream_disconnect, repetition_detector) не связаны с Sprint 9.
+- **НЕ сделано** (задел §17/§27): прогон `benchmark_structured` на реальной
+  модели (нужен Ollama, `--mode real`); `consolidation_state` counters и
+  score-based trigger — Sprint 12; «новая фаза» применяется только после
+  подтверждения пользователем (по §16.4).
+
 ### Sprint 10 — Plot Engine, NPC Intent + Plans (P1)
 
 - **Цель**: plot-модуль (threads, intent, plans) и долгоживущие планы NPC.

@@ -1008,6 +1008,7 @@ def ensure_schema(db_engine) -> None:
                     story_phase TEXT NOT NULL DEFAULT '',
                     updated_round_id TEXT,
                     version INTEGER NOT NULL DEFAULT 1,
+                    last_consolidation_rounds INTEGER,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -1020,6 +1021,23 @@ def ensure_schema(db_engine) -> None:
                 "ON story_states (chat_id)"
             )
         )
+
+        # Sprint 9 (Story Consolidation §17): last_consolidation_rounds — число
+        # раундов на момент последней консолидации (trigger §17.1).
+        try:
+            story_state_columns = {
+                col["name"] for col in inspector.get_columns("story_states")
+            }
+        except Exception:  # noqa: BLE001 — таблица может отсутствовать на старых БД
+            story_state_columns = set()
+        if story_state_columns and "last_consolidation_rounds" not in story_state_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE story_states "
+                    "ADD COLUMN last_consolidation_rounds INTEGER"
+                )
+            )
+            logger.info("Added last_consolidation_rounds column to story_states")
 
         conn.execute(
             text(

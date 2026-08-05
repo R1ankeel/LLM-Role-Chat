@@ -1,4 +1,4 @@
-"""Dynamic Story State (Plans/update20.md §16, Sprint 8).
+"""Dynamic Story State (Plans/update20.md §16, Sprint 8/9).
 
 Сюжет как отдельная ось: Original Plot + Current Story State + Story History
 + Phase. Write-path — пост-раунд (story_events + story_state), read-path —
@@ -7,6 +7,7 @@
 
 Sprint 8: ``story_events.py`` (проекция world_events раунда) и
 ``story_state.py`` (story_states, phase, активные story_threads, summary).
-Поздние спринты добавляют ``story_threads.py`` (Sprint 10), consolidation
-(Sprint 9), crisis (Sprint 11).
+Sprint 9: ``story_consolidation.py`` — LLM-обновление Current Story State с
+валидацией (original plot diff, grounding, rollback) под benchmark gate §27.
+Поздние спринты добавляют ``story_threads.py`` (Sprint 10), crisis (Sprint 11).
 """

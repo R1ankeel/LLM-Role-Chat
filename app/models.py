@@ -719,8 +719,14 @@ class StoryState(Base):
     current_story: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     story_phase: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     updated_round_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # Versioning для rollback (Sprint 9)
+    # Versioning для rollback (Sprint 9): при консолидации версия растёт,
+    # невалидный результат не применяется — предыдущая версия остаётся.
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Число раундов (distinct round_id в world_events) на момент последней
+    # консолидации — для trigger §17.1 (интервал в раундах).
+    last_consolidation_rounds: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
