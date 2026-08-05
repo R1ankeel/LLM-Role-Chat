@@ -27,7 +27,6 @@ from .relationship_interpreter import interpret as _interpret_rel, TRUST_LOW
 from .config import settings
 from .context_builder import ContextBuilder
 from .database import AsyncSessionLocal
-from .context_state import ctx_state
 from .repetition_detector import analyze_response
 from .role_isolation import get_other_character_names
 from .stimuli import extract_stimuli
@@ -1231,7 +1230,6 @@ async def process_user_message_streaming(
             current_scene_state=scene_state,
             character_names=character_names,
             locations=chat_locations,
-            num_ctx=ctx_state.get(chat_id),
         )
         if scene_update:
             # Save location-related data first (without character_locations — confirmed later).

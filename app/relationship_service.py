@@ -43,6 +43,16 @@ VALID_TYPES = set(settings.relationship_valid_types)
 TRANSITIONS: dict[str, set[str]] = {
     k: set(v) for k, v in settings.relationship_transition_rules.items()
 }
+# Family relations are UI-managed only: the engine may neither create nor
+# remove them, even when a transition exists in the graph. Only the manual
+# update endpoint (strict=False) can set/clear these types.
+FAMILY_TYPES = set(settings.relationship_family_types)
+
+
+def is_family_type(type_name: str) -> bool:
+    """True for UI-only family types (``семья``/``родитель``/``брат_сестра``)."""
+    return type_name in FAMILY_TYPES
+
 
 # Prompt-injection markers that invalidate an issue text (§14). Issue text is
 # LLM-produced data that later lands in another LLM's context, so obvious
@@ -339,13 +349,21 @@ async def apply_delta(
     old_type = rel.relationship_type
     new_type = delta.relationship_type or old_type
 
-    if new_type != old_type and not validate_transition(old_type, new_type):
-        logger.warning(
-            "Invalid transition %s -> %s for rel %d->%d; keeping %s",
-            old_type, new_type, delta.source_character_id,
-            delta.target_character_id, old_type,
-        )
-        new_type = old_type
+    if new_type != old_type:
+        if is_family_type(old_type) or is_family_type(new_type):
+            logger.warning(
+                "Family relation type change %s -> %s blocked for rel %d->%d (UI-only)",
+                old_type, new_type, delta.source_character_id,
+                delta.target_character_id,
+            )
+            new_type = old_type
+        elif not validate_transition(old_type, new_type):
+            logger.warning(
+                "Invalid transition %s -> %s for rel %d->%d; keeping %s",
+                old_type, new_type, delta.source_character_id,
+                delta.target_character_id, old_type,
+            )
+            new_type = old_type
 
     old_values = (
         rel.affection, rel.trust, rel.attraction, rel.resentment, rel.jealousy,

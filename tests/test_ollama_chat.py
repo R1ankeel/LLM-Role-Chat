@@ -196,6 +196,73 @@ def test_chat_payload_think_flag():
     assert "think" not in payload_nostream
 
 
+def test_chat_payload_num_ctx_num_predict():
+    payload = ollama_client._build_chat_payload(
+        "m",
+        [{"role": "user", "content": "hi"}],
+        0.8,
+        None,
+        stream=False,
+        num_ctx=16000,
+        num_predict=1024,
+    )
+    assert payload["options"]["num_ctx"] == 16000
+    assert payload["options"]["num_predict"] == 1024
+
+
+def test_generate_payload_num_ctx_num_predict():
+    payload = ollama_client._build_generate_payload(
+        "m",
+        "hi",
+        0.8,
+        None,
+        stream=False,
+        num_ctx=8000,
+        num_predict=512,
+    )
+    assert payload["options"]["num_ctx"] == 8000
+    assert payload["options"]["num_predict"] == 512
+
+
+@pytest.mark.asyncio
+async def test_extract_scene_state_uses_default_runtime_options(monkeypatch):
+    """Scene State: num_ctx/num_predict по умолчанию из .env, без think."""
+    captured: dict = {}
+
+    async def fake_post(url, json=None, **kwargs):
+        captured["url"] = url
+        captured["payload"] = json
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": '{"time_of_day": "день", "character_locations": {}}',
+            }
+        }
+        return response
+
+    client = MagicMock()
+    client.post = fake_post
+    monkeypatch.setattr("app.ollama_client.settings.sensors_scene_state_num_ctx", 8000)
+    monkeypatch.setattr(
+        "app.ollama_client.settings.sensors_scene_state_num_predict", 1024
+    )
+    with patch("app.ollama_client.settings.use_chat_api", True):
+        result = await ollama_client.extract_scene_state(
+            client,
+            "m",
+            "Игрок: Привет",
+            None,
+            {1: "Аня"},
+            locations="[]",
+        )
+    assert result is not None
+    assert captured["payload"]["options"]["num_ctx"] == 8000
+    assert captured["payload"]["options"]["num_predict"] == 1024
+    assert "think" not in captured["payload"]
+
+
 @pytest.mark.asyncio
 async def test_generate_uses_chat_endpoint():
     character = _make_character()

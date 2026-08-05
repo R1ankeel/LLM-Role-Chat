@@ -576,6 +576,7 @@ def _build_generate_payload(
     stream: bool,
     enable_thinking: bool | None = None,
     num_ctx: int | None = None,
+    num_predict: int | None = None,
     format_schema: dict | None = None,
 ) -> dict:
     options: dict = {"temperature": temperature}
@@ -583,6 +584,8 @@ def _build_generate_payload(
         options["stop"] = stop
     if num_ctx and num_ctx > 0:
         options["num_ctx"] = num_ctx
+    if num_predict and num_predict > 0:
+        options["num_predict"] = num_predict
 
     payload: dict = {
         "model": model_name,
@@ -606,6 +609,7 @@ def _build_chat_payload(
     stream: bool,
     enable_thinking: bool | None = None,
     num_ctx: int | None = None,
+    num_predict: int | None = None,
     tools: list | None = None,
     format_schema: dict | None = None,
 ) -> dict:
@@ -614,6 +618,8 @@ def _build_chat_payload(
         options["stop"] = stop
     if num_ctx and num_ctx > 0:
         options["num_ctx"] = num_ctx
+    if num_predict and num_predict > 0:
+        options["num_predict"] = num_predict
 
     payload: dict = {
         "model": model_name,
@@ -2370,6 +2376,7 @@ async def extract_scene_state(
     character_names: dict[int, str],
     locations: str = "[]",
     num_ctx: int | None = None,
+    num_predict: int | None = None,
 ) -> dict | None:
     """
     Extract updated scene state (location + time only) from round history using LLM with JSON Schema.
@@ -2381,11 +2388,19 @@ async def extract_scene_state(
         current_scene_state: Current scene state (None if first round)
         character_names: Map of character_id -> name for reference
         locations: JSON array of allowed locations
+        num_ctx: KV window (defaults to ``SENSORS_SCENE_STATE_NUM_CTX``)
+        num_predict: max output tokens (defaults to ``SENSORS_SCENE_STATE_NUM_PREDICT``)
     
     Returns:
         Dict with time_of_day, character_locations or None on failure
     """
     import json
+    # По умолчанию (из .env) — только если вызывающий не передал явные значения.
+    if not num_ctx:
+        num_ctx = settings.sensors_scene_state_num_ctx
+    if not num_predict:
+        num_predict = settings.sensors_scene_state_num_predict
+
     # Build current state dict for prompt
     if current_scene_state:
         current_state = {
@@ -2401,9 +2416,12 @@ async def extract_scene_state(
     char_names_list = list(character_names.values())
     messages = _build_scene_state_messages(current_state, round_history_text, char_names_list, locations=locations)
 
+    # Все sensor-задачи строго в режиме instant (без think) — §5.1.
     scene_options: dict = {"temperature": 0.3}
     if num_ctx and num_ctx > 0:
         scene_options["num_ctx"] = num_ctx
+    if num_predict and num_predict > 0:
+        scene_options["num_predict"] = num_predict
 
     try:
         # Try with JSON Schema first (Ollama native)

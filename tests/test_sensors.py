@@ -258,6 +258,37 @@ async def test_run_handles_markdown_fence(enabled_service, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_invoke_sends_per_task_runtime_options(enabled_service, monkeypatch):
+    """num_ctx/num_predict берутся из .env (default) на каждую sensor-задачу."""
+    monkeypatch.setattr("app.sensors_service.settings.sensors_emotion_enabled", True)
+    monkeypatch.setattr("app.sensors_service.settings.sensors_emotion_num_ctx", 8000)
+    monkeypatch.setattr("app.sensors_service.settings.sensors_emotion_num_predict", 512)
+    payload = '{"emotion": "радость", "intensity": 0.6, "confidence": 0.7}'
+    client, captured = _fake_client(payload)
+    result = await enabled_service.run(client, task="emotion", minimal_context="x")
+    assert result is not None
+    options = captured["payload"]["options"]
+    assert options["num_ctx"] == 8000
+    assert options["num_predict"] == 512
+    # строго instant: think не отправляется
+    assert "think" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_task_without_runtime_options_omits_them(enabled_service, monkeypatch):
+    """Задача без настроек (event) запрашивается без num_ctx/num_predict."""
+    monkeypatch.setattr("app.sensors_service.settings.sensors_event_enabled", True)
+    payload = (
+        '{"event_type": "speech", "source_character": "Анна", "targets": ["Пётр"], '
+        '"importance": 0.6, "audibility": "full", "visibility": "full"}'
+    )
+    client, captured = _fake_client(payload)
+    await enabled_service.run(client, task="event", minimal_context="x")
+    options = captured["payload"]["options"]
+    assert "num_ctx" not in options
+    assert "num_predict" not in options
+    assert "think" not in captured["payload"]
+@pytest.mark.asyncio
 async def test_invalid_json_returns_none_no_crash(enabled_service, monkeypatch):
     monkeypatch.setattr("app.sensors_service.settings.sensors_event_enabled", True)
     client, _ = _fake_client("это не JSON {")

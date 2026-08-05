@@ -13,6 +13,7 @@ from app.relationship_service import (
     get_or_create_relationship,
     get_relationship,
     get_recent_events,
+    is_family_type,
     list_received_relationships,
     list_relationships_for_character,
     update_relationship_fields,
@@ -39,6 +40,18 @@ class TestValidateTransition:
 
     def test_unknown_type_reverts_to_false(self):
         assert validate_transition("нейтральное", "nonexistent_type") is False
+
+
+class TestIsFamilyType:
+    def test_family_types(self):
+        assert is_family_type("семья") is True
+        assert is_family_type("родитель") is True
+        assert is_family_type("брат_сестра") is True
+
+    def test_non_family_types(self):
+        assert is_family_type("друг") is False
+        assert is_family_type("нейтральное") is False
+        assert is_family_type("враг") is False
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +175,62 @@ class TestApplyDelta:
         )
         rel = await apply_delta(db_session, delta, chat.id)
         assert rel.relationship_type == "нейтральное"  # rejected, stays neutral
+
+    async def test_family_type_cannot_be_removed_by_engine(
+        self, db_session: AsyncSession, chat, three_characters
+    ):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        rel = await update_relationship_fields(
+            db_session, rel, relationship_type="родитель",
+        )
+        assert rel.relationship_type == "родитель"
+
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=5,
+            relationship_type="друг",
+            importance=7,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        assert rel.relationship_type == "родитель"  # blocked, stays family
+        assert rel.affection == 55  # metrics still applied
+
+    async def test_family_type_cannot_be_set_by_engine(
+        self, db_session: AsyncSession, chat, three_characters
+    ):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        assert rel.relationship_type == "нейтральное"
+
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=5,
+            relationship_type="семья",
+            importance=7,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        assert rel.relationship_type == "нейтральное"  # blocked, no family via engine
+
+    async def test_family_type_blocked_even_with_valid_transition(
+        self, db_session: AsyncSession, chat, three_characters
+    ):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        rel = await update_relationship_fields(
+            db_session, rel, relationship_type="семья",
+        )
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=0,
+            relationship_type="близкий_друг",  # valid per transition graph
+            importance=7,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        assert rel.relationship_type == "семья"
 
     async def test_description_updates_only_when_flag_set(self, db_session: AsyncSession, chat, three_characters):
         a, b, _ = three_characters

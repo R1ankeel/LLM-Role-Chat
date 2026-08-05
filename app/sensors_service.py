@@ -74,6 +74,16 @@ _TASK_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+# num_ctx / num_predict на каждую sensor-задачу (default из .env). Задачи, не
+# перечисленные здесь (например ``event``), запрашиваются без этих параметров.
+_SENSOR_RUNTIME_OPTIONS: dict[str, tuple[str, str]] = {
+    "perception": ("sensors_perception_num_ctx", "sensors_perception_num_predict"),
+    "emotion": ("sensors_emotion_num_ctx", "sensors_emotion_num_predict"),
+    "memory": ("sensors_memory_num_ctx", "sensors_memory_num_predict"),
+    "relationship": ("sensors_relationship_num_ctx", "sensors_relationship_num_predict"),
+}
+
+
 def _parse_sensor_json(content: str) -> Any:
     """Распарсить JSON из ответа Sensors (без markdown-обёрток)."""
     text = content.strip()
@@ -122,6 +132,18 @@ class SensorsService:
         ]
 
     # ------------------------------ invoke ------------------------------
+    @staticmethod
+    def _task_runtime_options(task: str) -> dict[str, int] | None:
+        """num_ctx/num_predict задачи из .env (default), None — нет кастома."""
+        names = _SENSOR_RUNTIME_OPTIONS.get(task)
+        if names is None:
+            return None
+        ctx = getattr(settings, names[0], None)
+        predict = getattr(settings, names[1], None)
+        if not ctx and not predict:
+            return None
+        return {"num_ctx": ctx or None, "num_predict": predict or None}
+
     async def invoke(
         self,
         client: Any,
@@ -146,6 +168,9 @@ class SensorsService:
             return None
 
         messages = self.build_prompt(task, minimal_context, current_state)
+        runtime = self._task_runtime_options(task) or {}
+        num_ctx = runtime.get("num_ctx")
+        num_predict = runtime.get("num_predict")
         try:
             if settings.use_chat_api:
                 payload = ollama_client._build_chat_payload(
@@ -155,6 +180,8 @@ class SensorsService:
                     [],
                     stream=False,
                     enable_thinking=False,
+                    num_ctx=num_ctx,
+                    num_predict=num_predict,
                     format_schema=schema,
                 )
                 response = await asyncio.wait_for(
@@ -172,6 +199,8 @@ class SensorsService:
                 [],
                 stream=False,
                 enable_thinking=False,
+                num_ctx=num_ctx,
+                num_predict=num_predict,
                 format_schema=schema,
             )
             response = await asyncio.wait_for(

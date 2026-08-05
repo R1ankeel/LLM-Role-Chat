@@ -274,6 +274,10 @@ class Settings(BaseSettings):
         "незнакомец": ["знакомый", "нейтральное", "соперник"],
         "знакомый": ["друг", "нейтральное", "незнакомец"],
     }
+    relationship_family_types: tuple[str, ...] = Field(
+        default=("семья", "родитель", "брат_сестра"),
+        alias="RELATIONSHIP_FAMILY_TYPES",
+    )
     relationship_min_importance: int = Field(default=3, alias="RELATIONSHIP_MIN_IMPORTANCE")
     relationship_analyze_only_interacting_pairs: bool = Field(
         default=True, alias="RELATIONSHIP_ANALYZE_ONLY_INTERACTING_PAIRS"
@@ -475,6 +479,32 @@ class Settings(BaseSettings):
     # Отдельный таймаут для sensor-задач (короче, чем у генерации) —
     # graceful degradation §5.1.8: недоступность Sensors не должна влиять на раунд.
     sensors_timeout: float = Field(default=60.0, alias="SENSORS_TIMEOUT")
+    # num_ctx / num_predict на каждую sensor-задачу (только как default в `.env`).
+    # Меньший num_ctx ускоряет вызовы; num_predict ограничивает ответ (короткие JSON).
+    sensors_emotion_num_ctx: int = Field(default=8000, alias="SENSORS_EMOTION_NUM_CTX")
+    sensors_emotion_num_predict: int = Field(default=512, alias="SENSORS_EMOTION_NUM_PREDICT")
+    sensors_perception_num_ctx: int = Field(
+        default=16000, alias="SENSORS_PERCEPTION_NUM_CTX"
+    )
+    sensors_perception_num_predict: int = Field(
+        default=1024, alias="SENSORS_PERCEPTION_NUM_PREDICT"
+    )
+    sensors_memory_num_ctx: int = Field(default=16000, alias="SENSORS_MEMORY_NUM_CTX")
+    sensors_memory_num_predict: int = Field(
+        default=1024, alias="SENSORS_MEMORY_NUM_PREDICT"
+    )
+    sensors_relationship_num_ctx: int = Field(
+        default=16000, alias="SENSORS_RELATIONSHIP_NUM_CTX"
+    )
+    sensors_relationship_num_predict: int = Field(
+        default=1024, alias="SENSORS_RELATIONSHIP_NUM_PREDICT"
+    )
+    sensors_scene_state_num_ctx: int = Field(
+        default=8000, alias="SENSORS_SCENE_STATE_NUM_CTX"
+    )
+    sensors_scene_state_num_predict: int = Field(
+        default=1024, alias="SENSORS_SCENE_STATE_NUM_PREDICT"
+    )
 
     # ----- Structured World Events (Plans/update20.md §15, Sprint 1) -----
     # Пост-раундная event extraction: LLM извлекает из истории раунда
