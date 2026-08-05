@@ -281,6 +281,40 @@ class Settings(BaseSettings):
     relationship_decay_resentment_per_round: int = Field(
         default=1, alias="RELATIONSHIP_DECAY_RESENTMENT_PER_ROUND"
     )
+    # Dynamic decay (Sprint 7, docs/relations.md §18): при `dynamic_decay_enabled`
+    # базовая ставка умножается на character_factor из character_state (stress).
+    # Направление: выше stress → медленнее затухание (держится за обиду/ревность).
+    # Выключен — legacy-поведение (фиксированные ставки выше). Canary.
+    dynamic_decay_enabled: bool = Field(
+        default=False, alias="DYNAMIC_DECAY_ENABLED"
+    )
+    dynamic_decay_jealousy_base_rate: int = Field(
+        default=3, alias="DYNAMIC_DECAY_JEALOUSY_BASE_RATE"
+    )
+    dynamic_decay_resentment_base_rate: int = Field(
+        default=1, alias="DYNAMIC_DECAY_RESENTMENT_BASE_RATE"
+    )
+    dynamic_decay_stress_sensitivity: float = Field(
+        default=0.5, alias="DYNAMIC_DECAY_STRESS_SENSITIVITY"
+    )
+    dynamic_decay_factor_min: float = Field(
+        default=0.4, alias="DYNAMIC_DECAY_FACTOR_MIN"
+    )
+    dynamic_decay_factor_max: float = Field(
+        default=1.6, alias="DYNAMIC_DECAY_FACTOR_MAX"
+    )
+    # Reciprocity pipeline (Sprint 7, docs/relations.md §10): направленные дельты
+    # зависят от beliefs — уверенность персонажа в факте о другом снижает кап
+    # дельты (множитель по confidence). Выключен — legacy-кап без beliefs.
+    reciprocity_enabled: bool = Field(
+        default=False, alias="RECIPROCITY_ENABLED"
+    )
+    reciprocity_belief_dampening: float = Field(
+        default=0.5, alias="RECIPROCITY_BELIEF_DAMPENING"
+    )
+    reciprocity_belief_multiplier_min: float = Field(
+        default=0.5, alias="RECIPROCITY_BELIEF_MULTIPLIER_MIN"
+    )
 
     # Memory integration (Sprint 3 item 19): create memories for significant relationship events
     relationship_memory_enabled: bool = Field(

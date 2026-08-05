@@ -1419,6 +1419,27 @@ async def _analyze_and_update_relationships(
                                 chat_id, source_char.id, target_char.id, exc,
                             )
 
+                    # Reciprocity pipeline (Sprint 7, §10): belief-driven cap
+                    # multiplier for this directed pair. Applied by
+                    # ``_constrain_pair_delta`` in both the batch and the
+                    # per-pair fallback paths.
+                    if settings.reciprocity_enabled:
+                        try:
+                            pair_ctx["reciprocity_belief_multiplier"] = (
+                                await relationship_service.compute_reciprocity_belief_multiplier(
+                                    db,
+                                    source_char.id,
+                                    target_char.name,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "[chat_id=%d] Failed to compute belief multiplier "
+                                "for %d->%d: %s",
+                                chat_id, source_char.id, target_char.id, exc,
+                            )
+                            pair_ctx["reciprocity_belief_multiplier"] = 1.0
+
                     if (
                         not pair_ctx["any_evidence"]
                         and settings.relationship_analyze_only_interacting_pairs
@@ -1644,6 +1665,24 @@ async def _analyze_and_update_relationships(
                 summary["applied_deltas"] = applied
                 affected_relationship_ids.update(affected)
 
+            # Sensors relationship hook (Sprint 7, §5.1.3): SensorsModel
+            # предлагает дельты для пары; применяются ТОЛЬКО через существующую
+            # систему правил (evidence gating, _constrain_pair_delta, caps).
+            # Sensors отношения напрямую не меняет. 0–1 вызов на раунд (§24.1).
+            try:
+                sensors_applied, sensors_affected = (
+                    await _run_sensors_relationship_proposal(
+                        db, chat_id, client, pairs, round_id=round_id,
+                    )
+                )
+                summary["applied_deltas"] += sensors_applied
+                affected_relationship_ids.update(sensors_affected)
+            except Exception as exc:
+                logger.warning(
+                    "[chat_id=%d] Sensors relationship proposal failed: %s",
+                    chat_id, exc,
+                )
+
             # Deterministic salience tick: advance counters for unmentioned
             # open issues, reset mentioned ones (§7.4, Sprint 1 п.7).
             try:
@@ -1717,6 +1756,84 @@ async def _analyze_and_update_relationships(
         logger.exception("[chat_id=%d] Relationship analysis failed", chat_id)
         summary["error"] = "relationship analysis failed"
         return summary
+
+
+async def _run_sensors_relationship_proposal(
+    db: AsyncSession,
+    chat_id: int,
+    client: httpx.AsyncClient,
+    pairs: list[dict],
+    *,
+    round_id: str,
+) -> tuple[int, set[int]]:
+    """Sensors relationship hook (Sprint 7, §5.1.3).
+
+    SensorsModel предлагает ``{affection_delta, trust_delta, resentment_delta,
+    jealousy_delta, attraction_delta}`` для пары source→target. Дельты
+    применяются ТОЛЬКО через существующую систему правил: evidence gating
+    (``_constrain_pair_delta``), caps, normalize, decay. Sensors отношения
+    напрямую не меняет и не пишет в БД (§5.1.4).
+
+    Один вызов на раунд для наиболее «значимой» пары (direct > observed >
+    hearsay; среди равных — самая длинная выдержка). Возвращает
+    ``(applied_count, affected_relationship_ids)``.
+    """
+    from .sensors_service import sensors_service
+
+    if not settings.sensors_relationship_enabled:
+        return 0, set()
+    if not sensors_service.is_enabled("relationship"):
+        return 0, set()
+
+    candidates = [
+        p for p in pairs if _evidence_mode(p["pair_ctx"]) != "none"
+    ]
+    if not candidates:
+        return 0, set()
+
+    mode_rank = {"direct": 3, "observed": 2, "hearsay": 1}
+    candidates.sort(
+        key=lambda p: (
+            mode_rank.get(_evidence_mode(p["pair_ctx"]), 0),
+            len(p["pair_ctx"].get("excerpt") or ""),
+        ),
+        reverse=True,
+    )
+    best = candidates[0]
+
+    minimal_context = best["pair_ctx"].get("excerpt") or "взаимодействия не было"
+    current_state = (
+        f"{best['source_name']} -> {best['target_name']}: "
+        f"affection={best['affection']}, trust={best['trust']}, "
+        f"attraction={best['attraction']}, resentment={best['resentment']}, "
+        f"jealousy={best['jealousy']}, type={best['current_type']}"
+    )
+    result = await sensors_service.run(
+        client,
+        task="relationship",
+        minimal_context=minimal_context,
+        current_state=current_state,
+    )
+    if result is None:
+        return 0, set()
+
+    delta = schemas.RelationshipDelta(
+        source_character_id=best["source_id"],
+        target_character_id=best["target_id"],
+        delta_affection=int(result.get("affection_delta", 0)),
+        delta_trust=int(result.get("trust_delta", 0)),
+        delta_attraction=int(result.get("attraction_delta", 0)),
+        delta_resentment=int(result.get("resentment_delta", 0)),
+        delta_jealousy=int(result.get("jealousy_delta", 0)),
+        reason="Sensors relationship analysis",
+        description="",
+        importance=5,
+    )
+    gated = _constrain_pair_delta(delta, best["rel"], best["pair_ctx"])
+    if gated is None:
+        return 0, set()
+    await relationship_service.apply_delta(db, gated, chat_id, round_id=round_id)
+    return 1, {best["rel"].id}
 
 
 async def _run_per_pair_analysis(
@@ -2037,6 +2154,13 @@ def _constrain_pair_delta(
         cap = max(1, int(cap))
     else:
         cap = settings.relationship_reflection_delta_cap
+    # Reciprocity pipeline (Sprint 7, §10): a strong belief of the source
+    # about the target dampens the delta cap (deterministic multiplier by
+    # confidence). Computed per-pair and stashed on pair_ctx.
+    belief_multiplier = float(
+        pair_ctx.get("reciprocity_belief_multiplier") or 1.0
+    )
+    cap = max(1, int(cap * belief_multiplier))
     updates: dict = {
         "delta_affection": max(-cap, min(cap, delta.delta_affection)),
         "delta_trust": max(-cap, min(cap, delta.delta_trust)),

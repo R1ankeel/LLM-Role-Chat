@@ -1887,6 +1887,55 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: decay не обнуляет trust при неактивности; anchor-блок ≤ cap.
 - **НЕ делать**: не зеркалировать рёбра; не ломать trajectory.
 
+#### Sprint 7 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (всё под canary-флагами; при выключенных — legacy-пути не тронуты):
+  1. `app/config.py`: блок «Relationship Evolution v2» — `DYNAMIC_DECAY_ENABLED=false`,
+     `DYNAMIC_DECAY_JEALOUSY_BASE_RATE=3`, `DYNAMIC_DECAY_RESENTMENT_BASE_RATE=1`,
+     `DYNAMIC_DECAY_STRESS_SENSITIVITY=0.5`, `DYNAMIC_DECAY_FACTOR_MIN=0.4`,
+     `DYNAMIC_DECAY_FACTOR_MAX=1.6`; `RECIPROCITY_ENABLED=false`,
+     `RECIPROCITY_BELIEF_DAMPENING=0.5`, `RECIPROCITY_BELIEF_MULTIPLIER_MIN=0.5`;
+  2. `app/relationship_service.py`:
+     - `_dynamic_decay_factor(state)` — чистый хелпер: factor = 1 + sensitivity·(0.5−stress),
+       клампинг в [factor_min, max], 1.0 без state/stress;
+     - `apply_decay` — при `dynamic_decay_enabled` грузит `character_states` чата одним
+       запросом и масштабирует base_rate × factor per-rel; legacy-путь без флага
+       идентичен; decay-событие только при пересечении десятка (не тронуто);
+     - `compute_reciprocity_belief_multiplier(db, source_id, target_name)` —
+       clamp(1 − dampening·max_confidence, min, 1.0) по beliefs source о target;
+       1.0 при выключенных флагах/нет belief/ошибке (не роняет раунд);
+     - `build_relationships_block` — при `anchors_enabled` грузит якоря одним запросом
+       (`crud.get_anchors_for_relationships`), top-K через `crud.select_top_anchors`
+       (importance×recency, дедуп event_id), рендер «якорь: {emotion} (важность {x})»;
+     - `build_behavior_drivers_block` — при `beliefs_enabled` добавляет belief-драйверы
+       «Ты знаешь/подозреваешь/полагаешь, что …» с весом по confidence;
+  3. `app/chat_engine.py`:
+     - `_constrain_pair_delta` — observed/hearsay cap умножается на
+       `pair_ctx["reciprocity_belief_multiplier"]` (floor 1), direct не трогается;
+     - в `_analyze_and_update_relationships` при `reciprocity_enabled` для каждой пары
+       вычисляется и кэшируется множитель;
+     - `_run_sensors_relationship_proposal(db, chat_id, client, pairs, round_id)` —
+       Sensors relationship hook: одна пайра за раунд (none-отсекаются), результат
+       SensorsService.run(task="relationship") проходит `_constrain_pair_delta` и
+       применяется через `apply_delta`;
+  4. Sensors-слой relationship уже поддерживал задачу (JSON-схема + инструкция +
+     `is_enabled`), правок не потребовалось.
+- **Тесты**: `test_relationship_decay_dynamic.py` (14), `test_relationship_reciprocity_v2.py`
+  (13), `test_anchors_activation.py` (9): формула фактора + клампинг + нейтральность
+  без state; slow/fast decay по stress (сравнение с legacy); affection/trust/attraction
+  не затухают; decay-событие на границе десятка; множитель по confidence (сильная →
+  кап слабее, min-клампинг, case/whitespace, ошибка БД benign); cap scaled в
+  observed/hearsay, direct не тронут, floor 1; рендер якорей в блоке, top-K,
+  дедуп event_id, пусто при выключенном флаге, ошибка загрузки benign.
+- **Полный прогон**: 982 passed; 28 failed — все в НЕ тронутых модулях
+  (task_queue, memory_service/memory_perception, embeddings, context_state,
+  token_counter, stream_disconnect) — пред-существующие поломки тестов
+  (async-сигнатуры create_characters/run_job и т.п.), подтверждены на чистом
+  master, к Sprint 7 не относятся.
+- **НЕ сделано** (задел §18/§10): полный Sensors relationship hook в каждый раунд —
+  реализован как одна пайра за раунд (cost); decay_profile на таблице —
+  предпочтительно конфиг + character_states (как запланировано).
+
 ### Sprint 8 — Dynamic Story State (P0)
 
 - **Цель**: Original Plot + Current Story State + Story History + Phase.
@@ -2411,8 +2460,8 @@ Sprint 2  — Memory Architecture v2: типы + якоря (P0) ✅ (2026-08-05
 Sprint 3  — Character State (P0) ✅ (2026-08-05)
 Sprint 4  — Attention (P1) ✅ (2026-08-05)
 Sprint 5  — Belief System (P0)
-Sprint 6  — Hybrid Retrieval v2 (P1)
-Sprint 7  — Relationship Evolution v2 (P1)
+Sprint 6  — Hybrid Retrieval v2 (P1) ✅ (2026-08-05)
+Sprint 7  — Relationship Evolution v2 (P1) ✅ (2026-08-05)
 Sprint 8  — Dynamic Story State (P0)
 Sprint 9  — Story Consolidation (P1)
 Sprint 10 — Plot Engine + NPC Intent + NPC Plans (P1)

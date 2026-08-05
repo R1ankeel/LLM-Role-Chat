@@ -480,12 +480,45 @@ async def build_relationships_block(
     if not rels:
         return ""
 
+    # Sprint 7 (§7/§13): anchor activation — топ-K эмоциональных якорей каждого
+    # отношения (importance × recency, дедуп по event_id) рендерятся в блок
+    # отношений при `anchors_enabled`. Блок ≤ RELATIONSHIP_ANCHOR_MAX.
+    anchors_by_rel: dict[int, list] = {}
+    if settings.anchors_enabled:
+        try:
+            from . import crud
+
+            anchors_by_rel = await crud.get_anchors_for_relationships(
+                db, [r.id for r in rels], limit=None,
+            )
+        except Exception as exc:  # noqa: BLE001 — блок не роняет генерацию
+            logger.warning(
+                "[chat_id=%d] Failed to load anchors for character %d: %s",
+                chat_id, character_id, exc,
+            )
+            anchors_by_rel = {}
+
     blocks: list[str] = [f"Отношения {character_name} к другим персонажам:"]
     for rel in rels:
         target_name = all_characters.get(rel.target_character_id, f"ID:{rel.target_character_id}")
         events = await get_recent_events(db, rel, limit=max_events)
         open_issues = await list_open_issues(db, rel)
-        blocks.append(format_relationship_for_prompt(rel, target_name, events, open_issues=open_issues))
+        block = format_relationship_for_prompt(rel, target_name, events, open_issues=open_issues)
+        if settings.anchors_enabled:
+            anchors = anchors_by_rel.get(rel.id, [])
+            if anchors:
+                try:
+                    from . import crud
+
+                    top_anchors = crud.select_top_anchors(
+                        anchors, settings.relationship_anchor_max,
+                    )
+                except Exception:
+                    top_anchors = anchors[: settings.relationship_anchor_max]
+                for anchor in top_anchors:
+                    emotion = (anchor.emotion or "").strip() or "нейтрально"
+                    block += f"\n  якорь: {emotion} (важность {anchor.importance:.1f})"
+        blocks.append(block)
     return "\n".join(blocks)
 
 
@@ -519,12 +552,31 @@ async def build_behavior_drivers_block(
     if not rels:
         return ""
 
+    # Sprint 7 (§10): behavior drivers учитывают beliefs — убеждение персонажа
+    # о другом (subject = имя цели) добавляет тенденцию с весом по confidence.
+    beliefs_by_subject: dict[str, dict] = {}
+    if settings.beliefs_enabled:
+        beliefs_by_subject = await _beliefs_by_subject(db, character_id)
+
     candidates: list[tuple[int, str]] = []
     for rel in rels:
         target_name = all_characters.get(rel.target_character_id, f"ID:{rel.target_character_id}")
         open_issues = await list_open_issues(db, rel)
         interp = interpret(rel, open_issues=open_issues)
         candidates.extend(weighted_behavior_drivers(interp, target_name))
+
+        belief = beliefs_by_subject.get((target_name or "").strip().lower())
+        if belief:
+            marker = "Ты знаешь" if belief.get("type") == "fact" else (
+                "Ты подозреваешь" if belief.get("type") == "suspicion" else "Ты полагаешь"
+            )
+            snippet = f"{belief.get('predicate', '')} {belief.get('object', '')}".strip()
+            if snippet:
+                confidence = float(belief.get("confidence", 0.5) or 0.5)
+                weight = max(1, round(4 * confidence))
+                candidates.append(
+                    (weight, f"{marker}, что {target_name} {snippet} (уверенность {confidence:.2f})")
+                )
 
     candidates.sort(key=lambda item: (-item[0], item[1]))
     top = [text for _, text in candidates[:max(0, int(max_drivers))]]
@@ -561,6 +613,51 @@ async def _beliefs_by_subject(
             character_id, exc,
         )
         return {}
+
+
+async def compute_reciprocity_belief_multiplier(
+    db: AsyncSession,
+    source_character_id: int,
+    target_name: str,
+) -> float:
+    """Belief-driven cap multiplier for a directed pair (Sprint 7, §10).
+
+    Reciprocity pipeline: if the *source* has a belief about the target
+    (``subject`` matches the target's name), a strong confidence dampens the
+    delta cap — the character acts on what it believes, not on the raw event.
+
+    multiplier = clamp(1 - dampening * max_confidence, min, 1.0)
+
+    Returns 1.0 when ``reciprocity_enabled``/``beliefs_enabled`` is off, no
+    matching belief exists, or confidence is too low.
+    """
+    if not settings.reciprocity_enabled or not settings.beliefs_enabled:
+        return 1.0
+    try:
+        from . import crud
+
+        beliefs = await crud.get_beliefs_for_character(db, source_character_id)
+    except Exception as exc:  # noqa: BLE001 — никогда не роняет раунд
+        logger.warning(
+            "Failed to load beliefs for reciprocity multiplier (character=%s): %s",
+            source_character_id, exc,
+        )
+        return 1.0
+
+    target_key = (target_name or "").strip().lower()
+    if not target_key:
+        return 1.0
+    max_confidence = 0.0
+    for belief in beliefs:
+        subject = (belief.subject or "").strip().lower()
+        if subject and subject == target_key:
+            max_confidence = max(
+                max_confidence, float(getattr(belief, "confidence", 0.0) or 0.0)
+            )
+    if max_confidence <= 0.0:
+        return 1.0
+    multiplier = 1.0 - settings.reciprocity_belief_dampening * max_confidence
+    return max(settings.reciprocity_belief_multiplier_min, min(1.0, multiplier))
 
 
 def _epistemic_belief_line(source_name: str, belief: dict) -> str:
@@ -1164,6 +1261,33 @@ async def tick_open_issues(
 # ---------------------------------------------------------------------------
 # Decay (Sprint 3 item 16, docs/relations.md §18)
 # ---------------------------------------------------------------------------
+def _dynamic_decay_factor(state) -> float:
+    """Character factor for dynamic decay (Sprint 7, §18).
+
+    Derives from ``character_state.stress`` (0..1): a stressed character holds
+    onto resentment/jealousy longer, so decay is slower (factor < 1); a calm
+    character lets go faster (factor > 1). Neutral stress (0.5) → 1.0.
+
+    Returns the clamped factor in [dynamic_decay_factor_min, max]; 1.0 when no
+    state row or stress is unknown.
+    """
+    if state is None:
+        return 1.0
+    stress = getattr(state, "stress", None)
+    if stress is None:
+        return 1.0
+    try:
+        stress = max(0.0, min(1.0, float(stress)))
+    except (TypeError, ValueError):
+        return 1.0
+    sensitivity = settings.dynamic_decay_stress_sensitivity
+    factor = 1.0 + sensitivity * (0.5 - stress)
+    return max(
+        settings.dynamic_decay_factor_min,
+        min(settings.dynamic_decay_factor_max, factor),
+    )
+
+
 async def apply_decay(
     db: AsyncSession,
     chat_id: int,
@@ -1174,6 +1298,10 @@ async def apply_decay(
     - jealousy: -RELATIONSHIP_DECAY_JEALOUSY_PER_ROUND per round (default 3)
     - resentment: -RELATIONSHIP_DECAY_RESENTMENT_PER_ROUND per round (default 1)
     - affection/trust/attraction: no decay
+    - dynamic (Sprint 7, ``dynamic_decay_enabled``): base_rate × character_factor
+      where the factor comes from the source character's ``character_state.stress``
+      (high stress → slower decay). ``dynamic_decay_jealousy_base_rate`` /
+      ``dynamic_decay_resentment_base_rate`` default to the legacy rates.
 
     Creates RelationshipEvent(kind="decay") ONLY when value crosses a multiple of 10:
     20→19 (event), 10→9 (event), 0→0 (no event if already 0).
@@ -1185,6 +1313,21 @@ async def apply_decay(
     jealousy_decay = settings.relationship_decay_jealousy_per_round
     resentment_decay = settings.relationship_decay_resentment_per_round
 
+    # Dynamic profile: load one character_state per source once, then map.
+    state_by_character: dict[int, Any] = {}
+    if settings.dynamic_decay_enabled:
+        try:
+            from . import crud
+
+            states = await crud.get_character_states_for_chat(db, chat_id)
+            state_by_character = {s.character_id: s for s in states}
+        except Exception as exc:  # noqa: BLE001 — decay никогда не роняет раунд
+            logger.warning(
+                "[chat_id=%d] Failed to load character states for dynamic decay: %s",
+                chat_id, exc,
+            )
+            state_by_character = {}
+
     stmt = select(CharacterRelationship).where(CharacterRelationship.chat_id == chat_id)
     result = await db.execute(stmt)
     relationships = list(result.scalars().all())
@@ -1195,8 +1338,20 @@ async def apply_decay(
         old_jealousy = rel.jealousy
         old_resentment = rel.resentment
 
-        new_jealousy = max(0, old_jealousy - jealousy_decay)
-        new_resentment = max(0, old_resentment - resentment_decay)
+        if settings.dynamic_decay_enabled:
+            factor = _dynamic_decay_factor(state_by_character.get(rel.source_character_id))
+            rel_jealousy_decay = max(
+                0, round(settings.dynamic_decay_jealousy_base_rate * factor)
+            )
+            rel_resentment_decay = max(
+                0, round(settings.dynamic_decay_resentment_base_rate * factor)
+            )
+        else:
+            rel_jealousy_decay = jealousy_decay
+            rel_resentment_decay = resentment_decay
+
+        new_jealousy = max(0, old_jealousy - rel_jealousy_decay)
+        new_resentment = max(0, old_resentment - rel_resentment_decay)
 
         # Check if either crossed a multiple-of-10 boundary
         jealousy_crossed = (old_jealousy // 10) != (new_jealousy // 10) and old_jealousy > 0
