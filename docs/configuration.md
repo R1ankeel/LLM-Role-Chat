@@ -195,6 +195,22 @@
 не считается (NULL в БД), memory/recency фильтры ведут себя как раньше;
 presence-лестница и рендер recent history не меняются.
 
+## Hybrid Retrieval v2 (Sprint 6, `Plans/update20.md §14`)
+
+| ключ | дефолт | описание |
+|---|---|---|
+| `HYBRID_RERANK_ENABLED` | `false` | детерминированный rerank memories ПОСЛЕ RRF, ДО witness-boost (оси + сигналы контекста) |
+| `HYBRID_RERANK_WEIGHT_LEXICAL` | `0.30` | вес BM25-подобного overlap запроса/памяти (отпадает при отсутствии запроса) |
+| `HYBRID_RERANK_WEIGHT_SEMANTIC` | `0.25` | вес cosine-похожести embeddings (отпадает при отсутствии embeddings) |
+| `HYBRID_RERANK_WEIGHT_EMOTIONAL` | `0.10` | вес эмоциональной релевантности (intensity + \|valence\|) |
+| `HYBRID_RERANK_WEIGHT_STORY` | `0.15` | вес story memory + overlap с активными story_threads |
+| `HYBRID_RERANK_WEIGHT_RELATIONSHIP` | `0.10` | вес участия target отношения текущего контекста |
+| `HYBRID_RERANK_WEIGHT_RECENCY` | `0.05` | вес свежести памяти |
+| `HYBRID_RERANK_WEIGHT_SALIENCE` | `0.05` | вес salience памяти |
+
+Подробно: `docs/retrieval.md`. При `HYBRID_RERANK_ENABLED=false` (default) RRF-путь
+не меняется, BM25 не удаляется (fallback при отсутствии embeddings).
+
 
 ## Динамический num_ctx (KV window)
 

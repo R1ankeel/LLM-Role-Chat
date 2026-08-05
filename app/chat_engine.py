@@ -552,6 +552,19 @@ async def process_user_message_streaming(
         else settings.memory_relevance_top_k
     )
 
+    # Sprint 6 (§14): сигналы текущего контекста для rerank (отношения/threads).
+    rerank_signals = {}
+    if settings.hybrid_rerank_enabled:
+        try:
+            rerank_signals = await crud.build_rerank_signals(
+                db, chat_id, character_ids, character_names
+            )
+        except Exception as exc:
+            logger.warning(
+                "[chat_id=%d] Failed to build rerank signals: %s", chat_id, exc
+            )
+            rerank_signals = {}
+
     # Hybrid retrieval: BM25 + Vector with RRF fusion (P3)
     if settings.embedding_enabled:
         memories_by_character = await crud.get_hybrid_memories_for_characters(
@@ -560,6 +573,7 @@ async def process_user_message_streaming(
             context_text,
             memory_top_k,
             character_summaries=summary_texts,
+            rerank_signals=rerank_signals,
         )
     else:
         memories_by_character = await crud.get_relevant_memories_for_characters(
@@ -568,6 +582,7 @@ async def process_user_message_streaming(
             context_text,
             memory_top_k,
             character_summaries=summary_texts,
+            rerank_signals=rerank_signals,
         )
 
     context_messages = list(pre_round_messages) + list(round_messages)
@@ -2246,6 +2261,20 @@ async def regenerate_message_streaming(
         else settings.memory_relevance_top_k
     )
     summary_texts: dict[int, str] = {character.id: summary_text} if summary_text else {}
+
+    # Sprint 6 (§14): сигналы текущего контекста для rerank (отношения/threads).
+    rerank_signals = {}
+    if settings.hybrid_rerank_enabled:
+        try:
+            rerank_signals = await crud.build_rerank_signals(
+                db, chat_id, [character.id], character_names
+            )
+        except Exception as exc:
+            logger.warning(
+                "[chat_id=%d] Failed to build rerank signals: %s", chat_id, exc
+            )
+            rerank_signals = {}
+
     if settings.embedding_enabled:
         memories = (
             await crud.get_hybrid_memories_for_characters(
@@ -2254,6 +2283,7 @@ async def regenerate_message_streaming(
                 context_text,
                 memory_top_k,
                 character_summaries=summary_texts,
+                rerank_signals=rerank_signals,
             )
         ).get(character.id, [])
     else:
@@ -2264,6 +2294,7 @@ async def regenerate_message_streaming(
                 context_text,
                 memory_top_k,
                 character_summaries=summary_texts,
+                rerank_signals=rerank_signals,
             )
         ).get(character.id, [])
 

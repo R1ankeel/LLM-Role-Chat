@@ -60,6 +60,14 @@
 > **914 passed / 28 pre-existing / 0 новых** (20 новых тестов). См.
 > «Sprint 4 — Статус».
 >
+> **Sprint 6 (2026-08-05)**: ✅ ВЫПОЛНЕН — Hybrid Retrieval v2 (§14): детерминированный
+> rerank memories ПОСЛЕ RRF, ДО witness-boost (ось memory_type/valence/intensity +
+> сигналы контекста: отношения, story_threads; веса в config; fallback BM25 при
+> отсутствии embeddings); canary-флаг `HYBRID_RERANK_ENABLED` (default false),
+> RRF-путь без флага не меняется, BM25 не удаляется. Тесты:
+> **946 passed / 28 pre-existing / 0 новых** (24 новых теста). См.
+> «Sprint 6 — Статус».
+>
 > Принцип: **не строить новые подсистемы поверх существующих**. Сначала найти
 > существующую реализацию, расширять её; если она мешает развитию — явно
 > вынести миграцию/рефакторинг в отдельный спринт. Дублирование запрещено.
@@ -1808,6 +1816,49 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: rerank улучшает precision на eval-сценарии; RRF-путь без флага
   не меняется.
 - **НЕ делать**: не удалять BM25.
+
+#### Sprint 6 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (без изменения поведения при `hybrid_rerank_enabled=false`; canary):
+  1. `app/memory_service.py`: `@dataclass RerankSignals` (relationship_target_names,
+     active_threads) и `RerankContext(RerankSignals)` (query_text, query_embedding);
+     `rerank_weights()` (нормировка на 1.0); детерминированные оси:
+     `_lexical_overlap` (BM25-подобный overlap запроса/памяти), `_semantic_similarity`
+     (cosine по embeddings, отпадает при их отсутствии), `_emotional_relevance`
+     (intensity+0.5·|valence|), `_story_relevance` (story memory + overlap с
+     active_threads 1.0; без threads 0.3; без overlap 0.5), `_relationship_relevance`
+     (target в signal-именах 1.0, fallback по category), `_recency_score`,
+     `_salience_score`; `rerank_memories(candidates, context, weights=None)` —
+     стабильная сортировка (без query_text lexical-ось отпадает);
+  2. `app/crud.py`: `from __future__ import annotations` (цикл crud↔memory_service);
+     `build_rerank_signals(db, chat_id, character_ids, character_names)` — читает
+     отношения (source/target) и активные story_threads, пусто при `false`;
+     `_apply_rerank(...)` — no-op при `hybrid_rerank_enabled=false`/без сигналов;
+     применён в `get_relevant_memories_for_characters` и
+     `get_hybrid_memories_for_characters` ПОСЛЕ BM25/RRF и ДО `_apply_witness_boost`;
+  3. `app/chat_engine.py`: оба retrieval call-site собирают `rerank_signals` через
+     `crud.build_rerank_signals` (try/except) при `hybrid_rerank_enabled` и передают
+     в retrieval;
+  4. `app/context_builder.py`: `build()` принимает `rerank_signals`; в секции
+     «7. memories» при `hybrid_rerank_enabled` + сигналы — детерминированный
+     re-order через `rerank_memories` (пустой query);
+  5. `app/config.py`: блок «Hybrid Retrieval v2» — `HYBRID_RERANK_ENABLED=false`,
+     `HYBRID_RERANK_WEIGHT_{LEXICAL,SEMANTIC,EMOTIONAL,STORY,RELATIONSHIP,
+     RECENCY,SALIENCE}` (0.30/0.25/0.10/0.15/0.10/0.05/0.05); `.env.example` и
+     `.env` дополнены.
+- **Тесты**: `test_hybrid_rerank.py` (24): нормировка весов; оси lexical/semantic/
+  emotional/story/relationship/recency/salience по отдельности; rerank-сценарии
+  (story memory выше при активном thread, эмоциональная релевантность при anchors);
+  fallback BM25 без embeddings; стабильность сортировки; `build_rerank_signals`
+  (отношения/threads, пусто при `false`); интеграция BM25/RRF-пути; RRF-путь без
+  флага не меняется.
+- **Полный прогон**: 946 passed; 28 failed — все в НЕ тронутых модулях
+  (task_queue, memory_service/memory_perception, embeddings, context_state,
+  token_counter, stream_disconnect) — пред-существующие поломки тестов
+  (async-сигнатуры create_characters/run_job и т.п.), подтверждены на чистом
+  master (git stash), к rerank не относятся.
+- **НЕ сделано** (задел §14): переснять golden-снэпшоты для блоков memories не
+  потребовалось — порядок меняется только под флагом (canary), default-off.
 
 ### Sprint 7 — Relationship Evolution v2 (P1)
 

@@ -136,6 +136,7 @@ class ContextBuilder:
         max_tokens: int | None = None,
         character_state: Any = None,
         what_you_know_block: str = "",
+        rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
     ) -> schemas.BuiltContext:
         counter = self._token_counter
         budget = build_budget(max_tokens)
@@ -365,6 +366,28 @@ class ContextBuilder:
 
         # ---- 7. memories (P2, budgeted) --------------------------------
         mem_list = list(memories)
+        # Sprint 6 (§14): финальный порядок блока memories по сигналам контекста
+        # (отношения/threads). Канонический rerank (включая semantic-ось)
+        # выполняется выше — в `crud.get_hybrid_memories_for_characters`
+        # (после RRF, до witness-boost); здесь — детерминированный re-order для
+        # прямых вызовов build() без retrieval-пути. На уже-отсортированном
+        # списке (путь chat_engine) не применяется: chat_engine не передаёт
+        # сигналы в build(), чтобы не затирать порядок с semantic-осью.
+        if (
+            settings.hybrid_rerank_enabled
+            and rerank_signals
+            and rerank_signals.get(char_id) is not None
+        ):
+            builder_signals = rerank_signals.get(char_id)
+            mem_list = memory_service.rerank_memories(
+                mem_list,
+                memory_service.RerankContext(
+                    query_text="",
+                    query_embedding=None,
+                    relationship_target_names=builder_signals.relationship_target_names,
+                    active_threads=builder_signals.active_threads,
+                ),
+            )
         mem_block = build_memories_block(mem_list)
         mem_tokens = counter.count(mem_block)
         while mem_list and mem_tokens > budget.memory_budget:

@@ -508,5 +508,41 @@ class Settings(BaseSettings):
         default=False, alias="BELIEFS_LLM_SUGGESTION_ENABLED"
     )
 
+    # ----- Hybrid Retrieval v2 (Plans/update20.md §14, Sprint 6) -----
+    # Детерминированный rerank memories ПОСЛЕ существующего RRF-слияния и ДО
+    # witness-boost: `score = w_lex×lex + w_sem×sem + w_emotion×emotion +
+    # w_story×story + w_rel×rel + w_recency×recency + w_salience×salience`.
+    # Использует сигналы текущего контекста: `memory_type`, `valence/intensity`
+    # (эмоциональная ось), активные `story_threads` (сюжетная ось), направленные
+    # отношения персонажа (relationship-ось). Флаг выключен по умолчанию —
+    # RRF-путь без флага не меняется; BM25 НЕ удаляется (fallback при
+    # отсутствии embeddings — semantic-слагаемое отбрасывается, веса
+    # нормируются, §14). read-path новых колонок — только при включённом флаге.
+    hybrid_rerank_enabled: bool = Field(
+        default=False, alias="HYBRID_RERANK_ENABLED"
+    )
+    # Веса осей rerank (сумма нормируется на 1.0 внутри `rerank_memories`).
+    hybrid_rerank_weight_lexical: float = Field(
+        default=0.30, alias="HYBRID_RERANK_WEIGHT_LEXICAL"
+    )
+    hybrid_rerank_weight_semantic: float = Field(
+        default=0.25, alias="HYBRID_RERANK_WEIGHT_SEMANTIC"
+    )
+    hybrid_rerank_weight_emotional: float = Field(
+        default=0.10, alias="HYBRID_RERANK_WEIGHT_EMOTIONAL"
+    )
+    hybrid_rerank_weight_story: float = Field(
+        default=0.15, alias="HYBRID_RERANK_WEIGHT_STORY"
+    )
+    hybrid_rerank_weight_relationship: float = Field(
+        default=0.10, alias="HYBRID_RERANK_WEIGHT_RELATIONSHIP"
+    )
+    hybrid_rerank_weight_recency: float = Field(
+        default=0.05, alias="HYBRID_RERANK_WEIGHT_RECENCY"
+    )
+    hybrid_rerank_weight_salience: float = Field(
+        default=0.05, alias="HYBRID_RERANK_WEIGHT_SALIENCE"
+    )
+
 
 settings = Settings()

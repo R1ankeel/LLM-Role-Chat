@@ -1,5 +1,7 @@
 """CRUD-функции для работы с базой данных (Async)."""
 
+from __future__ import annotations
+
 import json
 import logging
 import random
@@ -699,6 +701,83 @@ def _apply_witness_boost(
     )
 
 
+# ----------------- Hybrid Retrieval v2 (Plans/update20.md §14, Sprint 6) ----
+async def build_rerank_signals(
+    db: AsyncSession,
+    chat_id: int,
+    character_ids: list[int],
+    character_names: dict[int, str],
+) -> dict[int, memory_service.RerankSignals]:
+    """Сигналы текущего контекста для rerank (§14): направленные отношения
+    персонажа (имена targets) и активные ``story_threads``.
+
+    Собирается только при ``hybrid_rerank_enabled`` (read-path canary);
+    пустые сигналы (нет отношений/потоков) — валидный результат: rerank просто
+    работает без relationship/story-слагаемых. write-path ``story_threads`` —
+    Sprint 8, поэтому на текущий момент поток обычно пуст (story-ось работает
+    по ``memory_type='story'`` с мягким базовым бустом).
+    """
+    if not character_ids or not settings.hybrid_rerank_enabled:
+        return {}
+
+    rel_stmt = select(
+        models.CharacterRelationship.source_character_id,
+        models.CharacterRelationship.target_character_id,
+    ).where(
+        models.CharacterRelationship.chat_id == chat_id,
+        models.CharacterRelationship.source_character_id.in_(character_ids),
+    )
+    rel_result = await db.execute(rel_stmt)
+    rel_targets: dict[int, list[int]] = {cid: [] for cid in character_ids}
+    for source_id, target_id in rel_result.all():
+        rel_targets.setdefault(int(source_id), []).append(int(target_id))
+
+    thread_stmt = select(models.StoryThread.name).where(
+        models.StoryThread.chat_id == chat_id,
+        models.StoryThread.status == "active",
+    )
+    thread_result = await db.execute(thread_stmt)
+    active_threads = tuple(
+        name for (name,) in thread_result.all() if name and str(name).strip()
+    )
+
+    signals: dict[int, memory_service.RerankSignals] = {}
+    for cid in character_ids:
+        names = tuple(
+            n
+            for t in rel_targets.get(cid, [])
+            if (n := character_names.get(int(t)))
+        )
+        signals[cid] = memory_service.RerankSignals(
+            relationship_target_names=names,
+            active_threads=active_threads,
+        )
+    return signals
+
+
+def _apply_rerank(
+    selected: list[models.Memory],
+    *,
+    query_text: str,
+    query_embedding: list[float] | None,
+    signals: memory_service.RerankSignals | None,
+) -> list[models.Memory]:
+    """Применить rerank после RRF/BM25, до witness-boost (Sprint 6, §14).
+
+    No-op (возвращает список без изменений) при выключенном
+    ``hybrid_rerank_enabled`` или отсутствии сигналов — RRF-путь не меняется.
+    """
+    if not settings.hybrid_rerank_enabled or not signals:
+        return selected
+    context = memory_service.RerankContext(
+        query_text=query_text,
+        query_embedding=query_embedding,
+        relationship_target_names=signals.relationship_target_names,
+        active_threads=signals.active_threads,
+    )
+    return memory_service.rerank_memories(selected, context)
+
+
 async def decay_memory_importance(db: AsyncSession) -> None:
     """Periodic decay of importance for memories not accessed recently.
 
@@ -796,6 +875,7 @@ async def get_relevant_memories_for_characters(
     *,
     witness_filter: bool = True,
     character_summaries: dict[int, str] | None = None,
+    rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
 ) -> dict[int, list[models.Memory]]:
     """Load and rank memories by BM25 relevance to current context (P1).
 
@@ -806,6 +886,11 @@ async def get_relevant_memories_for_characters(
     When *character_summaries* is provided, each character's summary is appended
     to the scoring context so BM25 biases toward memories relevant to the
     character's current state.
+
+    Sprint 6 (§14): when *rerank_signals* is provided and ``hybrid_rerank_enabled``
+    is on, the BM25-selected top candidates are reranked (semantic-ось отпадает —
+    embeddings не используются на этом пути, веса нормируются) before the
+    witness boost. Without the flag the behaviour is unchanged.
     """
     if not character_ids:
         return {}
@@ -827,6 +912,14 @@ async def get_relevant_memories_for_characters(
         scoring_context = await _build_scoring_context(context_text, character_summaries, cid)
         selected = memory_service.select_relevant_memories(
             candidates, scoring_context, top_k or settings.memory_relevance_top_k
+        )
+        # Sprint 6 (§14): rerank после BM25, до witness-boost (fallback без
+        # embeddings — semantic-слагаемое отбрасывается, веса нормируются).
+        selected = _apply_rerank(
+            selected,
+            query_text=scoring_context,
+            query_embedding=None,
+            signals=rerank_signals.get(cid) if rerank_signals else None,
         )
         if quality_map:
             selected = _apply_witness_boost(selected, quality_map)
@@ -850,6 +943,7 @@ async def get_hybrid_memories_for_characters(
     *,
     witness_filter: bool = True,
     character_summaries: dict[int, str] | None = None,
+    rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
 ) -> dict[int, list[models.Memory]]:
     """
     Hybrid retrieval: BM25 (lexical) + Vector (semantic) with RRF fusion (P3).
@@ -859,6 +953,11 @@ async def get_hybrid_memories_for_characters(
 
     When *character_summaries* is provided, each character's summary is appended
     to the BM25 scoring context.
+    
+    Sprint 6 (§14): when *rerank_signals* is provided and ``hybrid_rerank_enabled``
+    is on, the RRF top-K are reranked (lexical/semantic/emotional/story/
+    relationship/recency/salience) BEFORE the witness boost. Without the flag the
+    RRF path is unchanged.
     
     Returns top_k memories per character ranked by reciprocal rank fusion.
     """
@@ -871,6 +970,7 @@ async def get_hybrid_memories_for_characters(
             db, character_ids, context_text, top_k,
             witness_filter=witness_filter,
             character_summaries=character_summaries,
+            rerank_signals=rerank_signals,
         )
     
     bm25_w = bm25_weight if bm25_weight is not None else settings.hybrid_bm25_weight
@@ -889,6 +989,7 @@ async def get_hybrid_memories_for_characters(
             db, character_ids, context_text, top_k,
             witness_filter=witness_filter,
             character_summaries=character_summaries,
+            rerank_signals=rerank_signals,
         )
     
     # Decay importance periodically (approx every 20th call)
@@ -943,6 +1044,14 @@ async def get_hybrid_memories_for_characters(
         # Get memory objects
         mem_map = {mem.id: mem for mem in candidates}
         selected = [mem_map[mid] for mid in top_mem_ids if mid in mem_map]
+        
+        # Sprint 6 (§14): rerank после RRF, до witness-boost.
+        selected = _apply_rerank(
+            selected,
+            query_text=scoring_context,
+            query_embedding=query_embedding,
+            signals=rerank_signals.get(cid) if rerank_signals else None,
+        )
         
         # Apply witness boost — direct facts rank before hearsay
         if quality_map:

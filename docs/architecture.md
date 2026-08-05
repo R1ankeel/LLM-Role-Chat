@@ -382,7 +382,7 @@ Scene-блок (`prompt_builder.build_scene_block`) принимает `characte
 2. **Валидация** (`validate_extracted_facts`): длина, generic-паттерны, «чужие мысли», grounding (минимум 22% пересечения с контекстом), near-dup (Jaccard ≥ 0.75), лимит на раунд. При `memory_types_enabled` каждому факту присваивается `memory_type` (semantic/episodic/social/story): LLM-тип из промпта, при отсутствии — детерминированный fallback (`memory_service.classify_memory_type` по категории/тексту).
 3. **Сохранение**: `crud.create_memory` с `content_hash` (SHA-256 нормализованного текста) — уникальность на уровне БД; пустой `memory_type` → default 'semantic'; лимит памяти на персонажа (`ensure_memory_limit`).
 4. **Эмбеддинги**: enqueue `embed_memory` → `embedding_service` (Ollama `/api/embed`, bge-m3), хранение float32 BLOB.
-5. **Поиск**: BM25 + вектор + RRF (`get_hybrid_memories_for_characters`), witness-фильтр кандидатов, boost прямых наблюдений.
+5. **Поиск**: BM25 + вектор + RRF (`get_hybrid_memories_for_characters`), witness-фильтр кандидатов, boost прямых наблюдений. При `hybrid_rerank_enabled` (Sprint 6, §14) между RRF и witness-boost вставляется детерминированный rerank по осям (lexical/semantic/emotional/story/relationship/recency/salience) с сигналами контекста (отношения, story_threads) — `memory_service.rerank_memories`, подробно [retrieval.md](retrieval.md).
 6. **Decay**: снижение importance при неиспользовании > 7 дней.
 7. **Саммари**: каждые `summary_interval_messages` сообщений, инкрементальное, на наблюдаемом тексте.
 8. **Консолидация**: кластеризация по Jaccard ≥ 0.65, LLM-слияние кластера в один факт, удаление дубликатов.
