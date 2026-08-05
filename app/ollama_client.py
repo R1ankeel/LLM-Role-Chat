@@ -1016,6 +1016,7 @@ def _build_generation_messages(
     directive_block: str = "",
     recency_tail_block: str = "",
     your_state_block: str = "",
+    what_you_know_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete)."""
     feedback_block = build_repetition_feedback_block(repetition_feedback)
@@ -1037,6 +1038,7 @@ def _build_generation_messages(
         consistency_feedback_block,
         scene_block,
         your_state_block,
+        what_you_know_block,
         behavior_drivers_block,
         open_issues_block,
         epistemic_mask_block,
@@ -1112,6 +1114,7 @@ async def _generate_once(
     directive: str | None = None,
     recency_tail_block: str = "",
     consistency_feedback: str = "",
+    what_you_know_block: str = "",
 ) -> tuple[str, str, bool, int, list[str], schemas.TurnOutput | None]:
     """One LLM call + isolation sanitize.
 
@@ -1200,6 +1203,11 @@ async def _generate_once(
     # character_state_enabled + включённый билдер); иначе блок пуст.
     your_state_block = built_context.state_text if built_context is not None else ""
 
+    # WHAT YOU KNOW block (Sprint 5, §9) — beliefs персонажа. Рендер только при
+    # beliefs_enabled; фолбэк на переданный параметр (non-context-путь).
+    if not what_you_know_block and built_context is not None:
+        what_you_know_block = built_context.what_you_know_text
+
     # Vocabulary fingerprinting block — prevents style contamination (Phase 5)
     vocabulary_block = build_vocabulary_block(character, prior_replies)
 
@@ -1252,6 +1260,7 @@ async def _generate_once(
             directive_block=directive_block,
             recency_tail_block=recency_tail_block,
             your_state_block=your_state_block,
+            what_you_know_block=what_you_know_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
@@ -1268,6 +1277,8 @@ async def _generate_once(
             context_parts.append(scene_block)
         if your_state_block:
             context_parts.append(your_state_block)
+        if what_you_know_block:
+            context_parts.append(what_you_know_block)
         if anti_mimicry_block:
             context_parts.append(anti_mimicry_block)
         if vocabulary_block:
@@ -1633,6 +1644,7 @@ async def generate(
     epistemic_mask_block: str = "",
     directive: str | None = None,
     recency_tail_block: str = "",
+    what_you_know_block: str = "",
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1736,6 +1748,7 @@ async def generate(
             directive=directive,
             recency_tail_block=recency_tail_block,
             consistency_feedback=consistency_feedback,
+            what_you_know_block=what_you_know_block,
         )
 
         if not isolation_ok:

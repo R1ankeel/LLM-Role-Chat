@@ -531,6 +531,56 @@ async def build_behavior_drivers_block(
     return _wrap_drivers_block(top)
 
 
+async def _beliefs_by_subject(
+    db: AsyncSession, character_id: int
+) -> dict[str, dict]:
+    """Beliefs персонажа, ключ — subject (lowercased). Sprint 5, §9."""
+    try:
+        from . import crud
+
+        beliefs = await crud.get_beliefs_for_character(
+            db,
+            character_id,
+            top_k=settings.beliefs_top_k,
+            min_confidence=settings.beliefs_render_confidence,
+        )
+        out: dict[str, dict] = {}
+        for b in beliefs:
+            subject = (b.subject or "").strip().lower()
+            if subject:
+                out[subject] = {
+                    "predicate": b.predicate or "",
+                    "object": b.object or "",
+                    "type": b.type or "belief",
+                    "confidence": b.confidence or 0.5,
+                }
+        return out
+    except Exception as exc:  # noqa: BLE001 — маска не роняет генерацию
+        logger.warning(
+            "Failed to load beliefs for epistemic mask (character=%s): %s",
+            character_id, exc,
+        )
+        return {}
+
+
+def _epistemic_belief_line(source_name: str, belief: dict) -> str:
+    """Рендер убеждения вместо «неизвестно» в mask (Sprint 5, §9).
+
+    Не раскрывает числа/метрики отношения — только уверенность убеждения.
+    """
+    predicate = belief.get("predicate") or ""
+    obj = belief.get("object") or ""
+    conf = belief.get("confidence", 0.5)
+    marker = "Ты знаешь" if belief.get("type") == "fact" else (
+        "Ты подозреваешь" if belief.get("type") == "suspicion" else "Ты полагаешь"
+    )
+    snippet = f"{predicate} {obj}".strip() or "что-то о нём"
+    return (
+        f"{marker} об отношении {source_name} к тебе: {snippet} "
+        f"(уверенность {conf:.2f})"
+    )
+
+
 async def build_epistemic_mask_block(
     db: AsyncSession,
     chat_id: int,
@@ -565,6 +615,13 @@ async def build_epistemic_mask_block(
         max_edges = settings.relationship_epistemic_max
     evidenced = set(int(i) for i in evidenced_target_ids)
 
+    # Sprint 5 (§9): при beliefs_enabled маска читает убеждения персонажа
+    # вместо «неизвестно». Блок WHAT YOU KNOW рендерится отдельно
+    # (context_builder / chat_engine); здесь — только подстановка source.
+    beliefs_by_subject: dict[str, dict] = {}
+    if settings.beliefs_enabled:
+        beliefs_by_subject = await _beliefs_by_subject(db, character_id)
+
     received = await list_received_relationships(db, character_id)
     if not received:
         return ""
@@ -582,7 +639,13 @@ async def build_epistemic_mask_block(
             text = format_interpretation_from_other(interp, source_name)
             known_lines.append(f"Известное тебе отношение {source_name} к тебе: {text}")
         else:
-            unknown_lines.append(f"Тебе неизвестно, как {source_name} относится к тебе.")
+            belief = beliefs_by_subject.get((source_name or "").strip().lower())
+            if belief is not None:
+                unknown_lines.append(
+                    _epistemic_belief_line(source_name, belief)
+                )
+            else:
+                unknown_lines.append(f"Тебе неизвестно, как {source_name} относится к тебе.")
 
     lines = known_lines + unknown_lines
     if max_edges and len(lines) > max_edges:

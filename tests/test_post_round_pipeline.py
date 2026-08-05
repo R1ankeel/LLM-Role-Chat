@@ -120,7 +120,7 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
 
     assert set(report.keys()) == {
         "presence", "event_extraction", "memory", "relationships",
-        "character_state", "story",
+        "character_state", "beliefs", "story",
     }
     assert report["presence"]["ok"] is True
     # флаг off по умолчанию → стадия извлечения событий — no-op
@@ -133,6 +133,9 @@ async def test_pipeline_runs_all_stages(db_session, chat, three_characters):
     # character_state — флаг off по умолчанию → no-op
     assert report["character_state"]["ok"] is True
     assert report["character_state"].get("skipped") == "flag off"
+    # beliefs — флаг off по умолчанию → no-op
+    assert report["beliefs"]["ok"] is True
+    assert report["beliefs"].get("skipped") == "flag off"
     assert report["story"]["ok"] is True
 
 

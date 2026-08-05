@@ -12,7 +12,10 @@
 5. character state       — ``character_state.update_states_from_round`` (Sprint 3):
    детерминированные эмоции/стресс/mood из world_events раунда + relationship
    deltas (которые к этому моменту уже могут быть закоммичены фоновым анализатором);
-6. story                 — каркас под спринты 8-11; в Sprint 1 — no-op.
+6. beliefs               — ``belief_service.update_beliefs_from_round`` (Sprint 5):
+   детерминированные beliefs из событий раунда, которые персонаж реально
+   воспринял (presence+attention); только direct_observation путь;
+7. story                 — каркас под спринты 8-11; в Sprint 1 — no-op.
 
 Memory и relationship — внешние коллбеки (инъекция), чтобы избежать циклической
 зависимости ``pipeline → chat_engine``; ``chat_engine`` передаёт свои функции.
@@ -168,6 +171,56 @@ async def _stage_relationships(
         return {"ok": False, "stage": "relationships", "error": str(exc)}
 
 
+async def _stage_beliefs(
+    client: Any,
+    db,
+    *,
+    chat_id: int,
+    round_id: str | None,
+    characters: list[Any],
+) -> dict:
+    """Stage 6: belief update (Sprint 5, Plans/update20.md §9).
+
+    Детерминированные beliefs из world events раунда (stage 2), которые персонаж
+    реально воспринял (presence stage 1 + attention). Только direct_observation
+    путь: LLM-suggestion beliefs — под benchmark gate (§27), не здесь. No-op при
+    отключённом флаге ``beliefs_enabled``; падение стадии не роняет раунд.
+    """
+    if not settings.beliefs_enabled:
+        return {
+            "ok": True,
+            "stage": "beliefs",
+            "skipped": "flag off",
+        }
+    if not characters or not round_id:
+        return {
+            "ok": True,
+            "stage": "beliefs",
+            "skipped": "no characters/round",
+        }
+    try:
+        from . import belief_service
+
+        report = await belief_service.update_beliefs_from_round(
+            db,
+            chat_id,
+            round_id,
+            characters,
+            client=client,
+        )
+        return {
+            "ok": True,
+            "stage": "beliefs",
+            "characters": report["characters"],
+            "written": report["written"],
+            "updated": report["updated"],
+            "skipped": report["skipped"],
+        }
+    except Exception as exc:  # noqa: BLE001 — стадия не должна ронять раунд
+        logger.warning("Post-round pipeline: beliefs stage failed: %s", exc)
+        return {"ok": False, "stage": "beliefs", "error": str(exc)}
+
+
 async def _stage_story(
     *,
     round_id: str | None,
@@ -251,7 +304,8 @@ async def run_post_round_pipeline(
     relationship_analyzer: Callable[..., Awaitable[Any]] | None = None,
     stages: set[str] | None = None,
 ) -> dict:
-    """Оркестратор пост-раундных стадий (§15, Sprint 1, +character_state Sprint 3).
+    """Оркестратор пост-раундных стадий (§15, Sprint 1, +character_state Sprint 3,
+    +beliefs Sprint 5).
 
     Вызывается из ``chat_engine.process_user_message_streaming`` ПОСЛЕ генерации
     раунда и scene extraction. Каждая стадия изолирована: исключение одной не
@@ -263,6 +317,7 @@ async def run_post_round_pipeline(
         "memory",
         "relationships",
         "character_state",
+        "beliefs",
         "story",
     }
     report: dict[str, Any] = {}
@@ -312,6 +367,15 @@ async def run_post_round_pipeline(
 
     if "character_state" in enabled:
         report["character_state"] = await _stage_character_state(
+            client,
+            db,
+            chat_id=chat_id,
+            round_id=round_id,
+            characters=characters,
+        )
+
+    if "beliefs" in enabled:
+        report["beliefs"] = await _stage_beliefs(
             client,
             db,
             chat_id=chat_id,

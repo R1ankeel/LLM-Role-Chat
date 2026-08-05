@@ -744,3 +744,44 @@ def build_epistemic_mask_block(lines: list[str]) -> str:
         "(это то, что тебе известно об отношении других к тебе в этот момент, а не числа)\n"
         "</epistemic_mask>"
     )
+
+
+def build_what_you_know_block(beliefs: list) -> str:
+    """Build the ``<what_you_know>`` block (Plans/update20.md §9, Sprint 5).
+
+    Структурированные знания/убеждения персонажа (subject/predicate/object,
+    type, confidence) — только его собственные beliefs, никогда World Truth.
+    Данные, не инструкция: обёртка с маркерной строкой, попадает в user-блок.
+    Пустой список — пустой блок (backward compatible).
+    """
+    if not beliefs:
+        return ""
+    lines: list[str] = []
+    for belief in beliefs:
+        subject = getattr(belief, "subject", "") or ""
+        predicate = getattr(belief, "predicate", "") or ""
+        obj = getattr(belief, "object", "") or ""
+        btype = getattr(belief, "type", "") or "belief"
+        confidence = getattr(belief, "confidence", None)
+        conf = f"{float(confidence):.2f}" if confidence is not None else ""
+        triplet = " ".join(part for part in (subject, predicate, obj) if part)
+        if not triplet:
+            continue
+        marker = {
+            "fact": "Ты знаешь",
+            "belief": "Ты полагаешь",
+            "suspicion": "Ты подозреваешь",
+        }.get(btype, "Ты полагаешь")
+        line = f"{marker}: {triplet}"
+        if conf:
+            line += f" (уверенность {conf})"
+        lines.append(line)
+    if not lines:
+        return ""
+    body = "\n".join(f"- {line}" for line in lines)
+    return (
+        "<what_you_know>\n"
+        f"{body}\n"
+        "(это то, что ты знаешь или подозреваешь о мире, а не объективная истина)\n"
+        "</what_you_know>"
+    )

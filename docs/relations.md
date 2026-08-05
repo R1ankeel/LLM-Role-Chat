@@ -379,10 +379,11 @@ Pipeline: `LLM → proposed deltas/issues → deterministic validation → relat
   только конкретное ребро и никогда обратное, `get_or_create_relationship`
   отклоняет self-loop (`source == target`). Тесты: `tests/test_relationship_reciprocity.py`
   (`TestReciprocityNoSync`).
-- ✅ **MVP epistemic mask (Sprint 2 п.10).** Полную belief-систему **не строим**.
-  MVP-правило: персонаж A видит отношение B→A **только если** в текущем раунде было
-  `direct` или `observed` поведение B (детерминированный `_evidence_mode` по
-  `_build_pair_relationship_context`), и **только как интерпретацию, без чисел**:
+- ✅ **MVP epistemic mask (Sprint 2 п.10).** На Sprint 2 полную belief-систему
+  **не строили**; MVP-правило: персонаж A видит отношение B→A **только если** в
+  текущем раунде было `direct` или `observed` поведение B (детерминированный
+  `_evidence_mode` по `_build_pair_relationship_context`), и **только как
+  интерпретацию, без чисел**:
 
 ```text
 <epistemic_mask>
@@ -404,6 +405,12 @@ Pipeline: `LLM → proposed deltas/issues → deterministic validation → relat
   `epistemic_mask_block`).
 - Архитектура не раздаёт чужие внутренние метрики ни при каком раскладе.
 - Игрок как источник B→A не участвует (рёбер player→NPC в БД нет).
+- **Sprint 5 (§9, Belief System):** при `BELIEFS_ENABLED=true` маска читает
+  beliefs персонажа (`docs/beliefs.md`): без раундных evidence вместо
+  «неизвестно» подставляется belief (`_beliefs_by_subject`/`_epistemic_belief_line`),
+  а `_compute_epistemic_evidence` расширяется персонажами из beliefs
+  (`_belief_evidenced_ids`). При `BELIEFS_ENABLED=false` поведение Sprint 2
+  неизменно (mask остаётся fallback, canary).
 
 ## 11. P1 — Trajectory (snapshot-based, корректна при interleaved events)
 

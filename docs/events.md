@@ -81,12 +81,15 @@ event extraction — no-op; read-path новые поля не читает (о�
 `app/post_round_pipeline.py:run_post_round_pipeline(...)` — оркестратор стадий:
 
 ```
-presence → event extraction → memory → relationships → story
+presence → event extraction → memory → relationships → character_state → beliefs → story
 ```
 
 - каждая стадия — отдельная функция в try/except (падение одной не ломает раунд);
 - memory/relationship планируются как background-задачи (`asyncio.create_task`),
   коллбеки инъекцируются из `chat_engine` (без циклической зависимости);
+- character_state — Sprint 3 (эмоции/стресс, `docs/character_state.md`);
+- beliefs — Sprint 5 (§9, знание/убеждение из world_events + presence/attention,
+  `docs/beliefs.md`); no-op при `BELIEFS_ENABLED=false`;
 - story — каркас (наполнение Sprint 8–11);
 - параметр `stages` позволяет выполнить подмножество стадий (для тестов).
 

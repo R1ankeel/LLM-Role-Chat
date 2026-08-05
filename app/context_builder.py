@@ -135,6 +135,7 @@ class ContextBuilder:
         is_isolated: bool = False,
         max_tokens: int | None = None,
         character_state: Any = None,
+        what_you_know_block: str = "",
     ) -> schemas.BuiltContext:
         counter = self._token_counter
         budget = build_budget(max_tokens)
@@ -324,6 +325,13 @@ class ContextBuilder:
         state_block = ""
         if settings.character_state_enabled and character_state is not None:
             state_block = build_your_state_block(character_state)
+        # WHAT YOU KNOW (Sprint 5, Plans/update20.md §9): beliefs персонажа.
+        # Рендер только при beliefs_enabled (read-path НЕ читает beliefs до
+        # включения флага — canary). Часть фиксированных блоков.
+        if not what_you_know_block and settings.beliefs_enabled:
+            what_you_know_block = await self._build_what_you_know_block(
+                db, char_id
+            )
         instructions_text = self._build_instructions_text(
             character,
             scene_state,
@@ -335,6 +343,7 @@ class ContextBuilder:
         system_tokens = counter.count(system_block)
         scene_tokens = counter.count(scene_block)
         state_tokens = counter.count(state_block)
+        what_you_know_tokens = counter.count(what_you_know_block)
         instructions_tokens = counter.count(instructions_text)
 
         # ---- 6. summary (P2, budgeted) ---------------------------------
@@ -466,6 +475,7 @@ class ContextBuilder:
             "system": system_tokens,
             "scene": scene_tokens,
             "character_state": state_tokens,
+            "what_you_know": what_you_know_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -486,6 +496,7 @@ class ContextBuilder:
             memories=mem_list,
             recency_tail_text=recency_tail_text,
             state_text=state_block,
+            what_you_know_text=what_you_know_block,
             total_tokens=total_tokens,
             token_count_mode=counter.mode,
             component_tokens=component_tokens,
@@ -754,6 +765,32 @@ class ContextBuilder:
     @staticmethod
     def _join_nonempty(*parts: str) -> str:
         return "\n\n".join(p for p in parts if p and p.strip())
+
+    async def _build_what_you_know_block(
+        self, db: AsyncSession, character_id: int
+    ) -> str:
+        """WHAT YOU KNOW block (Sprint 5, §9): top-K beliefs персонажа.
+
+        Рендер только при ``beliefs_enabled`` (canary); порог confidence —
+        ``beliefs_render_confidence``. Пусто при отсутствии beliefs/флага.
+        """
+        try:
+            from . import crud
+            from .prompt_builder import build_what_you_know_block as _render
+
+            beliefs = await crud.get_beliefs_for_character(
+                db,
+                character_id,
+                top_k=settings.beliefs_top_k,
+                min_confidence=settings.beliefs_render_confidence,
+            )
+            return _render(beliefs)
+        except Exception as exc:  # noqa: BLE001 — блок не роняет контекст
+            logger.warning(
+                "Failed to build what_you_know block for character %s: %s",
+                character_id, exc,
+            )
+            return ""
 
     def _log_context(self, built: schemas.BuiltContext) -> None:
         t = built.component_tokens

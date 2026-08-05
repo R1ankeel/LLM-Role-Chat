@@ -485,5 +485,28 @@ class Settings(BaseSettings):
         default=0.15, alias="SENSORS_PERCEPTION_SIGNIFICANCE_CAP"
     )
 
+    # ----- Belief System (Plans/update20.md §9, Sprint 5) -----
+    # Структурированные знания/убеждения персонажа (subject/predicate/object,
+    # source, confidence 0..1, type fact|belief|suspicion) вместо плоской
+    # истины. Персонаж НЕ автоматически знает World Truth — в контекст попадают
+    # только его beliefs. Пост-раунд детерминированно обновляются из событий,
+    # которые персонаж реально воспринял (presence + attention, §9 pipeline).
+    # Постепенное замещение MVP epistemic mask: при `beliefs_enabled=true` mask
+    # читает beliefs; при false — mask остаётся fallback (canary).
+    beliefs_enabled: bool = Field(default=False, alias="BELIEFS_ENABLED")
+    # Cap на число beliefs в контекст-блоке WHAT YOU KNOW (top-K, риск R4).
+    beliefs_top_k: int = Field(default=8, alias="BELIEFS_TOP_K")
+    # Порог confidence для рендера belief в контекст (ниже — не показываем).
+    beliefs_render_confidence: float = Field(
+        default=0.3, alias="BELIEFS_RENDER_CONFIDENCE"
+    )
+    # LLM-suggestion beliefs (suspicion с confidence≤0.5 без прямого наблюдения).
+    # Включается ТОЛЬКО после прохождения benchmark gate (§27):
+    # `benchmark_structured` на текущей модели, schema-validity ≥ 90%. Пока
+    # выключен — только детерминированный direct_observation путь.
+    beliefs_llm_suggestion_enabled: bool = Field(
+        default=False, alias="BELIEFS_LLM_SUGGESTION_ENABLED"
+    )
+
 
 settings = Settings()

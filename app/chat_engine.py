@@ -211,19 +211,25 @@ def _log_generation_diagnostics(
     )
 
 
-def _compute_epistemic_evidence(
+async def _compute_epistemic_evidence(
     round_snapshots: list[dict],
     viewer,
     all_characters: list,
     character_names: dict[int, str],
     character_locations: dict[int, str],
     player_id: int | None,
+    db: AsyncSession,
+    chat_id: int,
 ) -> set[int]:
     """Ids of characters whose behavior ``viewer`` perceived this round.
 
     MVP epistemic mask (docs/relations.md §10, Sprint 2 item 10): a character
     may only learn how another treats it when there was direct or observed
     evidence of that other's behavior in the current round (mode != "none").
+
+    Sprint 5 (§9, belief-aware): при ``beliefs_enabled`` evidence расширяется
+    beliefs — id персонажей, о которых у ``viewer`` уже есть убеждение из
+    прошлых раундов (mask может читать beliefs вместо «неизвестно»).
     """
     evidenced: set[int] = set()
     for other in all_characters:
@@ -239,7 +245,50 @@ def _compute_epistemic_evidence(
         )
         if _evidence_mode(ctx) in ("direct", "observed"):
             evidenced.add(other.id)
+    if settings.beliefs_enabled:
+        evidenced.update(
+            await _belief_evidenced_ids(db, chat_id, viewer.id, character_names)
+        )
     return evidenced
+
+
+async def _belief_evidenced_ids(
+    db: AsyncSession, chat_id: int, viewer_id: int, character_names: dict[int, str]
+) -> set[int]:
+    """Ids персонажей, о которых у ``viewer`` есть belief (Sprint 5, §9).
+
+    Убеждение из прошлых раундов заменяет «неизвестно» в mask; сами beliefs
+    рендерятся в блоке WHAT YOU KNOW. Пусто при отсутствии beliefs/флага.
+    """
+    if not settings.beliefs_enabled:
+        return set()
+    try:
+        from . import crud
+
+        beliefs = await crud.get_beliefs_for_character(
+            db,
+            viewer_id,
+            top_k=settings.beliefs_top_k,
+            min_confidence=settings.beliefs_render_confidence,
+        )
+        name_to_id = {
+            (name or "").strip().lower(): cid
+            for cid, name in character_names.items()
+            if name
+        }
+        ids = set()
+        for b in beliefs:
+            subject = (b.subject or "").strip().lower()
+            cid = name_to_id.get(subject)
+            if cid is not None and cid != viewer_id:
+                ids.add(cid)
+        return ids
+    except Exception as exc:
+        logger.warning(
+            "Failed to compute belief-evidenced ids (viewer=%s): %s",
+            viewer_id, exc,
+        )
+        return set()
 
 
 def _parse_allowed_locations(locations_json: str) -> set[str]:
@@ -640,13 +689,15 @@ async def process_user_message_streaming(
             round_snapshots_now = [
                 _message_snapshot(m) for m in round_messages
             ]
-            evidenced = _compute_epistemic_evidence(
+            evidenced = await _compute_epistemic_evidence(
                 round_snapshots_now,
                 current_character,
                 all_characters,
                 character_names,
                 character_locations,
                 player_id=player_id,
+                db=db,
+                chat_id=chat_id,
             )
             epistemic_mask_block = await relationship_service.build_epistemic_mask_block(
                 db, chat_id, current_character.id, current_character.name,
@@ -2257,13 +2308,15 @@ async def regenerate_message_streaming(
     epistemic_mask_block = ""
     try:
         round_snapshots_now = [_message_snapshot(m) for m in round_messages]
-        evidenced = _compute_epistemic_evidence(
+        evidenced = await _compute_epistemic_evidence(
             round_snapshots_now,
             character,
             all_characters,
             character_names,
             character_locations,
             player_id=player_id,
+            db=db,
+            chat_id=chat_id,
         )
         epistemic_mask_block = await relationship_service.build_epistemic_mask_block(
             db, chat_id, character.id, character.name,

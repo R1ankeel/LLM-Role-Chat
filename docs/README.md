@@ -17,6 +17,7 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [sensors.md](sensors.md) | Sensors Model — отдельный аналитический слой LLM (предложения perception/event/emotion/memory/relationship) |
 | [character_state.md](character_state.md) | Character State (Sprint 3): единое runtime-состояние персонажа — эмоции/стресс/mood, emotion_engine, блок YOUR STATE |
 | [attention.md](attention.md) | Attention (Sprint 4): «воспринято ≠ вошло в сознание» — детерминированный score, фильтр памяти/recency tail, Sensors perception-proposal |
+| [beliefs.md](beliefs.md) | Belief System (Sprint 5): знание/убеждение персонажа вместо плоской истины — pipeline event→presence→attention→belief, блок WHAT YOU KNOW |
 | [intervention.md](intervention.md) | Одноразовое «Вмешательство» игрока: жизнь инструкции, API, промпт |
 | [locations.md](locations.md) | «Локации 2.0»: модель Location, миграция, CRUD API, синхронизация ссылок |
 

@@ -162,6 +162,18 @@
 Подробно: `docs/character_state.md`. При `CHARACTER_STATE_ENABLED=false` (default)
 таблица не пишется и не читается, поведение равно legacy.
 
+## Belief System (Sprint 5, `Plans/update20.md §9`)
+
+| ключ | дефолт | описание |
+|---|---|---|
+| `BELIEFS_ENABLED` | `false` | belief-система: писать/читать `beliefs` пост-раунд + рендерить блок `WHAT YOU KNOW`; mask читает beliefs вместо «неизвестно» |
+| `BELIEFS_TOP_K` | `8` | cap beliefs персонажа в контекст (top-K по confidence) |
+| `BELIEFS_RENDER_CONFIDENCE` | `0.3` | порог уверенности: beliefs ниже — не рендерить |
+| `BELIEFS_LLM_SUGGESTION_ENABLED` | `false` | LLM-suggestion beliefs (только после benchmark gate `§27`, schema-validity ≥ 90%) |
+
+Подробно: `docs/beliefs.md`. При `BELIEFS_ENABLED=false` (default) таблица
+не пишется и не читается, остаётся MVP epistemic mask (canary, `§26`).
+
 ## Attention (Sprint 4, `Plans/update20.md §11`)
 
 | ключ | дефолт | описание |

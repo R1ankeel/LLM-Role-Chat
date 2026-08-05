@@ -304,8 +304,11 @@ UNIQUE `(source_character_id, target_character_id)`. Индексы: `ix_rel_sou
 
 Индекс `ix_character_states_chat_id`.
 
-### `beliefs` (Sprint 5)
-Знания/убеждения персонажа (триплет subject/predicate/object).
+### `beliefs` (Sprint 5 ✅)
+Знания/убеждения персонажа (триплет subject/predicate/object). Заполняется
+пост-раунд стадией `beliefs` в `post_round_pipeline` (детерминированный
+`belief_service` из world_events + presence/attention; под флагом
+`BELIEFS_ENABLED`, default false). См. `docs/beliefs.md`.
 
 | колонка | тип | примечание |
 |---|---|---|

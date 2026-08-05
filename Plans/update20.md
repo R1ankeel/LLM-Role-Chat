@@ -1738,6 +1738,58 @@ STORY            — current story state: активные threads + прогр�
 - **Критерий**: beliefs не противоречат presence; изоляция сохранена.
 - **НЕ делать**: не давать LLM напрямую менять beliefs без grounding.
 
+#### Sprint 5 — Статус (2026-08-05): ✅ ВЫПОЛНЕН
+
+- **Сделано** (без изменения поведения при `beliefs_enabled=false`; canary):
+  1. `app/belief_service.py` (новый, детерминированный pipeline §9): `BELIEF_SOURCES`
+     /`BELIEF_TYPES`, `source_for_presence` (present→direct_observation,
+     mentioned→heard, audible→rumor, told→told_by, absent→None), базовые confidence
+     (direct_observation 0.85, heard 0.7, told_by 0.5, inference 0.6, rumor 0.3,
+     memory 0.5), `told_by_confidence(trust)` = 0.2+0.6·(trust/100),
+     `compute_confidence`, `belief_type` (fact при ≥0.75 + direct/подтверждение;
+     belief при ≥0.5; иначе suspicion), `merge_confidence` (max, cap 0..1),
+     `triplet_from_event`, `collect_round_inputs` (все world events раунда),
+     `update_beliefs_from_round` (per-character: presence→source, attention gating
+     при `attention_enabled` и `attention < attention_low`, dedupe по триплету,
+     trust→told_by confidence, upsert/merge, world_truth_ref для direct; отчёт
+     {characters, written, updated, skipped}), `_trust_to_teller` (get_relationship);
+  2. `app/crud.py`: `get_beliefs_for_character` (top-K по confidence, пусто при
+     `beliefs_enabled=false` — read-path canary), `get_beliefs_for_chat`,
+     `_find_belief`, `upsert_belief` (валидация source/type, clamp confidence,
+     merge), `delete_belief`; хелперы пайплайна `get_presence_for_message`,
+     `get_attention_for_message`, `get_round_world_events` (все события раунда
+     с message_id/action — движковые speech/move тоже);
+  3. `app/context_builder.py`: `_build_what_you_know_block` (top-K + порог
+     `beliefs_render_confidence`, рендер только при `beliefs_enabled`),
+     параметр `what_you_know_block` в `build()`, счёт токенов
+     (component_tokens["what_you_know"]), поле `BuiltContext.what_you_know_text`;
+  4. `app/prompt_builder.py`: `build_what_you_know_block` (блок `<what_you_know>`
+     с маркерами «Ты знаешь/Ты полагаешь/Ты подозреваешь» + уверенность; data-only);
+  5. `app/ollama_client.py`: `what_you_know_block` прокинут через `build_chat_messages`,
+     `_generate_once`, `generate`; рендер в обоих путях (chat-messages и context_parts);
+  6. `app/chat_engine.py`: `_compute_epistemic_evidence` → async, при
+     `beliefs_enabled` расширяется `_belief_evidenced_ids` (beliefs по subject-имени);
+  7. `app/relationship_service.py`: `build_epistemic_mask_block` при
+     `beliefs_enabled` читает beliefs (`_beliefs_by_subject`/`_epistemic_belief_line`)
+     вместо «неизвестно»;
+  8. `app/post_round_pipeline.py`: стадия `beliefs` после character_state
+     (no-op при `beliefs_enabled=false`);
+  9. `app/config.py`: `BELIEFS_ENABLED` (false), `BELIEFS_TOP_K` (8),
+     `BELIEFS_RENDER_CONFIDENCE` (0.3), `BELIEFS_LLM_SUGGESTION_ENABLED` (false);
+     `app/schemas.py`: `BeliefSource`, `BeliefType`, `BeliefRead`.
+- **Тесты**: `test_beliefs.py` (8): персонаж не узнаёт невоспринятое (absent);
+  present → direct_observation/fact + world_truth_ref; низкий attention
+  («слышал фоном») → skip; told_by по trust (90 → 0.74, 10 → 0.26/suspicion,
+  без ребра → 0.5); неподтверждённый слух → suspicion без world_truth_ref;
+  read-path пуст при `beliefs_enabled=false` (mask fallback). Плюс правка
+  `test_post_round_pipeline.py` (стадия beliefs в наборе).
+- **Полный прогон**: 873 passed; 28 failed — все в НЕ тронутых модулях
+  (task_queue, memory_service/memory_perception, embeddings, context_state,
+  token_counter, stream_disconnect) — пред-существующие поломки тестов
+  (async-сигнатуры create_characters/run_job и т.п.), к beliefs не относятся.
+- **НЕ сделано** (задел §9): LLM-suggestion beliefs — за benchmark gate (§27);
+  пока только детерминированный direct_observation-путь.
+
 ### Sprint 6 — Hybrid Retrieval v2 (P1)
 
 - **Цель**: reranking с salience/story/relationship-сигналами.

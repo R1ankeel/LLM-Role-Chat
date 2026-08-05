@@ -1220,6 +1220,42 @@ async def get_attention_map(
     return {mid: attn for mid, attn in result.all()}
 
 
+async def get_presence_for_message(
+    db: AsyncSession, message_id: int, character_id: int
+) -> str:
+    """Presence одного события для персонажа (belief pipeline §9).
+
+    Нет строки → "absent" (не воспринял — belief не пишется, изоляция R2).
+    """
+    if message_id is None:
+        return "absent"
+    stmt = select(models.MessagePresence).where(
+        models.MessagePresence.character_id == character_id,
+        models.MessagePresence.message_id == message_id,
+    )
+    result = await db.execute(stmt)
+    row = result.scalars().first()
+    return row.presence if row is not None else "absent"
+
+
+async def get_attention_for_message(
+    db: AsyncSession, message_id: int, character_id: int
+) -> float | None:
+    """Attention score одного события для персонажа (belief pipeline §9).
+
+    None при выключенном ``attention_enabled`` / нет строки — gating выключен.
+    """
+    if not settings.attention_enabled or message_id is None:
+        return None
+    stmt = select(models.MessagePresence).where(
+        models.MessagePresence.character_id == character_id,
+        models.MessagePresence.message_id == message_id,
+    )
+    result = await db.execute(stmt)
+    row = result.scalars().first()
+    return row.attention if row is not None else None
+
+
 async def _attention_context_for_chat(
     db: AsyncSession, chat_id: int, character_ids: list[int]
 ) -> dict[int, dict[str, set[int]]]:
@@ -2927,6 +2963,133 @@ async def update_character_state(
     return state
 
 
+# ------------------------ Belief System (Sprint 5, Plans/update20.md §9) ----
+
+async def get_beliefs_for_character(
+    db: AsyncSession,
+    character_id: int,
+    *,
+    top_k: int | None = None,
+    min_confidence: float = 0.0,
+) -> list[models.Belief]:
+    """Beliefs персонажа (топ-K по confidence, §9).
+
+    read-path: в контекст попадают ТОЛЬКО свои beliefs; пусто при выключенном
+    ``beliefs_enabled`` (canary — никто не читает таблицу до включения флага).
+    """
+    if not settings.beliefs_enabled:
+        return []
+    stmt = select(models.Belief).where(
+        models.Belief.character_id == character_id,
+        models.Belief.confidence >= min_confidence,
+    )
+    if top_k is None:
+        top_k = settings.beliefs_top_k
+    stmt = stmt.order_by(models.Belief.confidence.desc(), models.Belief.id.desc())
+    if top_k:
+        stmt = stmt.limit(top_k)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_beliefs_for_chat(
+    db: AsyncSession, chat_id: int
+) -> list[models.Belief]:
+    """Все beliefs чата (для debug/API; §29.1)."""
+    stmt = (
+        select(models.Belief)
+        .where(models.Belief.chat_id == chat_id)
+        .order_by(models.Belief.character_id, models.Belief.confidence.desc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def _find_belief(
+    db: AsyncSession,
+    character_id: int,
+    subject: str,
+    predicate: str,
+    object: str,
+) -> models.Belief | None:
+    stmt = select(models.Belief).where(
+        models.Belief.character_id == character_id,
+        models.Belief.subject == subject,
+        models.Belief.predicate == predicate,
+        models.Belief.object == object,
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def upsert_belief(
+    db: AsyncSession,
+    chat_id: int,
+    character_id: int,
+    *,
+    subject: str,
+    predicate: str,
+    object: str = "",
+    source: str = "memory",
+    confidence: float = 0.5,
+    type: str = "belief",
+    world_truth_ref: int | None = None,
+) -> models.Belief:
+    """Создать/обновить belief персонажа (Sprint 5).
+
+    Ключ — (character_id, subject, predicate, object): повторное наблюдение
+    повышает confidence (детерминированное слияние в belief_service), источник
+    обновляется только на более сильный. Невалидные значения обрезаются
+    (confidence → 0..1, source/type → известные значения).
+    """
+    if source not in ("direct_observation", "heard", "told_by", "inference", "rumor", "memory"):
+        source = "memory"
+    if type not in ("fact", "belief", "suspicion"):
+        type = "belief"
+    confidence = _clamp_json_number(confidence, 0.0, 1.0)
+    subject = (subject or "").strip()
+    predicate = (predicate or "").strip()
+    if not subject or not predicate:
+        raise ValueError("belief subject and predicate are required")
+
+    belief = await _find_belief(db, character_id, subject, predicate, object)
+    if belief is not None:
+        from .belief_service import merge_confidence
+
+        belief.confidence = merge_confidence(belief.confidence, confidence)
+        belief.updated_at = datetime.utcnow()
+        if world_truth_ref is not None:
+            belief.world_truth_ref = world_truth_ref
+        await db.commit()
+        await db.refresh(belief)
+        return belief
+    belief = models.Belief(
+        chat_id=chat_id,
+        character_id=character_id,
+        subject=subject,
+        predicate=predicate,
+        object=object,
+        source=source,
+        confidence=confidence,
+        type=type,
+        world_truth_ref=world_truth_ref,
+    )
+    db.add(belief)
+    await db.commit()
+    await db.refresh(belief)
+    return belief
+
+
+async def delete_belief(db: AsyncSession, belief_id: int) -> bool:
+    """Удалить belief (для отката/debug)."""
+    belief = await db.get(models.Belief, belief_id)
+    if belief is None:
+        return False
+    await db.delete(belief)
+    await db.commit()
+    return True
+
+
 # ------------------------ Round inputs for emotion engine (Sprint 3) ---------
 
 async def get_relationship_events_for_round(
@@ -3002,6 +3165,49 @@ async def get_world_events_for_round(
                 "story_salience": event.story_salience,
                 "target_character_ids": target_ids,
                 "action": event.action,
+            }
+        )
+    return events
+
+
+async def get_round_world_events(
+    db: AsyncSession, round_id: str | None
+) -> list[dict]:
+    """ВСЕ world events раунда (включая движковые speech/move, §9 pipeline).
+
+    Для belief pipeline: каждое событие с ``message_id`` (речевое) привязывается
+    к presence/attention через ``message_presence`` — так belief пишется ТОЛЬКО
+    из событий, которые персонаж реально воспринял (изоляция R2). Возвращает
+    ``{message_id, character_id, event_type, target_character_ids, action}``.
+    """
+    if not round_id:
+        return []
+    stmt = (
+        select(models.WorldEvent)
+        .where(models.WorldEvent.round_id == round_id)
+        .order_by(models.WorldEvent.id)
+    )
+    result = await db.execute(stmt)
+    events: list[dict] = []
+    for event in result.scalars().all():
+        try:
+            target_ids = json.loads(event.target_character_ids or "[]")
+        except (json.JSONDecodeError, TypeError):
+            target_ids = []
+        try:
+            action = json.loads(event.action or "{}")
+        except (json.JSONDecodeError, TypeError):
+            action = {}
+        if not isinstance(action, dict):
+            action = {}
+        events.append(
+            {
+                "id": event.id,
+                "message_id": event.message_id,
+                "character_id": event.character_id,
+                "event_type": event.event_type,
+                "target_character_ids": target_ids,
+                "action": action,
             }
         )
     return events
