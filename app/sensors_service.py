@@ -184,10 +184,11 @@ class SensorsService:
                     num_predict=num_predict,
                     format_schema=schema,
                 )
-                response = await asyncio.wait_for(
-                    client.post("/api/chat", json=payload),
-                    timeout=settings.sensors_timeout,
-                )
+                async with ollama_client.llm_request(self.model, "/api/chat"):
+                    response = await asyncio.wait_for(
+                        client.post("/api/chat", json=payload),
+                        timeout=settings.sensors_timeout,
+                    )
                 response.raise_for_status()
                 data = response.json()
                 return data.get("message", {}).get("content", "") or None
@@ -203,10 +204,11 @@ class SensorsService:
                 num_predict=num_predict,
                 format_schema=schema,
             )
-            response = await asyncio.wait_for(
-                client.post("/api/generate", json=payload),
-                timeout=settings.sensors_timeout,
-            )
+            async with ollama_client.llm_request(self.model, "/api/generate"):
+                response = await asyncio.wait_for(
+                    client.post("/api/generate", json=payload),
+                    timeout=settings.sensors_timeout,
+                )
             response.raise_for_status()
             data = response.json()
             return data.get("response", "") or None

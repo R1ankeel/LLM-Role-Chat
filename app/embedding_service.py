@@ -7,6 +7,7 @@ from typing import Optional
 import httpx
 
 from .config import settings
+from .ollama_client import llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,11 @@ class EmbeddingService:
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             try:
-                response = await self.client.post(
-                    "/api/embed",
-                    json={"model": self._model, "input": batch},
-                )
+                async with llm_request(self._model, "/api/embed"):
+                    response = await self.client.post(
+                        "/api/embed",
+                        json={"model": self._model, "input": batch},
+                    )
                 response.raise_for_status()
                 data = response.json()
                 embeddings = data.get("embeddings", [])
@@ -78,10 +80,11 @@ class EmbeddingService:
     async def unload_model(self) -> None:
         """Unload the embedding model from Ollama memory (keep_alive=0)."""
         try:
-            await self.client.post(
-                "/api/generate",
-                json={"model": self._model, "keep_alive": 0},
-            )
+            async with llm_request(self._model, "/api/generate"):
+                await self.client.post(
+                    "/api/generate",
+                    json={"model": self._model, "keep_alive": 0},
+                )
         except Exception as exc:
             logger.warning("Failed to unload embedding model: %s", exc)
 

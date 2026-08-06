@@ -1309,16 +1309,17 @@ async def _merge_memory_cluster_llm(
     )
 
     try:
-        resp = await client.post(
-            "/api/generate",
-            json={
-                "model": consolidation_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.3, "num_predict": 100},
-            },
-            timeout=settings.ollama_timeout,
-        )
+        async with ollama_client.llm_request(consolidation_model, "/api/generate"):
+            resp = await client.post(
+                "/api/generate",
+                json={
+                    "model": consolidation_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 100},
+                },
+                timeout=settings.ollama_timeout,
+            )
         resp.raise_for_status()
         data = resp.json()
         merged = data.get("response", "").strip()

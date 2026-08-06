@@ -365,9 +365,10 @@ async def _evaluate_crisis_llm(
             enable_thinking=False,
             format_schema=schema,
         )
-        response = await asyncio.wait_for(
-            client.post("/api/chat", json=payload), timeout=timeout
-        )
+        async with ollama_client.llm_request(model_name, "/api/chat"):
+            response = await asyncio.wait_for(
+                client.post("/api/chat", json=payload), timeout=timeout
+            )
         response.raise_for_status()
         data = response.json()
         content = (data.get("message", {}) or {}).get("content", "") or None
@@ -382,9 +383,10 @@ async def _evaluate_crisis_llm(
             enable_thinking=False,
             format_schema=schema,
         )
-        response = await asyncio.wait_for(
-            client.post("/api/generate", json=payload), timeout=timeout
-        )
+        async with ollama_client.llm_request(model_name, "/api/generate"):
+            response = await asyncio.wait_for(
+                client.post("/api/generate", json=payload), timeout=timeout
+            )
         response.raise_for_status()
         data = response.json()
         content = data.get("response", "") or None

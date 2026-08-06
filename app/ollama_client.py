@@ -7,7 +7,9 @@ import random
 import re
 import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -60,6 +62,49 @@ from . import action_resolution
 from .witness_model import Presence, filter_history_for_character, filter_history_for_character_with_presence
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Global LLM request serialization. Ollama (один сервер, одна GPU) обрабатывает
+# запросы по одному; параллельные вызовы одной модели заставляют её держать
+# несколько KV-окон (срывая reuse из context_budget_manager) или ротировать
+# модели в VRAM. Поэтому каждый запрос к Ollama берёт общий lock и держит его
+# весь обмен (включая полный стрим и ретраи): следующий вызов отправляется
+# только когда предыдущий полностью завершён.
+#
+# Lock хранится по одному на event loop: приложение живёт в одном loop, а
+# pytest-asyncio создаёт свой loop на каждый тест — модульный asyncio.Lock
+# падал бы с "bound to a different event loop" (Python 3.10+).
+# ---------------------------------------------------------------------------
+
+_llm_locks: "WeakKeyDictionary[Any, asyncio.Lock]" = WeakKeyDictionary()
+
+
+def _llm_lock_for() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _llm_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _llm_locks[loop] = lock
+    return lock
+
+
+@asynccontextmanager
+async def llm_request(model_name: str | None = None, endpoint: str = ""):
+    """Serialize one Ollama HTTP request behind the global LLM lock.
+
+    Holds the lock for the whole exchange, so concurrent callers queue up FIFO
+    and each next request is only sent once the previous one has completed.
+    """
+    label = f"{model_name or '?'}/{endpoint}"
+    lock = _llm_lock_for()
+    logger.debug("LLM request queueing (%s)", label)
+    async with lock:
+        logger.debug("LLM request started (%s)", label)
+        try:
+            yield
+        finally:
+            logger.debug("LLM request finished (%s)", label)
+
 
 OLLAMA_BASE_URL = settings.ollama_base_url
 DEFAULT_TEMPERATURE = settings.default_temperature
@@ -676,32 +721,33 @@ async def _call_ollama(
     )
 
     last_error = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = await client.post("/api/generate", json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "")
-        except httpx.TimeoutException:
-            last_error = RuntimeError(
-                f"Ollama не отвечает (таймаут {settings.generate_timeout} сек)"
-            )
-            logger.warning("Ollama timeout (attempt %d/%d)", attempt, MAX_RETRIES)
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"Ollama вернула ошибку: {exc.response.text}")
-        except httpx.RequestError as exc:
-            last_error = RuntimeError(
-                f"Ollama недоступна. Убедитесь, что сервер запущен на {settings.ollama_base_url}"
-            )
-            logger.warning(
-                "Ollama connection error (attempt %d/%d): %s",
-                attempt,
-                MAX_RETRIES,
-                exc,
-            )
+    async with llm_request(model_name, "/api/generate"):
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await client.post("/api/generate", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("response", "")
+            except httpx.TimeoutException:
+                last_error = RuntimeError(
+                    f"Ollama не отвечает (таймаут {settings.generate_timeout} сек)"
+                )
+                logger.warning("Ollama timeout (attempt %d/%d)", attempt, MAX_RETRIES)
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(f"Ollama вернула ошибку: {exc.response.text}")
+            except httpx.RequestError as exc:
+                last_error = RuntimeError(
+                    f"Ollama недоступна. Убедитесь, что сервер запущен на {settings.ollama_base_url}"
+                )
+                logger.warning(
+                    "Ollama connection error (attempt %d/%d): %s",
+                    attempt,
+                    MAX_RETRIES,
+                    exc,
+                )
 
-        if attempt < MAX_RETRIES:
-            await asyncio.sleep(RETRY_DELAY)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
 
     raise last_error or RuntimeError("Ollama недоступна после всех попыток")
 
@@ -725,33 +771,34 @@ async def _call_ollama_chat(
     )
 
     last_error = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = await client.post("/api/chat", json=payload)
-            response.raise_for_status()
-            data = response.json()
-            message = data.get("message") or {}
-            return message.get("content", "")
-        except httpx.TimeoutException:
-            last_error = RuntimeError(
-                f"Ollama не отвечает (таймаут {settings.generate_timeout} сек)"
-            )
-            logger.warning("Ollama chat timeout (attempt %d/%d)", attempt, MAX_RETRIES)
-        except httpx.HTTPStatusError as exc:
-            raise RuntimeError(f"Ollama вернула ошибку: {exc.response.text}")
-        except httpx.RequestError as exc:
-            last_error = RuntimeError(
-                f"Ollama недоступна. Убедитесь, что сервер запущен на {settings.ollama_base_url}"
-            )
-            logger.warning(
-                "Ollama chat connection error (attempt %d/%d): %s",
-                attempt,
-                MAX_RETRIES,
-                exc,
-            )
+    async with llm_request(model_name, "/api/chat"):
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await client.post("/api/chat", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                message = data.get("message") or {}
+                return message.get("content", "")
+            except httpx.TimeoutException:
+                last_error = RuntimeError(
+                    f"Ollama не отвечает (таймаут {settings.generate_timeout} сек)"
+                )
+                logger.warning("Ollama chat timeout (attempt %d/%d)", attempt, MAX_RETRIES)
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(f"Ollama вернула ошибку: {exc.response.text}")
+            except httpx.RequestError as exc:
+                last_error = RuntimeError(
+                    f"Ollama недоступна. Убедитесь, что сервер запущен на {settings.ollama_base_url}"
+                )
+                logger.warning(
+                    "Ollama chat connection error (attempt %d/%d): %s",
+                    attempt,
+                    MAX_RETRIES,
+                    exc,
+                )
 
-        if attempt < MAX_RETRIES:
-            await asyncio.sleep(RETRY_DELAY)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
 
     raise last_error or RuntimeError("Ollama недоступна после всех попыток")
 
@@ -769,6 +816,32 @@ async def _read_ollama_error(response: httpx.Response) -> str:
 
 
 async def _stream_ollama_generate(
+    client: httpx.AsyncClient,
+    model_name: str,
+    prompt: str,
+    temperature: float = DEFAULT_TEMPERATURE,
+    stop: list[str] | None = None,
+    *,
+    enable_thinking: bool | None = None,
+    num_ctx: int | None = None,
+    format_schema: dict | None = None,
+) -> AsyncIterator[dict]:
+    """Stream ``/api/generate`` holding the global LLM lock for the whole exchange."""
+    async with llm_request(model_name, "/api/generate"):
+        async for event in _stream_ollama_generate_unlocked(
+            client,
+            model_name,
+            prompt,
+            temperature=temperature,
+            stop=stop,
+            enable_thinking=enable_thinking,
+            num_ctx=num_ctx,
+            format_schema=format_schema,
+        ):
+            yield event
+
+
+async def _stream_ollama_generate_unlocked(
     client: httpx.AsyncClient,
     model_name: str,
     prompt: str,
@@ -876,6 +949,34 @@ async def _stream_ollama_generate(
 
 
 async def _stream_ollama_chat(
+    client: httpx.AsyncClient,
+    model_name: str,
+    messages: list[ChatMessage],
+    temperature: float = DEFAULT_TEMPERATURE,
+    stop: list[str] | None = None,
+    *,
+    enable_thinking: bool | None = None,
+    num_ctx: int | None = None,
+    tools: list | None = None,
+    format_schema: dict | None = None,
+) -> AsyncIterator[dict]:
+    """Stream ``/api/chat`` holding the global LLM lock for the whole exchange."""
+    async with llm_request(model_name, "/api/chat"):
+        async for event in _stream_ollama_chat_unlocked(
+            client,
+            model_name,
+            messages,
+            temperature=temperature,
+            stop=stop,
+            enable_thinking=enable_thinking,
+            num_ctx=num_ctx,
+            tools=tools,
+            format_schema=format_schema,
+        ):
+            yield event
+
+
+async def _stream_ollama_chat_unlocked(
     client: httpx.AsyncClient,
     model_name: str,
     messages: list[ChatMessage],
@@ -2451,43 +2552,16 @@ async def extract_scene_state(
     if num_predict and num_predict > 0:
         scene_options["num_predict"] = num_predict
 
-    try:
-        # Try with JSON Schema first (Ollama native)
-        if settings.use_chat_api:
-            payload = {
-                "model": model_name,
-                "messages": messages,
-                "stream": False,
-                "options": scene_options,
-                "format": SCENE_STATE_JSON_SCHEMA,
-            }
-            response = await client.post("/api/chat", json=payload)
-            response.raise_for_status()
-            data = response.json()
-            content = data.get("message", {}).get("content", "")
-        else:
-            prompt = "\n\n".join(msg["content"] for msg in messages if msg.get("content"))
-            payload = {
-                "model": model_name,
-                "prompt": prompt,
-                "stream": False,
-                "options": scene_options,
-                "format": SCENE_STATE_JSON_SCHEMA,
-            }
-            response = await client.post("/api/generate", json=payload)
-            response.raise_for_status()
-            data = response.json()
-            content = data.get("response", "")
-    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
-        logger.warning("Scene state extraction with JSON schema failed: %s", exc)
-        # Fallback: prompted JSON without schema
+    async with llm_request(model_name, "/api/chat"):
         try:
+            # Try with JSON Schema first (Ollama native)
             if settings.use_chat_api:
                 payload = {
                     "model": model_name,
                     "messages": messages,
                     "stream": False,
                     "options": scene_options,
+                    "format": SCENE_STATE_JSON_SCHEMA,
                 }
                 response = await client.post("/api/chat", json=payload)
                 response.raise_for_status()
@@ -2500,14 +2574,42 @@ async def extract_scene_state(
                     "prompt": prompt,
                     "stream": False,
                     "options": scene_options,
+                    "format": SCENE_STATE_JSON_SCHEMA,
                 }
                 response = await client.post("/api/generate", json=payload)
                 response.raise_for_status()
                 data = response.json()
                 content = data.get("response", "")
-        except Exception as fallback_exc:
-            logger.warning("Scene state extraction fallback also failed: %s", fallback_exc)
-            return None
+        except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
+            logger.warning("Scene state extraction with JSON schema failed: %s", exc)
+            # Fallback: prompted JSON without schema
+            try:
+                if settings.use_chat_api:
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "stream": False,
+                        "options": scene_options,
+                    }
+                    response = await client.post("/api/chat", json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    content = data.get("message", {}).get("content", "")
+                else:
+                    prompt = "\n\n".join(msg["content"] for msg in messages if msg.get("content"))
+                    payload = {
+                        "model": model_name,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": scene_options,
+                    }
+                    response = await client.post("/api/generate", json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    content = data.get("response", "")
+            except Exception as fallback_exc:
+                logger.warning("Scene state extraction fallback also failed: %s", fallback_exc)
+                return None
 
     # Parse JSON response
     try:
@@ -2624,27 +2726,28 @@ async def extract_round_events(
             return data.get("message", {}).get("content", "")
         return data.get("response", "")
 
-    try:
-        payload = _payload(use_format=True)
-        if settings.use_chat_api:
-            response = await client.post("/api/chat", json=payload)
-        else:
-            response = await client.post("/api/generate", json=payload)
-        response.raise_for_status()
-        content = _read_content(response.json())
-    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
-        logger.warning("Round event extraction with JSON schema failed: %s", exc)
+    async with llm_request(model_name, "/api/chat"):
         try:
-            payload = _payload(use_format=False)
+            payload = _payload(use_format=True)
             if settings.use_chat_api:
                 response = await client.post("/api/chat", json=payload)
             else:
                 response = await client.post("/api/generate", json=payload)
             response.raise_for_status()
             content = _read_content(response.json())
-        except Exception as fallback_exc:
-            logger.warning("Round event extraction fallback failed: %s", fallback_exc)
-            return None
+        except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
+            logger.warning("Round event extraction with JSON schema failed: %s", exc)
+            try:
+                payload = _payload(use_format=False)
+                if settings.use_chat_api:
+                    response = await client.post("/api/chat", json=payload)
+                else:
+                    response = await client.post("/api/generate", json=payload)
+                response.raise_for_status()
+                content = _read_content(response.json())
+            except Exception as fallback_exc:
+                logger.warning("Round event extraction fallback failed: %s", fallback_exc)
+                return None
 
     try:
         result = json.loads(content)
