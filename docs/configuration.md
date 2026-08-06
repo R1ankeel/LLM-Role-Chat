@@ -226,14 +226,23 @@ presence-лестница и рендер recent history не меняются.
 
 ## Динамический num_ctx (KV window)
 
+`ContextBudgetManager` считает `num_ctx` на каждый вызов основной модели:
+реальные токены собранного prompt + история + ответ + thinking-резерв +
+safety margin → clamp в `[MIN_CTX, MAX_CTX]` → round вверх до шагов
+`CONTEXT_ROUND_STEPS` (переиспользование KV cache).
+
 | ключ | дефолт | описание |
 |---|---|---|
-| `MIN_CTX` | `8192` | стартовое окно на чат |
-| `MAX_CTX` | `32778` | потолок окна |
-| `CTX_BUFFER_TOKENS` | `100` | буфер на рост |
-| `CTX_SAFETY_FACTOR` | `1.3` | коэфф. запаса |
+| `MIN_CTX` | `8192` | нижний порог окна (минимум, даже если расчёт меньше) |
+| `MAX_CTX` | `32778` | потолок окна (лимит модели, никогда не превышается) |
+| `RESPONSE_BUDGET_TOKENS` | `2000` | max размер ответа, включается в расчёт |
+| `THINKING_RESERVE` | `2048` | запас под reasoning при Thinking Mode (резервируется всегда) |
+| `SAFETY_MARGIN` | `1000` | запас сверх расчёта: `max(SAFETY_MARGIN, 10% от prompt)` |
+| `ROUND_CONTEXT` | `true` | округлять `num_ctx` вверх до шагов `CONTEXT_ROUND_STEPS` |
+| `CONTEXT_ROUND_STEPS` | `4096…65536` | шаги округления (через запятую) |
 
-Окно только растёт: если `prompt_tokens > current_ctx`, оно увеличивается (с запасом), но не выше `MAX_CTX`. Сбрасывается при создании чата.
+Логирование всех этапов расчёта — на уровне `DEBUG` (источник:
+`app/context_budget_manager.py`).
 
 ## Rate limit
 

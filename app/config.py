@@ -212,6 +212,26 @@ class Settings(BaseSettings):
     ctx_buffer_tokens: int = Field(default=100, alias="CTX_BUFFER_TOKENS")
     ctx_safety_factor: float = Field(default=1.3, alias="CTX_SAFETY_FACTOR")
 
+    # ----- Dynamic Context Budget Manager (per-request num_ctx) -----
+    # Каждый вызов основной модели сам считает свой num_ctx: реальные токены
+    # собранного prompt + история + ответ + thinking-резерв + safety margin,
+    # затем clamp в [MIN_CTX, MAX_CTX] и round вверх до шагов из
+    # CONTEXT_ROUND_STEPS (переиспользование KV cache). MIN_CTX/MAX_CTX выше.
+    # Максимально возможный размер ответа, включаемый в расчёт окна.
+    response_budget_tokens: int = Field(default=2000, alias="RESPONSE_BUDGET_TOKENS")
+    # Thinking Mode резервирует дополнительный запас под reasoning (всегда,
+    # даже если модель использует его не полностью).
+    thinking_reserve_tokens: int = Field(default=2048, alias="THINKING_RESERVE")
+    # Дополнительный запас сверх расчёта: max(SAFETY_MARGIN, 10% от prompt).
+    safety_margin_tokens: int = Field(default=1000, alias="SAFETY_MARGIN")
+    # Округлять num_ctx вверх до шагов из CONTEXT_ROUND_STEPS.
+    round_context: bool = Field(default=True, alias="ROUND_CONTEXT")
+    # Шаги округления (через запятую). Пусто = дефолтный список в коде.
+    context_rounding_steps: str = Field(
+        default="",
+        alias="CONTEXT_ROUND_STEPS",
+    )
+
     # Rate limiting
     rate_limit_seconds: int = Field(default=5, alias="RATE_LIMIT_SECONDS")
 

@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 
 from .config import settings
-from .context_state import ctx_state
+from .context_budget_manager import context_budget_manager
 from .token_counter import get_token_counter
 from .prompt_builder import (
     build_anti_mimicry_block,
@@ -565,6 +565,27 @@ def _count_prompt_tokens(
     if chat_messages:
         return counter.count_messages(chat_messages)
     return counter.count(full_prompt)
+
+
+def _count_history_tokens(
+    dialogue_block: str,
+    built_context: schemas.BuiltContext | None = None,
+) -> int:
+    """Token count of the history block actually rendered in the prompt.
+
+    Reuses ``component_tokens`` precomputed by the context builder when
+    available (no extra tokenization pass); otherwise counts the rendered
+    dialogue block directly.
+    """
+    if built_context is not None:
+        ct = built_context.component_tokens or {}
+        recent = int(ct.get("recent_history", 0) or 0)
+        retrieved = int(ct.get("retrieved_history", 0) or 0)
+        if recent or retrieved:
+            return recent + retrieved
+    if not dialogue_block:
+        return 0
+    return get_token_counter().count(dialogue_block)
 
 
 def _build_generate_payload(
@@ -1414,7 +1435,14 @@ async def _generate_once(
         chat_messages = []
 
     prompt_tokens = _count_prompt_tokens(chat_messages, full_prompt)
-    num_ctx = ctx_state.apply_prompt(chat_id, prompt_tokens)
+    history_tokens = _count_history_tokens(dialogue_block, built_context)
+    budget = context_budget_manager.calculate(
+        chat_id=chat_id,
+        prompt_tokens=prompt_tokens,
+        history_tokens=history_tokens,
+        thinking=thinking,
+    )
+    num_ctx = budget.final_ctx
 
     logger.info(
         "[chat_id=%d] Ollama request (api=%s, model=%s, character=%s, %s, "
