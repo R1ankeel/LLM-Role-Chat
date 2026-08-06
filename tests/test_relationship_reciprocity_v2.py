@@ -280,7 +280,9 @@ class TestConstrainPairDeltaWithMultiplier:
             },
         )
         assert out is not None
-        assert out.delta_affection == 20
+        # The belief multiplier narrows only observed/hearsay caps; direct is
+        # narrowed by the importance cap instead (§27.2): importance=5 → 10.
+        assert out.delta_affection == 10
 
     def test_cap_floor_is_one(self, monkeypatch):
         monkeypatch.setattr(

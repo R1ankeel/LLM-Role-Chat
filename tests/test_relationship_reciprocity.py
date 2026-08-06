@@ -54,7 +54,9 @@ class TestReciprocityNoSync:
 
         ab = await get_relationship(db_session, a.id, b.id)
         ba = await get_relationship(db_session, b.id, a.id)
-        assert ab.affection == 70  # 50 + 20 (schema clamps |delta| <= 20)
+        # 50 + 20 (schema clamps |delta| <= 20) -> growth resistance at
+        # current=50 (§27.1): 20 * ((100-50)/100)**1.5 ≈ 7 -> 57.
+        assert ab.affection == 57
         assert ab.trust == 40      # 50 - 10
         # Reverse edge untouched (still defaults)
         assert ba.affection == 50
@@ -72,7 +74,7 @@ class TestReciprocityNoSync:
         ab_after = await get_relationship(db_session, a.id, b.id)
         ba_after = await get_relationship(db_session, b.id, a.id)
         assert ba_after.resentment == 20
-        assert ab_after.affection == 70
+        assert ab_after.affection == 57
         assert ab_after.trust == 40
         assert ab_after.resentment == 0
 

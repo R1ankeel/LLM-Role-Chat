@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import CharacterRelationship, RelationshipEvent
 from app.relationship_service import (
     apply_delta,
+    apply_saturation_guard,
     build_behavior_drivers_block,
     build_epistemic_mask_block,
     build_relationships_block,
@@ -16,6 +17,9 @@ from app.relationship_service import (
     is_family_type,
     list_received_relationships,
     list_relationships_for_character,
+    recent_gain,
+    scale_delta_by_resistance,
+    trajectory_metric_gain,
     update_relationship_fields,
     validate_transition,
 )
@@ -150,8 +154,35 @@ class TestApplyDelta:
             importance=5,
         )
         rel = await apply_delta(db_session, delta, chat.id)
-        assert rel.affection == 60
-        assert rel.trust == 55
+        # Growth resistance (§27.1): at current=50 the factor is
+        # ((100-50)/100)**1.5 ≈ 0.354, so 10 → 4 and 5 → 2.
+        assert rel.affection == 54
+        assert rel.trust == 52
+
+    async def test_apply_negative_delta_not_dampened(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=-10,
+            importance=5,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        assert rel.affection == 40  # negative deltas pass through unchanged
+
+    async def test_apply_resistance_vanishes_near_zero(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        await update_relationship_fields(db_session, rel, affection=10)
+        delta = RelationshipDelta(
+            source_character_id=a.id,
+            target_character_id=b.id,
+            delta_affection=10,
+            importance=5,
+        )
+        rel = await apply_delta(db_session, delta, chat.id)
+        # ((100-10)/100)**1.5 ≈ 0.854 → 10 * 0.854 ≈ 9.
+        assert rel.affection == 19
 
     async def test_apply_clamps_delta(self, db_session: AsyncSession, chat, three_characters):
         a, b, _ = three_characters
@@ -195,7 +226,7 @@ class TestApplyDelta:
         )
         rel = await apply_delta(db_session, delta, chat.id)
         assert rel.relationship_type == "родитель"  # blocked, stays family
-        assert rel.affection == 55  # metrics still applied
+        assert rel.affection == 52  # 5 → 2 by growth resistance at current=50
 
     async def test_family_type_cannot_be_set_by_engine(
         self, db_session: AsyncSession, chat, three_characters
@@ -297,6 +328,138 @@ class TestApplyDelta:
         assert rel.relationship_type == "нейтральное"
         events = await get_recent_events(db_session, rel)
         assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
+# Anti-inflation (§27.1): growth resistance
+# ---------------------------------------------------------------------------
+class TestScaleDeltaByResistance:
+    def test_negative_delta_unchanged(self):
+        assert scale_delta_by_resistance(50, -10) == -10
+        assert scale_delta_by_resistance(50, 0) == 0
+
+    def test_low_value_almost_no_dampening(self):
+        # ((100-10)/100)**1.5 ≈ 0.854 → 10 * 0.854 ≈ 9
+        assert scale_delta_by_resistance(10, 10) == 9
+
+    def test_mid_value_half_dampening(self):
+        # ((100-50)/100)**1.5 ≈ 0.354 → 10 * 0.354 ≈ 4
+        assert scale_delta_by_resistance(50, 10) == 4
+
+    def test_high_value_strong_dampening(self):
+        # ((100-90)/100)**1.5 = 0.1**1.5 ≈ 0.032 → 20 * 0.032 ≈ 1
+        assert scale_delta_by_resistance(90, 20) == 1
+
+    def test_at_ceiling_returns_zero(self):
+        assert scale_delta_by_resistance(100, 20) == 0
+
+    def test_explicit_exponent(self):
+        # exponent=1: (0.5)**1 = 0.5 → 10 * 0.5 = 5
+        assert scale_delta_by_resistance(50, 10, exponent=1) == 5
+
+
+# ---------------------------------------------------------------------------
+# Anti-inflation (§27.3): saturation guard
+# ---------------------------------------------------------------------------
+class TestApplySaturationGuard:
+    def test_below_threshold_unchanged(self):
+        assert apply_saturation_guard(10, 20, threshold=25) == 10
+
+    def test_above_threshold_scaled(self):
+        # 10 * 0.3 = 3
+        assert apply_saturation_guard(10, 30, threshold=25, factor=0.3) == 3
+
+    def test_floor_is_one(self):
+        assert apply_saturation_guard(2, 30, threshold=25, factor=0.3) == 1
+
+    def test_negative_delta_unchanged(self):
+        assert apply_saturation_guard(-10, 100, threshold=25) == -10
+
+    def test_zero_delta_unchanged(self):
+        assert apply_saturation_guard(0, 100, threshold=25) == 0
+
+
+# ---------------------------------------------------------------------------
+# Anti-inflation (§27.3): trajectory gain
+# ---------------------------------------------------------------------------
+class TestTrajectoryMetricGain:
+    @staticmethod
+    def _event(affection_after: int) -> RelationshipEvent:
+        return RelationshipEvent(
+            relationship_id=1,
+            description="",
+            reason="",
+            affection_after=affection_after,
+            importance=5,
+        )
+
+    def test_sums_positive_diffs_only(self):
+        events = [
+            self._event(55), self._event(58), self._event(52),
+        ]
+        # diffs: +3, -6 -> only +3 counts
+        assert trajectory_metric_gain(events, "affection") == 3
+
+    def test_flat_window_is_zero(self):
+        events = [self._event(55), self._event(55), self._event(55)]
+        assert trajectory_metric_gain(events, "affection") == 0
+
+    def test_single_event_is_zero(self):
+        assert trajectory_metric_gain([self._event(55)], "affection") == 0
+
+    def test_unknown_metric_is_zero(self):
+        events = [self._event(55), self._event(58)]
+        assert trajectory_metric_gain(events, "nonsense") == 0
+
+    def test_uses_only_after_snapshots(self):
+        events = [self._event(55), self._event(60)]
+        assert trajectory_metric_gain(events, "trust") == 0  # trust_after defaults 0
+
+
+class TestRecentGain:
+    async def test_recent_gain_from_db(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        events = [
+            RelationshipEvent(
+                relationship_id=rel.id, kind="llm", description="", reason="",
+                delta_affection=5, affection_after=55, importance=5, round_id="r1",
+            ),
+            RelationshipEvent(
+                relationship_id=rel.id, kind="llm", description="", reason="",
+                delta_affection=3, affection_after=58, importance=5, round_id="r2",
+            ),
+            RelationshipEvent(
+                relationship_id=rel.id, kind="llm", description="", reason="",
+                delta_affection=-3, affection_after=55, importance=5, round_id="r3",
+            ),
+            RelationshipEvent(
+                relationship_id=rel.id, kind="decay", description="", reason="",
+                delta_affection=-2, affection_after=53, importance=1, round_id="r4",
+            ),
+        ]
+        for event in events:
+            db_session.add(event)
+        await db_session.flush()
+        # diffs over llm events: +3, -3 (decay event excluded by kind filter)
+        assert await recent_gain(db_session, rel.id, "affection") == 3
+
+    async def test_recent_gain_respects_window(self, db_session: AsyncSession, chat, three_characters):
+        a, b, _ = three_characters
+        rel = await get_or_create_relationship(db_session, chat.id, a.id, b.id)
+        for idx in range(1, 6):
+            db_session.add(
+                RelationshipEvent(
+                    relationship_id=rel.id, kind="llm", description="", reason="",
+                    delta_affection=1, affection_after=50 + idx, importance=5,
+                    round_id=f"r{idx}",
+                )
+            )
+        await db_session.flush()
+        # window=2 -> last 2 events: 54 -> 55 → gain 1
+        assert await recent_gain(db_session, rel.id, "affection", window=2) == 1
+        # window=4 -> 52 -> 53 -> 54 -> 55 → gain 3
+        assert await recent_gain(db_session, rel.id, "affection", window=4) == 3
 
 
 # ---------------------------------------------------------------------------

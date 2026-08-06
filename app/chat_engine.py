@@ -1625,6 +1625,19 @@ async def _analyze_and_update_relationships(
                         target_char.name,
                     )
 
+                    # Anti-inflation (§27.3): snapshot-based recent gains per
+                    # metric from the same trajectory events, consumed by the
+                    # saturation guard inside _constrain_pair_delta.
+                    pair_ctx["recent_gains"] = {
+                        metric: relationship_service.trajectory_metric_gain(
+                            trajectory_events, metric,
+                        )
+                        for metric in (
+                            "affection", "trust", "attraction",
+                            "resentment", "jealousy",
+                        )
+                    }
+
                     # Triadic MVP (§13): build third-party notes for target's
                     # relationships with characters mentioned in this round.
                     third_party_notes: list[str] = []
@@ -2270,7 +2283,7 @@ def _constrain_pair_delta(
     rel: models.CharacterRelationship,
     pair_ctx: dict,
 ) -> schemas.RelationshipDelta | None:
-    """Deterministic evidence gating + caps (docs/relations.md §8.3, §9).
+    """Deterministic evidence gating + caps (docs/relations.md §8.3, §9, §27).
 
     - mode ``none``: REJECT (returns ``None``) — no evidence means no right to
       change anything; the LLM never decides admissibility.
@@ -2280,6 +2293,11 @@ def _constrain_pair_delta(
       the relationship type is frozen (unless configured otherwise).
     - mode ``hearsay``: deltas capped to the deterministic effective hearsay
       cap (§12), always weaker than direct/observed, and the type is frozen.
+
+    Anti-inflation (§27): the per-mode cap is further narrowed to
+    ``min(cap, cap_by_importance[importance])`` and, for positive deltas, the
+    saturation guard dampens repeated growth when the metric already gained a
+    lot over the recent trajectory window. Deterministic in all modes.
     """
     mode = _evidence_mode(pair_ctx)
     if mode == "none":
@@ -2289,34 +2307,54 @@ def _constrain_pair_delta(
         )
         return None
     if mode == "direct":
-        return delta
-    if mode == "hearsay":
+        # Direct evidence: the schema already clamps to ±MAX_DELTA and the
+        # belief multiplier (§10) does NOT apply — only observed/hearsay caps
+        # are dampened by beliefs.
+        cap = settings.relationship_max_delta
+    elif mode == "hearsay":
         cap = pair_ctx.get("hearsay_effective_cap")
         if cap is None:
             cap = settings.relationship_hearsay_cap
         cap = max(1, int(cap))
+        # Reciprocity pipeline (Sprint 7, §10): a strong belief of the source
+        # about the target dampens the delta cap (deterministic multiplier by
+        # confidence). Computed per-pair and stashed on pair_ctx.
+        cap = max(1, int(cap * _belief_multiplier(pair_ctx)))
     else:
         cap = settings.relationship_reflection_delta_cap
-    # Reciprocity pipeline (Sprint 7, §10): a strong belief of the source
-    # about the target dampens the delta cap (deterministic multiplier by
-    # confidence). Computed per-pair and stashed on pair_ctx.
-    belief_multiplier = float(
-        pair_ctx.get("reciprocity_belief_multiplier") or 1.0
+        cap = max(1, int(cap * _belief_multiplier(pair_ctx)))
+    # Anti-inflation (§27.2): cap by the delta's importance in every mode.
+    importance_cap = settings.relationship_cap_by_importance.get(
+        delta.importance, settings.relationship_max_delta,
     )
-    cap = max(1, int(cap * belief_multiplier))
-    updates: dict = {
-        "delta_affection": max(-cap, min(cap, delta.delta_affection)),
-        "delta_trust": max(-cap, min(cap, delta.delta_trust)),
-        "delta_attraction": max(-cap, min(cap, delta.delta_attraction)),
-        "delta_resentment": max(-cap, min(cap, delta.delta_resentment)),
-        "delta_jealousy": max(-cap, min(cap, delta.delta_jealousy)),
-    }
+    cap = max(1, int(min(cap, importance_cap)))
+    # Anti-inflation (§27.3): saturation guard for positive deltas — uses
+    # snapshot-based recent gains stashed on pair_ctx by the caller.
+    recent_gains: dict = pair_ctx.get("recent_gains") or {}
+    updates: dict = {}
+    for metric in ("affection", "trust", "attraction", "resentment", "jealousy"):
+        raw_value = getattr(delta, f"delta_{metric}")
+        value = raw_value
+        if value > 0 and metric in recent_gains:
+            value = relationship_service.apply_saturation_guard(
+                value,
+                recent_gains[metric],
+                settings.relationship_saturation_threshold,
+                factor=settings.relationship_saturation_factor,
+            )
+        updates[f"delta_{metric}"] = max(-cap, min(cap, value))
     if (
-        settings.relationship_type_change_requires_interaction
+        mode != "direct"
+        and settings.relationship_type_change_requires_interaction
         and delta.relationship_type != rel.relationship_type
     ):
         updates["relationship_type"] = rel.relationship_type
     return delta.model_copy(update=updates)
+
+
+def _belief_multiplier(pair_ctx: dict) -> float:
+    """Belief-driven cap multiplier for observed/hearsay caps (§10)."""
+    return float(pair_ctx.get("reciprocity_belief_multiplier") or 1.0)
 
 
 # ---------------------------------------------------------------------------

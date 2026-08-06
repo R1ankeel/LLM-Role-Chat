@@ -188,13 +188,13 @@ class TestEvidenceMode:
 
 class TestConstrainPairDelta:
     def _delta(self, **kwargs) -> RelationshipDelta:
+        kwargs.setdefault("importance", 5)
         return RelationshipDelta(
             source_character_id=1,
             target_character_id=2,
             delta_affection=20,
             delta_attraction=15,
             relationship_type="возлюбленные",
-            importance=5,
             **kwargs,
         )
 
@@ -254,15 +254,117 @@ class TestConstrainPairDelta:
         assert out is not None
         assert out.delta_affection == 1
 
-    def test_direct_is_not_capped(self):
+    def test_direct_capped_by_importance(self):
+        # importance=5 -> cap_by_importance[5]=10 narrows the ±20 direct cap.
         rel = SimpleNamespace(relationship_type="нейтральное")
         out = _constrain_pair_delta(
             self._delta(), rel, {"direct_interaction": True}
         )
         assert out is not None
+        assert out.delta_affection == 10
+        assert out.delta_attraction == 10
+        assert out.relationship_type == "возлюбленные"
+
+    def test_direct_importance_one_tight_cap(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(importance=1), rel, {"direct_interaction": True}
+        )
+        assert out is not None
+        assert out.delta_affection == 2
+        assert out.delta_attraction == 2
+
+    def test_direct_importance_ten_keeps_max(self):
+        # importance=10 -> cap 30 > MAX_DELTA 20, so ±20 stays intact.
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(importance=10), rel, {"direct_interaction": True}
+        )
+        assert out is not None
         assert out.delta_affection == 20
         assert out.delta_attraction == 15
-        assert out.relationship_type == "возлюбленные"
+
+    def test_observed_importance_narrows_mode_cap(self):
+        # observed cap 5 vs importance=2 cap 3 -> min(5, 3) = 3.
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(importance=2),
+            rel,
+            {"direct_interaction": False, "observed_target": True},
+        )
+        assert out is not None
+        assert out.delta_affection == 3
+        assert out.delta_attraction == 3
+
+
+class TestConstrainPairDeltaSaturation:
+    """Anti-inflation §27.3: repeated growth is dampened by recent gains."""
+
+    def _delta(self, **kwargs) -> RelationshipDelta:
+        kwargs.setdefault("delta_affection", 10)
+        kwargs.setdefault("delta_attraction", 15)
+        return RelationshipDelta(
+            source_character_id=1,
+            target_character_id=2,
+            relationship_type="нейтральное",
+            importance=5,
+            **kwargs,
+        )
+
+    def test_positive_deltas_dampened_above_threshold(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(),
+            rel,
+            {
+                "direct_interaction": True,
+                "recent_gains": {"affection": 30, "attraction": 30},
+            },
+        )
+        assert out is not None
+        # 10 * 0.3 = 3; 15 * 0.3 = 4.5 -> 4 (round-half-to-even -> 4)
+        assert out.delta_affection == 3
+        assert out.delta_attraction == 4
+
+    def test_below_threshold_unchanged(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(),
+            rel,
+            {
+                "direct_interaction": True,
+                "recent_gains": {"affection": 20, "attraction": 20},
+            },
+        )
+        assert out is not None
+        assert out.delta_affection == 10
+        # Saturation is a no-op below threshold, but the importance cap (10)
+        # still clamps attraction 15 → 10.
+        assert out.delta_attraction == 10
+
+    def test_negative_and_missing_metrics_untouched(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        delta = self._delta(delta_affection=-10, delta_attraction=0)
+        out = _constrain_pair_delta(
+            delta,
+            rel,
+            {
+                "direct_interaction": True,
+                "recent_gains": {"affection": 100},
+            },
+        )
+        assert out is not None
+        assert out.delta_affection == -10  # negative never dampened
+        assert out.delta_attraction == 0
+
+    def test_no_recent_gains_is_legacy(self):
+        rel = SimpleNamespace(relationship_type="нейтральное")
+        out = _constrain_pair_delta(
+            self._delta(), rel, {"direct_interaction": True}
+        )
+        assert out is not None
+        assert out.delta_affection == 10  # importance=5 cap, no saturation
+        assert out.delta_attraction == 10
 
 
 class TestAnalyzerPrompt:
@@ -355,6 +457,27 @@ class TestAnalyzerPrompt:
         assert "это слух" in prompt
         assert f"|дельты| <= {settings.relationship_hearsay_cap}" in prompt
         assert "relationship_type НЕ менять" in prompt
+
+    def test_prompt_contains_importance_calibration(self):
+        prompt = _build_analyzer_prompt(
+            source_name="A",
+            target_name="B",
+            source_character_id=1,
+            target_character_id=2,
+            current_type="нейтральное",
+            affection=50,
+            trust=50,
+            attraction=0,
+            resentment=0,
+            jealousy=0,
+            recent_events_text="",
+            round_text="",
+            interaction_summary="A и B говорили",
+            direct_interaction=True,
+            observed_target=True,
+        )
+        assert "ШКАЛА ВАЖНОСТИ" in prompt
+        assert "Комплимент — это бытовое" in prompt
 
 
 class TestThirdPartyNotes:

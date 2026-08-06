@@ -24,6 +24,29 @@ _VALID_ISSUE_TYPES = ", ".join(
 )
 
 
+def _build_importance_calibration() -> str:
+    """Calibration scale importance 1-10 → typical delta magnitudes (§27.4).
+
+    Anchors the LLM so a compliment is importance 1-2 (small deterministic cap)
+    instead of 5-7, while life-changing events stay large. The engine enforces
+    the caps deterministically in ``_constrain_pair_delta``; this only guides
+    the model's importance assignment.
+    """
+    return (
+        "ШКАЛА ВАЖНОСТИ (importance 1-10) и типичные дельты:\n"
+        "  1-2: бытовое (комплимент, вежливость, рутина) — |дельты| <= 3\n"
+        "  3-4: тёплый жест, помощь, доброе слово — |дельты| <= 7\n"
+        "  5-6: признание, заметный поступок — |дельты| <= 12\n"
+        "  7-8: сильные чувства, предательство — |дельты| <= 20\n"
+        "  9-10: судьбоносное (жизнь/смерть, свадьба) — |дельты| <= 30\n"
+        "Примеры:\n"
+        "  «Ты сегодня отлично выглядишь» — importance 1-2, дельты 1-2\n"
+        "  «Спасибо, что выручил вчера» — importance 3-4, доверие 3-6\n"
+        "  «Я люблю тебя» — importance 7, привязанность 10-15\n"
+        "Комплимент — это бытовое (importance 1-2), а не признание в чувствах."
+    )
+
+
 def _format_open_issues(open_issues: list[dict]) -> str:
     """Format known open issues for the analyzer (id + type + text)."""
     if not open_issues:
@@ -125,6 +148,7 @@ def _build_analyzer_prompt(
         f"персонажам или происходящие без участия {source_name}, не меняют "
         f"отношения этой пары.\n"
         f"{delta_hint}\n\n"
+        f"{_build_importance_calibration()}\n\n"
         f"Допустимые типы отношений: {valid_types}\n"
         f"Разрешённые переходы:\n{transitions_text}\n"
         f"Семейные типы («{', '.join(settings.relationship_family_types)}») движок "
@@ -462,6 +486,7 @@ def _build_batch_prompt(
         f"  observed: |дельты| <= {reflection_cap}, тип НЕ менять.\n"
         "  none: пару в ответ не включать.\n\n"
         f"{issues_instruction}\n"
+        f"{_build_importance_calibration()}\n\n"
         "ПАРЫ ДЛЯ АНАЛИЗА:\n"
         f"{chr(10).join(pair_sections)}\n\n"
         "Верни ТОЛЬКО валидный JSON (без markdown и лишнего текста):\n"

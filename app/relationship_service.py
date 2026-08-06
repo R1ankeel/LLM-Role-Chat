@@ -312,6 +312,77 @@ def clamp_metric(value: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Anti-inflation (docs/relations.md §27): deterministic growth dampening
+# ---------------------------------------------------------------------------
+def scale_delta_by_resistance(
+    current: int,
+    delta: int,
+    exponent: float | None = None,
+) -> int:
+    """Scale a positive delta down as the metric approaches 100 (§27.1).
+
+    ``factor = ((100 - current) / 100) ** exponent`` — at low values the
+    factor is close to 1 (growth is barely dampened), near 100 it decays to 0
+    (the metric approaches its ceiling asymptotically). Negative and zero
+    deltas are returned unchanged; decay (``kind="decay"``) never goes through
+    this function.
+    """
+    if delta <= 0:
+        return delta
+    exp = (
+        exponent
+        if exponent is not None
+        else settings.relationship_growth_resistance_exponent
+    )
+    current = max(0, min(100, current))
+    factor = ((100 - current) / 100) ** exp
+    return int(round(delta * factor))
+
+
+def apply_saturation_guard(
+    delta: int,
+    recent: int,
+    threshold: int,
+    factor: float = 0.3,
+) -> int:
+    """Dampen a positive delta when the metric already grew a lot recently (§27.3).
+
+    ``recent`` is the snapshot-based gain of the metric over the trajectory
+    window (``recent_gain``). When it is at least ``threshold``, positive
+    deltas are scaled by ``factor`` (floor 1 — growth stays alive but small).
+    Negative deltas and values below the threshold are returned unchanged.
+    """
+    if delta <= 0 or recent < threshold:
+        return delta
+    return max(1, int(round(delta * factor)))
+
+
+def trajectory_metric_gain(
+    events: list[RelationshipEvent],
+    metric: str,
+) -> int:
+    """Sum of positive per-event changes of ``metric`` across a trajectory.
+
+    Events are expected in chronological order (oldest first, as returned by
+    ``get_trajectory_events``). Only positive diffs of the ``*_after``
+    snapshots count — dips do not cancel growth, so repeated warm rounds keep
+    the saturation signal.
+    """
+    attr = f"{metric}_after"
+    values = [int(getattr(e, attr, None) or 0) for e in events]
+    if len(values) < 2:
+        return 0
+    gain = 0
+    previous = values[0]
+    for value in values[1:]:
+        diff = value - previous
+        if diff > 0:
+            gain += diff
+        previous = value
+    return gain
+
+
+# ---------------------------------------------------------------------------
 # Apply delta from LLM analysis
 # ---------------------------------------------------------------------------
 async def apply_delta(
@@ -370,12 +441,30 @@ async def apply_delta(
         rel.relationship_type, rel.description,
     )
 
-    # Apply clamped deltas
-    rel.affection = clamp_metric(rel.affection + _clamp_delta(delta.delta_affection))
-    rel.trust = clamp_metric(rel.trust + _clamp_delta(delta.delta_trust))
-    rel.attraction = clamp_metric(rel.attraction + _clamp_delta(delta.delta_attraction))
-    rel.resentment = clamp_metric(rel.resentment + _clamp_delta(delta.delta_resentment))
-    rel.jealousy = clamp_metric(rel.jealousy + _clamp_delta(delta.delta_jealousy))
+    # Apply clamped deltas with growth resistance (§27.1): positive deltas are
+    # scaled by ((100 - current) / 100) ** exponent so metrics approach their
+    # ceiling asymptotically instead of jumping to 100; negative/zero deltas
+    # pass through unchanged (damage is never dampened).
+    rel.affection = clamp_metric(
+        rel.affection
+        + scale_delta_by_resistance(rel.affection, _clamp_delta(delta.delta_affection))
+    )
+    rel.trust = clamp_metric(
+        rel.trust
+        + scale_delta_by_resistance(rel.trust, _clamp_delta(delta.delta_trust))
+    )
+    rel.attraction = clamp_metric(
+        rel.attraction
+        + scale_delta_by_resistance(rel.attraction, _clamp_delta(delta.delta_attraction))
+    )
+    rel.resentment = clamp_metric(
+        rel.resentment
+        + scale_delta_by_resistance(rel.resentment, _clamp_delta(delta.delta_resentment))
+    )
+    rel.jealousy = clamp_metric(
+        rel.jealousy
+        + scale_delta_by_resistance(rel.jealousy, _clamp_delta(delta.delta_jealousy))
+    )
     rel.relationship_type = new_type
 
     if delta.update_description and delta.description:
@@ -1725,6 +1814,24 @@ async def get_trajectory_events(
     )
     result = await db.execute(stmt)
     return list(reversed(result.scalars().all()))
+
+
+async def recent_gain(
+    db: AsyncSession,
+    relationship_id: int,
+    metric: str,
+    window: int | None = None,
+) -> int:
+    """Snapshot-based gain of ``metric`` over the recent window (§27.3).
+
+    Sums positive per-event changes of the ``*_after`` snapshots across the
+    last ``window`` LLM events (default ``RELATIONSHIP_SATURATION_WINDOW``).
+    Used by the saturation guard in ``_constrain_pair_delta``.
+    """
+    if window is None:
+        window = settings.relationship_saturation_window
+    events = await get_trajectory_events(db, relationship_id, window=window)
+    return trajectory_metric_gain(events, metric)
 
 
 def build_trajectory_block(

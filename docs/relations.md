@@ -316,6 +316,8 @@ boost      = clamp(ISSUE_PROACTIVE_COEFF * sum(w_i), 0, ISSUE_PROACTIVE_BOOST_CA
 4. Допустимые типы + граф переходов + caps по режимам.
 5. Issues: создавать/закрывать только при доказательствах в сцене.
 6. Пары `none` в ответе не перечислять.
+7. Шкала важности importance 1-10 с якорями типичных дельт и few-shot (§27.4):
+   комплимент → 1-2, признание в любви → 7. Капы применяет движок (§27.2).
 
 ### 8.3. Обязательный deterministic evidence-gating
 
@@ -735,6 +737,11 @@ RELATIONSHIP_BATCH_ENABLED          = True   # ✅ config.relationship_batch_ena
 RELATIONSHIP_BATCH_FALLBACK         = True   # ✅ config.relationship_batch_fallback
 RELATIONSHIP_HEARSAY_CAP            = 3
 RELATIONSHIP_TRAJECTORY_WINDOW      = 4
+RELATIONSHIP_GROWTH_RESISTANCE_EXPONENT = 1.5   # ✅ §27.1 config.relationship_growth_resistance_exponent
+RELATIONSHIP_CAP_BY_IMPORTANCE      = {1:2, 2:3, 3:5, 4:7, 5:10, 6:13, 7:16, 8:20, 9:25, 10:30}  # ✅ §27.2
+RELATIONSHIP_SATURATION_WINDOW      = 4      # ✅ §27.3 config.relationship_saturation_window (== TRAJECTORY_WINDOW)
+RELATIONSHIP_SATURATION_THRESHOLD   = 25     # ✅ §27.3 config.relationship_saturation_threshold
+RELATIONSHIP_SATURATION_FACTOR      = 0.3    # ✅ §27.3 config.relationship_saturation_factor
 RELATIONSHIP_DECAY_JEALOUSY_PER_ROUND   = 3   # ✅ Sprint 3 п.16
 RELATIONSHIP_DECAY_RESENTMENT_PER_ROUND = 1   # ✅ Sprint 3 п.16
 RELATIONSHIP_MEMORY_ENABLED         = True    # ✅ Sprint 3 п.19
@@ -848,3 +855,57 @@ RELATIONSHIP_EPISTEMIC_MAX          = 8      # ✅ config.relationship_epistemic
 | Числа отсутствуют в generation prompt | ✅ снэпшот/золотой тест промпта: `TestBuildRelationshipsBlock::test_interpretation_instead_of_numbers`, `test_relationship_interpreter.py::test_no_numbers_in_text` |
 | Граф/таймлайн/вопросы читабельны на десктопе и мобильном | ручная проверка UI (`@media max-width:768px`), данные — из единого graph/issues/timeline API |
 | Ручной оверрайд виден в таймлайне | событие `kind=manual` пишется при PUT (тесты `update_relationship_fields`) |
+
+---
+
+## 27. Anti-inflation: замедление роста метрик
+
+Проблема: LLM-анализатор за несколько тёплых раундов доводит affection/trust до
+потолка (100), инфляция обесценивает шкалу и убивает долгие сюжеты. Решение —
+детерминированные механизмы в сервисе (никаких чисел в generation prompt).
+
+### 27.1. Сопротивление росту (growth resistance)
+
+`scale_delta_by_resistance(current, delta, exponent)` в `relationship_service.py`:
+положительные дельты умножаются на `((100 - current) / 100) ** exponent`
+(по умолчанию `RELATIONSHIP_GROWTH_RESISTANCE_EXPONENT = 1.5`) **до** clamp 0–100
+в `apply_delta`. Метрика приближается к 100 асимптотически. Отрицательные/нулевые
+дельты не трогаются (ущерб не ослабляется); `decay` (`kind="decay"`) этот путь не
+проходит. Ручной PUT-оверрайд (`update_relationship_fields`) тоже не затронут.
+
+### 27.2. Cap по importance
+
+`RELATIONSHIP_CAP_BY_IMPORTANCE` — таблица капов `{1:2, 2:3, 3:5, 4:7, 5:10,
+6:13, 7:16, 8:20, 9:25, 10:30}`. Эффективный per-round cap пары в
+`_constrain_pair_delta` = `min(cap_режима, cap_by_importance[importance])` для
+**всех** режимов (direct/observed/hearsay), до финального clamp. Бытовой
+комплимент (importance 1–2) двигает метрику максимум на 2–3 пункта за раунд.
+
+### 27.3. Saturation guard
+
+`recent_gain(db, relationship_id, metric, window)` в `relationship_service.py`
+суммирует **положительные** изменения `*_after`-снапшотов за окно
+(`get_trajectory_events`, окно = `RELATIONSHIP_SATURATION_WINDOW`, по умолчанию
+4 — совпадает с `RELATIONSHIP_TRAJECTORY_WINDOW`). В `_constrain_pair_delta`
+`apply_saturation_guard(delta, recent, threshold, factor)` (после §27.1–27.2,
+до финального clamp): если `recent >= RELATIONSHIP_SATURATION_THRESHOLD` (25) —
+положительные дельты умножаются на `RELATIONSHIP_SATURATION_FACTOR` (0.3, пол 1).
+Повторные крупные события не складываются в бесконечный рост; отрицательные
+дельты и значения ниже порога не меняются.
+
+### 27.4. Калибровка importance в промпте анализатора
+
+`_build_importance_calibration()` в `relationship_analyzer.py` (вставляется в
+`_build_batch_prompt` и `_build_analyzer_prompt`): шкала 1–10 с якорями типичных
+дельт и 2–3 few-shot. Комплимент — это importance 1–2 (бытовое), признание в
+чувствах — 7, судьбоносное — 9–10. Капы применяет движок (§27.2); промпт лишь
+направляет выбор importance, чтобы модель не завышала важность бытовых событий.
+
+### 27.5. Совокупный эффект и проверка
+
+Вместе механизмы дают: 3 бытовых комплимента подряд → суммарный прирост
+affection ≤ 15 (регресс-тест), раньше было ~60–80. Ручной сценарий: 3–4
+комплимента подряд — прирост заметно медленнее, метрика не упирается в потолок,
+эпизод в 30–50 раундов не «выжигает» шкалу. Отдельно можно включить потолок по
+`relationship_type` (не реализован: добавлять только если плейтест покажет, что
+капов 27.1–27.3 недостаточно).

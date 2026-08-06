@@ -364,6 +364,36 @@ class Settings(BaseSettings):
         default=4, alias="RELATIONSHIP_TRAJECTORY_WINDOW"
     )
 
+    # Anti-inflation (docs/relations.md §27): deterministically slow down metric
+    # growth so relationships do not hit the ceiling after a few warm rounds.
+    # 1) Growth resistance: positive deltas are scaled by
+    #    ((100 - current) / 100) ** exponent before clamping, so high values
+    #    approach 100 asymptotically. Decay (kind="decay") is never affected.
+    relationship_growth_resistance_exponent: float = Field(
+        default=1.5, alias="RELATIONSHIP_GROWTH_RESISTANCE_EXPONENT"
+    )
+    # 2) Per-importance delta cap: the effective per-round cap for a pair is
+    #    min(existing mode cap, CAP_BY_IMPORTANCE[importance]). A "compliment"
+    #    (importance 1-2) can move a metric at most a few points per round.
+    relationship_cap_by_importance: dict[int, int] = Field(
+        default={
+            1: 2, 2: 3, 3: 5, 4: 7, 5: 10, 6: 13, 7: 16, 8: 20, 9: 25, 10: 30,
+        },
+        alias="RELATIONSHIP_CAP_BY_IMPORTANCE",
+    )
+    # 3) Saturation guard: if a metric already gained >= threshold over the
+    #    recent window (snapshot-based trajectory), further positive deltas are
+    #    scaled by factor (floor 1). Defaults match RELATIONSHIP_TRAJECTORY_WINDOW.
+    relationship_saturation_window: int = Field(
+        default=4, alias="RELATIONSHIP_SATURATION_WINDOW"
+    )
+    relationship_saturation_threshold: int = Field(
+        default=25, alias="RELATIONSHIP_SATURATION_THRESHOLD"
+    )
+    relationship_saturation_factor: float = Field(
+        default=0.3, alias="RELATIONSHIP_SATURATION_FACTOR"
+    )
+
     # Decay (Sprint 3 item 16, docs/relations.md §18): per-round decay for jealousy and resentment
     relationship_decay_jealousy_per_round: int = Field(
         default=3, alias="RELATIONSHIP_DECAY_JEALOUSY_PER_ROUND"

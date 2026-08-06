@@ -179,4 +179,5 @@ class TestSingleTransaction:
             rel_ab = await chat_engine.relationship_service.get_relationship(
                 db, a.id, b.id
             )
-            assert rel_ab.affection == 60
+            # delta 10 -> 4 by growth resistance at current=50 (§27.1).
+            assert rel_ab.affection == 54

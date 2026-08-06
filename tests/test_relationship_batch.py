@@ -79,6 +79,12 @@ class TestBuildBatchPrompt:
         assert "source_character_id" in prompt
         assert '"deltas"' in prompt
 
+    def test_importance_calibration_scale(self):
+        prompt = _build_batch_prompt("сцена", [_pair()])
+        assert "ШКАЛА ВАЖНОСТИ" in prompt
+        assert "Комплимент — это бытовое" in prompt
+        assert "importance 7, привязанность 10-15" in prompt
+
 
 class TestParseBatchResponse:
     def test_groups_deltas_per_edge(self):
