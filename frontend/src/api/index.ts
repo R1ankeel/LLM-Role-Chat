@@ -33,6 +33,7 @@ export const api: Api = useMocks
       updateLocation: locationsApi.updateLocation,
       deleteLocation: locationsApi.deleteLocation,
       fetchMemories: charactersApi.fetchMemories,
+      deleteMemory: charactersApi.deleteMemory,
       fetchCharacterSummary: charactersApi.fetchCharacterSummary,
       updateCharacterLocation: charactersApi.updateCharacterLocation,
       updatePlayerLocation: sceneApi.updatePlayerLocation,

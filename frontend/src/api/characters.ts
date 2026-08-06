@@ -44,6 +44,10 @@ export function fetchMemories(characterId: number): Promise<Memory[]> {
   return request<Memory[]>(`/characters/${characterId}/memories`)
 }
 
+export function deleteMemory(memoryId: number): Promise<void> {
+  return request(`/memories/${memoryId}`, { method: 'DELETE' })
+}
+
 export async function fetchCharacterSummary(
   characterId: number,
 ): Promise<CharacterSummary | null> {

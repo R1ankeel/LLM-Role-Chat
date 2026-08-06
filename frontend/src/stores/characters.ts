@@ -67,6 +67,28 @@ export const useCharactersStore = defineStore('characters', () => {
     }
   }
 
+  async function loadMemories(characterId: number) {
+    detailsLoading.value = true
+    detailsError.value = null
+    try {
+      memories.value = await api.fetchMemories(characterId)
+    } catch (e) {
+      detailsError.value = e instanceof Error ? e.message : 'Не удалось загрузить память.'
+    } finally {
+      detailsLoading.value = false
+    }
+  }
+
+  async function deleteMemory(memoryId: number) {
+    mutating.value = true
+    try {
+      await api.deleteMemory(memoryId)
+      memories.value = memories.value.filter((m) => m.id !== memoryId)
+    } finally {
+      mutating.value = false
+    }
+  }
+
   async function updateLocation(characterId: number, location: string) {
     locationSaving.value = true
     try {
@@ -195,6 +217,8 @@ export const useCharactersStore = defineStore('characters', () => {
     loadForChat,
     getById,
     selectCharacter,
+    loadMemories,
+    deleteMemory,
     updateLocation,
     syncPlayerLocation,
     create,

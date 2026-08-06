@@ -302,6 +302,17 @@ export const mockApi: Api = {
     return delay(clone(mockMemories[characterId] ?? []))
   },
 
+  deleteMemory(memoryId: number): Promise<void> {
+    for (const list of Object.values(mockMemories)) {
+      const index = list.findIndex((m) => m.id === memoryId)
+      if (index !== -1) {
+        list.splice(index, 1)
+        break
+      }
+    }
+    return delay(undefined)
+  },
+
   fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null> {
     return delay(clone(mockSummaries[characterId] ?? null))
   },

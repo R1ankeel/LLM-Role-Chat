@@ -166,6 +166,7 @@ export interface Api {
   ): Promise<Location>
   deleteLocation(chatId: number, locationId: number): Promise<void>
   fetchMemories(characterId: number): Promise<Memory[]>
+  deleteMemory(memoryId: number): Promise<void>
   fetchCharacterSummary(characterId: number): Promise<CharacterSummary | null>
   updateCharacterLocation(characterId: number, location: string): Promise<Character>
   updatePlayerLocation(chatId: number, location: string): Promise<void>

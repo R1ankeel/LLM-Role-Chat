@@ -5,15 +5,24 @@ import { useUiStore } from '@/stores/ui'
 import { characterToForm, formToCharacterUpdate, type CharacterForm } from '@/types/character'
 import type { AvatarCrop } from '@/utils/avatarCrop'
 import { parseCrop, serializeCrop } from '@/utils/avatarCrop'
+import { memoryCategoryLabel } from '@/types/memory'
+import type { Memory } from '@/types/memory'
 import Avatar from '@/components/common/Avatar.vue'
 import AvatarCropEditor from '@/components/settings/AvatarCropEditor.vue'
 import Badge from '@/components/common/Badge.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import Modal from '@/components/common/Modal.vue'
 import CharacterFormFields from '@/components/settings/CharacterFormFields.vue'
 import LocationSelect from '@/components/common/LocationSelect.vue'
 
 const characters = useCharactersStore()
 const ui = useUiStore()
+
+type ProfileTab = 'main' | 'memories'
+const activeTab = ref<ProfileTab>('main')
+const memoriesLoading = ref(false)
+const memoriesError = ref<string | null>(null)
+const memoryDeleting = ref<number | null>(null)
 
 const saving = ref(false)
 const avatarBusy = ref(false)
@@ -50,12 +59,53 @@ watch(
   (id) => {
     saving.value = false
     avatarBusy.value = false
+    activeTab.value = 'main'
+    memoriesLoading.value = false
+    memoriesError.value = null
+    memoryDeleting.value = null
     if (id == null) return
     const character = characters.getById(id)
     if (character) Object.assign(form, characterToForm(character))
+    loadMemories(id)
   },
   { immediate: true },
 )
+
+const sortedMemories = computed(() => {
+  const sorted = [...characters.memories].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )
+  return sorted.slice(0, 20)
+})
+
+async function loadMemories(characterId: number) {
+  memoriesLoading.value = true
+  memoriesError.value = null
+  try {
+    await characters.loadMemories(characterId)
+  } catch (e) {
+    memoriesError.value = e instanceof Error ? e.message : 'Не удалось загрузить память.'
+  } finally {
+    memoriesLoading.value = false
+  }
+}
+
+function switchTab(tab: ProfileTab) {
+  activeTab.value = tab
+}
+
+async function deleteMemory(memory: Memory) {
+  if (memoryDeleting.value != null) return
+  memoryDeleting.value = memory.id
+  try {
+    await characters.deleteMemory(memory.id)
+    ui.toast('Воспоминание удалено', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось удалить воспоминание.', 'error')
+  } finally {
+    memoryDeleting.value = null
+  }
+}
 
 const dirty = computed(() => {
   const c = target.value
@@ -186,7 +236,25 @@ async function submit() {
     @close="close"
   >
     <div class="character-profile">
-      <div class="character-profile__top">
+      <nav class="character-profile__tabs" aria-label="Разделы профиля">
+        <button
+          class="character-profile__tab"
+          :class="{ 'is-active': activeTab === 'main' }"
+          @click="switchTab('main')"
+        >
+          Основное
+        </button>
+        <button
+          class="character-profile__tab"
+          :class="{ 'is-active': activeTab === 'memories' }"
+          @click="switchTab('memories')"
+        >
+          Воспоминания
+        </button>
+      </nav>
+
+      <template v-if="activeTab === 'main'">
+        <div class="character-profile__top">
         <div class="character-profile__avatar-card">
           <Avatar
             :name="form.name"
@@ -251,6 +319,55 @@ async function submit() {
       </div>
 
       <CharacterFormFields :model="form" mode="profile" />
+      </template>
+
+      <template v-else>
+        <div class="character-profile__memories">
+          <p v-if="memoriesLoading" class="character-profile__memories-hint">Загрузка воспоминаний…</p>
+          <ErrorState
+            v-else-if="memoriesError"
+            icon="🧠"
+            title="Не удалось загрузить воспоминания"
+            :description="memoriesError"
+            :retry="false"
+          />
+          <template v-else-if="sortedMemories.length">
+            <p class="character-profile__memories-hint">
+              Последние {{ sortedMemories.length }} из {{ characters.memories.length }}
+            </p>
+            <ul class="character-profile__memory-list">
+              <li v-for="memory in sortedMemories" :key="memory.id" class="character-profile__memory">
+                <div class="character-profile__memory-top">
+                  <Badge tone="neutral">{{ memoryCategoryLabel(memory.category) }}</Badge>
+                  <div class="character-profile__memory-actions">
+                    <span class="character-profile__memory-importance">
+                      {{ Math.round(memory.importance * 100) }}%
+                    </span>
+                    <button
+                      class="character-profile__memory-delete"
+                      :disabled="memoryDeleting != null"
+                      title="Удалить воспоминание"
+                      aria-label="Удалить воспоминание"
+                      @click="deleteMemory(memory)"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m3 0v12a2 2 0 01-2 2H8a2 2 0 01-2-2V7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p class="character-profile__memory-content">{{ memory.content }}</p>
+              </li>
+            </ul>
+          </template>
+          <EmptyState
+            v-else
+            icon="🧠"
+            title="Воспоминаний нет"
+            description="Воспоминания появятся по мере развития сцены."
+          />
+        </div>
+      </template>
     </div>
 
     <AvatarCropEditor
@@ -276,6 +393,112 @@ async function submit() {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.character-profile__tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: -var(--space-2);
+  flex-shrink: 0;
+}
+
+.character-profile__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.character-profile__tab:hover {
+  color: var(--text-primary);
+}
+
+.character-profile__tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.character-profile__memories {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.character-profile__memories-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.character-profile__memory-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+}
+
+.character-profile__memory {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.character-profile__memory-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.character-profile__memory-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.character-profile__memory-importance {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.character-profile__memory-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.character-profile__memory-delete:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.character-profile__memory-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.character-profile__memory-content {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 .character-profile__top {
