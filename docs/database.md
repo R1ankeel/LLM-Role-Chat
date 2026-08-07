@@ -24,6 +24,7 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `original_plot` | TEXT NULL | выделенный неизменяемый замысел (из `general_prompt`; Sprint 0, §16.1) |
 | `story_prompt` | TEXT NULL | текущий story prompt (эволюционирующий; Sprint 8) |
 | `story_enabled` | BOOLEAN (default 0) | включение динамического сюжета (Sprint 8) |
+| `lora_enabled` | BOOLEAN (default 0) | включение LoRA на чат (LoRA Sprint 1, §2.4: 3 состояния — false / true без адаптера / true с адаптером) |
 | `created_at` | DATETIME | |
 
 ### `characters`
@@ -459,6 +460,41 @@ Intent NPC на ход.
 
 UNIQUE `(character_id)`. Индекс `ix_consolidation_state_chat_id`.
 
+### `lora_adapters` (LoRA Sprint 1)
+Глобальный registry LoRA-адаптеров (§2.6). Хранит **метаданные регистрации**,
+а не файл: `path` — абсолютный путь к `.gguf` пользователя. Физический файл
+никогда не удаляется.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `name` | TEXT NOT NULL | отображаемое имя |
+| `path` | TEXT NOT NULL | абсолютный путь к файлу (валидируется при create/update §2.7) |
+| `format` | TEXT NOT NULL DEFAULT 'auto' | `gguf` после регистрации (auto → фактический; safetensors отклоняется) |
+| `base_model` | TEXT NOT NULL DEFAULT '' | наименование базовой модели (для справки) |
+| `base_model_identity` | TEXT NULL | identity базовой модели для compatibility check (§2.3) |
+| `enabled` | INTEGER NOT NULL DEFAULT 1 | |
+| `description` | TEXT NOT NULL DEFAULT '' | |
+| `source` | TEXT NOT NULL DEFAULT '' | |
+| `metadata` | TEXT NOT NULL DEFAULT '{}' | JSON-объект (в ORM — `metadata_json`) |
+| `sha256` | TEXT NOT NULL DEFAULT '' | содержимое файла (blob-диджест, runtime key §2.2) |
+| `created_at`, `updated_at` | DATETIME | |
+
+Индекс `ix_lora_adapters_enabled (enabled)`.
+
+### `chat_lora_adapters` (LoRA Sprint 1)
+Связка «чат → адаптер» — конфигурация чата (§2.6). MVP: **ровно одна связка на
+чат** (UNIQUE(chat_id)); полей `weight`/`order_index` нет.
+
+| колонка | тип | примечание |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `chat_id` | FK → chats.id ON DELETE CASCADE | UNIQUE `uq_chat_lora_chat` |
+| `adapter_id` | FK → lora_adapters.id ON DELETE CASCADE | |
+| `created_at` | DATETIME | |
+
+Индекс `ix_chat_lora_adapter_id (adapter_id)`.
+
 ## Миграции данных
 
 `ensure_schema` идемпотентно выполняет при старте:
@@ -477,3 +513,4 @@ UNIQUE `(character_id)`. Индекс `ix_consolidation_state_chat_id`.
 - **Sprint 0 (backfill сюжета)**: `crud.backfill_plot_fields` — копирует `general_prompt` → `original_plot`/`story_prompt`, `story_enabled=false`, заполняет только пустые поля (идемпотентно, отчёт `PlotBackfillReport`); запуск `scripts/backfill_plot_fields.py`. Поведение не меняется (сюжет по-прежнему читается из `general_prompt`).
 - **Sprint 0 (backfill локаций событий)**: `crud.backfill_event_location_ids` — из строковой `world_events.location` через `resolve_location_name` (+ shared-scene правило `perception.is_shared_scene`), идемпотентно, отчёт `EventLocationBackfillReport` (нерезолвленные → NULL + список); запуск `scripts/backfill_event_location_ids.py`. Сам backfill — обновление данных, не изменение схемы.
 - **Sprint 1 (§15)**: `world_events.action` (TEXT NOT NULL DEFAULT '{}'), `world_events.importance`/`story_salience`/`emotional_salience` (REAL NULL), `relationship_events.event_id` (FK → `world_events.id` ON DELETE SET NULL, nullable, + индекс `ix_rel_events_event_id`). Идемпотентно (только если колонки/индекс отсутствуют); пишет только раундная extraction при `EVENT_EXTRACTION_ENABLED=true`, откат — флаг off. Backfill не требуется.
+- **LoRA (Sprint 1)**: `chats.lora_enabled` (BOOLEAN NOT NULL DEFAULT 0 — существующие чаты получают false через DEFAULT), таблицы `lora_adapters`/`chat_lora_adapters` (+ `uq_chat_lora_chat UNIQUE(chat_id)`, индексы `ix_lora_adapters_enabled`/`ix_chat_lora_adapter_id`). Идемпотентно; read-path (chat_engine) новые таблицы пока не читает (Sprint 2/3).

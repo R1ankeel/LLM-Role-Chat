@@ -1248,6 +1248,71 @@ def ensure_schema(db_engine) -> None:
             )
         )
 
+        # ----- LoRA adapters (Plans/LoRA.md, Sprint 1) -----
+        # Регистр адаптеров + связка «чат → адаптер» (§2.6). MVP (§2.5): ровно
+        # один адаптер на чат — UNIQUE(chat_id); полей weight/order_index нет.
+        # read-path (chat_engine) новые таблицы пока не читает — Sprint 2/3.
+        # chats.lora_enabled: флаг включения LoRA (§2.4). Идемпотентный ALTER;
+        # backfill для существующих чатов не нужен — DEFAULT 0 (false) на
+        # колонке уже присваивает lora_enabled=false при ALTER.
+        chat_columns = {col["name"] for col in inspector.get_columns("chats")}
+        if "lora_enabled" not in chat_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE chats ADD COLUMN lora_enabled "
+                    "BOOLEAN NOT NULL DEFAULT 0"
+                )
+            )
+            logger.info("Added lora_enabled column to chats (LoRA, Sprint 1)")
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS lora_adapters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    format TEXT NOT NULL DEFAULT 'auto',
+                    base_model TEXT NOT NULL DEFAULT '',
+                    base_model_identity TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    description TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    sha256 TEXT NOT NULL DEFAULT '',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_lora_adapters_enabled "
+                "ON lora_adapters (enabled)"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS chat_lora_adapters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    adapter_id INTEGER NOT NULL REFERENCES lora_adapters(id) ON DELETE CASCADE,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_chat_lora_chat UNIQUE (chat_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_chat_lora_adapter_id "
+                "ON chat_lora_adapters (adapter_id)"
+            )
+        )
+
 
 async def init_db() -> None:
     """Initialize database: create tables and run migrations."""
