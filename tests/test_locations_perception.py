@@ -280,3 +280,48 @@ async def test_remote_channel_bridges_locations(db_session, chat, mock_client):
     )
     assert presence == "present"
     assert reason == "REMOTE_CHANNEL_MESSENGER"
+
+
+@pytest.mark.asyncio
+async def test_co_located_viewer_perceives_in_person_ignoring_remote_channel():
+    """Isolation hardening: a viewer in the SAME location as the author hears the
+    speech in person even when the message carries a remote channel label."""
+    event = {
+        "role": "character",
+        "character_id": 10,
+        "location": "onsen",
+        "visibility": "local",
+        "channel": "magic",
+        "target_character_ids": [99],
+        "content": "Наслаждаюсь горячим источником",
+    }
+    presence, reason = perception.can_character_perceive_event(
+        viewer_character_id=11,
+        viewer_location="onsen",
+        event=event,
+        viewer_name="A",
+    )
+    assert presence == "present"
+    assert reason == "SAME_LOCATION"
+
+
+def test_remote_channel_requires_named_addressee():
+    """A keyword alone (магия/звонок/сообщение) is not a remote channel: without a
+    named addressee the reply stays in-person ``direct`` (isolation hardening)."""
+    names = {26: "Анастасия", 27: "Елизавета", 28: "Кирк"}
+    # "магией" is the fantasy world, not a magic-channel call.
+    ch, targets = chat_engine._detect_communication_channel(
+        "Она оглядела зал и усмехнулась, сверкая магией в глазах.",
+        "Анастасия",
+        names,
+    )
+    assert ch == "direct"
+    assert targets == []
+    # A real remote call must name the addressee.
+    ch2, targets2 = chat_engine._detect_communication_channel(
+        "Кирк, ты слышишь меня? Звоню по магической связи.",
+        "Анастасия",
+        names,
+    )
+    assert ch2 == "magic"
+    assert targets2 == [28]

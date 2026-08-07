@@ -230,6 +230,60 @@ class TestInterventionLifecycle:
         assert pending_intervention.get_intervention(chat.id) is None
 
     @pytest.mark.asyncio
+    async def test_directive_persisted_as_discreet_memory_after_success(
+        self, db_session, chat, mock_client
+    ):
+        (character,) = await create_characters(db_session, chat.id, 1)
+        pending_intervention.set_intervention(chat.id, "Пусть герои уйдут на кухню")
+
+        async def fake_generate(**kwargs):
+            yield {
+                "type": "response",
+                "text": "Character A moves to the kitchen and speaks at length.",
+            }
+
+        with patch(
+            "app.chat_engine.ollama_client.generate", side_effect=fake_generate
+        ), patch("app.chat_engine.asyncio.create_task"), patch(
+            "app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread
+        ):
+            async for _ in chat_engine.process_user_message_streaming(
+                mock_client, db_session, chat.id, "Go"
+            ):
+                pass
+
+        memories = await crud.get_memories_by_character(db_session, character.id)
+        facts = [m.content for m in memories]
+        assert "Игрок попросил: Пусть герои уйдут на кухню" in facts
+        assert not any("вмешательство" in (f or "").lower() for f in facts)
+        assert pending_intervention.get_intervention(chat.id) is None
+
+    @pytest.mark.asyncio
+    async def test_directive_not_persisted_when_round_fails(
+        self, db_session, chat, mock_client
+    ):
+        (character,) = await create_characters(db_session, chat.id, 1)
+        pending_intervention.set_intervention(chat.id, "Смените тему")
+
+        async def fake_generate(**kwargs):
+            raise RuntimeError("ollama down")
+            yield  # pragma: no cover
+
+        with patch(
+            "app.chat_engine.ollama_client.generate", side_effect=fake_generate
+        ), patch("app.chat_engine.asyncio.create_task"), patch(
+            "app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread
+        ):
+            async for _ in chat_engine.process_user_message_streaming(
+                mock_client, db_session, chat.id, "Go"
+            ):
+                pass
+
+        memories = await crud.get_memories_by_character(db_session, character.id)
+        assert not any("Игрок попросил" in (m.content or "") for m in memories)
+        assert pending_intervention.get_intervention(chat.id) is not None
+
+    @pytest.mark.asyncio
     async def test_directive_not_leaked_to_history(self, db_session, chat, mock_client):
         await create_characters(db_session, chat.id, 1)
         pending_intervention.set_intervention(chat.id, "СЕКРЕТ_ВМЕШАТЕЛЬСТВА_123")

@@ -355,8 +355,14 @@ def can_character_perceive_event(
             return "present", "TARGETED"
         return "absent", "TARGETED_NOT_TARGET"
 
-    # Remote channels bridge location isolation
-    if channel in REMOTE_CHANNELS:
+    # Remote channels bridge location isolation, but only for viewers that are
+    # genuinely NOT co-located with the author. A viewer in the same location
+    # hears the speech in person, so the channel label attached by the model or
+    # the keyword detector must not hide it nor upgrade it to a remote delivery —
+    # fall through to the local spatial path below (isolation hardening).
+    if channel in REMOTE_CHANNELS and not locations_match(
+        viewer_location, event_location
+    ):
         if viewer_character_id in targets:
             return "present", f"REMOTE_CHANNEL_{channel.upper()}"
         # If not targeted but still a remote channel, others may hear only if mentioned

@@ -13,8 +13,11 @@ can coexist with the chat-wide one. ``character_id=None`` means chat-wide.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -94,3 +97,54 @@ def list_interventions(chat_id: int) -> list[PendingIntervention]:
 def clear_all() -> None:
     """Reset the store (used by tests)."""
     _store.clear()
+
+
+async def record_intervention_outcome(
+    db,
+    chat_id: int,
+    characters: list,
+    directive: str,
+    character_id: int | None = None,
+) -> list:
+    """Persist a discreet memory fact so affected bots remember the directive.
+
+    Called right before the intervention is consumed, after a fully successful
+    round. The fact never mentions the word «вмешательство»: it reads like an
+    ordinary story event so it does not break immersion.
+
+    ``source_message_ids`` is left empty on purpose: ``crud.filter_memories_by_witness``
+    keeps memories without source references as "direct", so the fact survives even
+    for characters who did not perceive the round's messages (isolated bots) — the
+    instruction was given to them regardless of perception.
+    """
+    from . import crud, schemas
+
+    fact = f"Игрок попросил: {directive.strip()}"
+    target_ids = [c.id for c in characters if getattr(c, "id", None) is not None]
+    if character_id is not None:
+        target_ids = [character_id]
+    written: list = []
+    for cid in target_ids:
+        try:
+            memory = await crud.create_memory(
+                db,
+                schemas.MemoryCreate(
+                    chat_id=chat_id,
+                    character_id=cid,
+                    content=fact,
+                    category="событие",
+                    memory_type="episodic",
+                    importance=0.9,
+                    witnessed=True,
+                ),
+                source_message_ids=[],
+            )
+            if memory is not None:
+                written.append(memory)
+        except Exception:
+            logger.warning(
+                "[chat_id=%d] Failed to record intervention outcome for character %s",
+                chat_id,
+                cid,
+            )
+    return written

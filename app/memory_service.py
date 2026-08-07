@@ -1147,7 +1147,18 @@ async def _maybe_update_summaries(
                 if not updated_summary.strip():
                     continue
 
-                through_message_id = max(message.id for message in new_messages)
+                # Advance the summary frontier only to the last message the
+                # character actually perceived. Using the global max would mark
+                # unperceived messages (e.g. a distant scene) as "covered", so the
+                # summary would be written as if the character lost part of history.
+                perceived_ids = [
+                    line.message_id
+                    for line in observable.lines
+                    if line.message_id is not None
+                ]
+                if not perceived_ids:
+                    continue
+                through_message_id = max(perceived_ids)
                 await crud.upsert_character_summary(
                     db,
                     chat_id,

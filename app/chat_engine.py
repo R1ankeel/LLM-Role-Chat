@@ -3,6 +3,7 @@
 import asyncio  # noqa: F401 — патчится тестами (app.chat_engine.asyncio.create_task)
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime
 from types import SimpleNamespace
@@ -468,6 +469,45 @@ _CHANNEL_PATTERNS: list[tuple[str, list[str]]] = [
     ("messenger", ["сообщени", "мессенджер", "чат", "электрон", "письм", "написал", "смс", "телеграм", "whatsapp", "telegram"]),
 ]
 
+# Punctuation that marks a name as a direct address (vocative): ",, ! ? ; : «»
+_VOCATIVE_PUNCT = ",!?;:«»\"'—…"
+# Russian character names include endings (Кирк/Кирка/Кирку), so match a name
+# only at a word boundary and only when adjacent to vocative punctuation.
+_VOCATIVE_BOUNDARY = re.compile(r"(?<![A-Za-zА-Яа-яЁё0-9])")
+
+
+def _directly_addressed_ids(
+    text: str, speaker_name: str, character_names: dict[int, str]
+) -> list[int]:
+    """Which characters are directly addressed by name (vocative) in the text.
+
+    A mere mention ("Голос Кирка затих", "если Анастасия снова теряла
+    контроль") is NOT an address: characters in narration are not remote
+    targets. Only a name adjacent to vocative punctuation counts —
+    "Кирк, ты слышишь?", "Антон!", «Елизавета, ...». This is the isolation
+    hardening that stops narration keywords from bridging locations.
+    """
+    if not text:
+        return []
+    text_lower = text.lower()
+    targets: list[int] = []
+    for cid, name in character_names.items():
+        if name == speaker_name:
+            continue
+        n = name.lower()
+        for m in re.finditer(re.escape(n), text_lower):
+            if not _VOCATIVE_BOUNDARY.match(text_lower, m.start()):
+                continue
+            before = m.start() - 1
+            after = m.end()
+            if before >= 0 and text_lower[before] in _VOCATIVE_PUNCT:
+                targets.append(cid)
+                break
+            if after < len(text_lower) and text_lower[after] in _VOCATIVE_PUNCT:
+                targets.append(cid)
+                break
+    return targets
+
 
 def _detect_communication_channel(
     text: str, speaker_name: str, character_names: dict[int, str]
@@ -484,20 +524,19 @@ def _detect_communication_channel(
         return "direct", []
 
     text_lower = text.lower()
-    name_list = list(character_names.values())
-    name_lower_map = {name.lower(): cid for cid, name in character_names.items()}
 
     for channel, keywords in _CHANNEL_PATTERNS:
         if any(kw in text_lower for kw in keywords):
-            # Found a remote channel — find which character is being contacted
-            targets = []
-            for cname_lower, cid in name_lower_map.items():
-                cname_original = character_names[cid]
-                if cname_original == speaker_name:
-                    continue
-                if cname_lower in text_lower:
-                    targets.append(cid)
-            return channel, targets
+            # Found a remote channel — find which character is being contacted.
+            # A keyword alone is not enough: words like "магией" (fantasy world),
+            # "звонки" (bells) or "сообща" (together) appear in ordinary in-person
+            # speech. Only treat the reply as remote communication when at least
+            # one other character is DIRECTLY addressed by name (vocative);
+            # otherwise the dialogue is in-person and stays "direct" so location
+            # isolation holds.
+            targets = _directly_addressed_ids(text, speaker_name, character_names)
+            if targets:
+                return channel, targets
 
     return "direct", []
     return schemas.MessageRead.model_validate(message).model_dump(mode="json")
@@ -1241,6 +1280,20 @@ async def process_user_message_streaming(
             msg_targets = list(
                 applied.applied_messages[0].get("target_character_ids") or []
             )
+            # Isolation hardening: a remote `send_message` channel/targets from
+            # the model are trusted ONLY if the text actually DIRECTLY addresses
+            # one of the targets by name (vocative). Models routinely attach
+            # magic/phone/messenger to ordinary in-person dialogue or narration;
+            # storing that verbatim lets the remote-channel perception bridge
+            # bypass location isolation (chat 9 leak). If nobody is addressed,
+            # the speech is in-person → direct.
+            if msg_channel != "direct":
+                addressed = _directly_addressed_ids(
+                    response_text, current_character.name, character_names
+                )
+                if not any(t in msg_targets for t in addressed):
+                    msg_channel = "direct"
+                    msg_targets = []
         else:
             if settings.world_engine_actions_enabled:
                 logger.warning(
@@ -1542,6 +1595,22 @@ async def process_user_message_streaming(
     # character fell back to the "молчит" placeholder, the round is considered
     # failed and the instruction is preserved for a retry (docs/intervention.md).
     if directive is not None and round_generation_ok:
+        try:
+            await pending_intervention.record_intervention_outcome(
+                db,
+                chat_id,
+                characters,
+                directive,
+                character_id=(
+                    round_intervention.character_id
+                    if round_intervention is not None
+                    else None
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "[chat_id=%d] Failed to persist intervention outcome", chat_id
+            )
         pending_intervention.consume_intervention(
             chat_id, expected=round_intervention
         )
