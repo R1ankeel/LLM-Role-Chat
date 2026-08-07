@@ -27,6 +27,7 @@ from .relationship_interpreter import interpret as _interpret_rel, TRUST_LOW
 from .config import settings
 from .context_builder import ContextBuilder
 from .database import AsyncSessionLocal
+from .lora_manager import CompatibilityStatus, LoRAManager, ResolveResult
 from .repetition_detector import analyze_response
 from .role_isolation import get_other_character_names
 from .stimuli import extract_stimuli
@@ -35,6 +36,89 @@ from .witness_model import Presence, resolve_presence
 from . import witness_model
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LoRA: выбор модели для ОСНОВНОЙ генерации (Plans/LoRA.md, Sprint 3)
+#
+# LoRA применяется ТОЛЬКО к основному ответу персонажа. Служебные LLM-вызовы
+# (scene state, post_round_pipeline, память, отношения, сенсоры, consolidation,
+# crisis) вызываются без этого хелпера и получают ``chat.model_name`` как раньше.
+# ---------------------------------------------------------------------------
+
+_LORA_MANAGER_DEFAULT: LoRAManager | None = None
+
+# In-process набор чатов, для которых уже отправлено предупреждение о первом
+# применении LoRA со статусом Unknown (§2.3, Sprint 3 задача 5).
+_lora_unknown_warned_chats: set[int] = set()
+
+
+def _default_lora_manager() -> LoRAManager:
+    """Лениво созданный LoRAManager по умолчанию.
+
+    В продакшене менеджер живёт в ``app.state.lora_manager`` и передаётся
+    из роутера; этот дефолт нужен для прямых вызовов (tests/legacy-хелперы).
+    """
+    global _LORA_MANAGER_DEFAULT
+    if _LORA_MANAGER_DEFAULT is None:
+        _LORA_MANAGER_DEFAULT = LoRAManager()
+    return _LORA_MANAGER_DEFAULT
+
+
+async def resolve_generation_model(
+    db: AsyncSession,
+    client: httpx.AsyncClient,
+    chat,
+    lora_manager: LoRAManager | None = None,
+) -> tuple[str, ResolveResult]:
+    """Выбрать модель для ОСНОВНОЙ генерации ответа персонажа (Sprint 3).
+
+    Делегирует ``LoRAManager.resolve`` (семантика ``lora_enabled``, §2.4):
+    - ``lora_enabled=false`` или без выбранного адаптера → ``chat.model_name``
+      — поведение идентично текущему (критерий готовности Sprint 3);
+    - ``lora_enabled=true`` + адаптер → runtime-модель LoRA.
+
+    Ошибки LoRA (Incompatible, пропавший файл адаптера, битая конфигурация,
+    недоступный runtime) поднимаются ДО начала генерации (``RuntimeError``);
+    конфигурация чата при этом не изменяется (§7). НЕ silent fallback.
+    """
+    manager = lora_manager if lora_manager is not None else _default_lora_manager()
+    return await manager.resolve(db, client, chat)
+
+
+def lora_first_apply_warning(chat_id: int, info: ResolveResult) -> dict | None:
+    """Предупреждение клиенту при ПЕРВОМ применении LoRA со статусом Unknown.
+
+    Возвращает SSE-событие ``{"type": "lora_warning", ...}`` один раз на чат
+    (в рамках процесса). Это НЕ silent fallback: runtime-модель уже выбрана и
+    применяется, предупреждение информирует/запрашивает подтверждение (§2.3).
+    Для Compatible события нет; Incompatible до этого места не доходит
+    (``RuntimeError`` из ``resolve``).
+    """
+    if not getattr(info, "runtime_used", False):
+        return None
+    compat = getattr(info, "compatibility", None)
+    if compat is None or compat.status is not CompatibilityStatus.UNKNOWN:
+        return None
+    if chat_id in _lora_unknown_warned_chats:
+        return None
+    _lora_unknown_warned_chats.add(chat_id)
+    logger.warning(
+        "LoRA first-apply compatibility Unknown (chat_id=%s): %s — предупреждение "
+        "клиенту с подтверждением, НЕ silent fallback (§2.3)",
+        chat_id,
+        compat.detail,
+    )
+    return {
+        "type": "lora_warning",
+        "kind": "compatibility_unknown",
+        "detail": (
+            "LoRA применяется, но совместимость адаптера с базовой моделью "
+            f"не подтверждена: {compat.detail}. Убедитесь, что адаптер "
+            "предназначен для модели "
+            f"{compat.base_identity or 'базовой модели чата'}."
+        ),
+    }
 
 
 def _chat_plot_text(chat: Any) -> str:
@@ -431,15 +515,33 @@ async def process_user_message_streaming(
     *,
     visibility: str | None = None,
     target_character_ids: list[int] | None = None,
+    lora_manager: LoRAManager | None = None,
 ) -> AsyncIterator[dict]:
     """Process user message with per-character generation and perception filtering.
     
     Uses a single database transaction for the entire round (batch commit).
     If any character generation fails, the entire round is rolled back.
+
+    ``lora_manager`` (Plans/LoRA.md Sprint 3): если передан, LoRA применяется
+    ТОЛЬКО к основным вызовам ``ollama_client.generate`` в этом раунде;
+    служебные вызовы (scene state, post_round_pipeline, память и т.д.)
+    получают ``chat.model_name`` как раньше.
     """
     chat = await crud.get_chat(db, chat_id)
     if chat is None:
         raise ValueError("Чат не найден")
+
+    # Sprint 3 (LoRA): модель для ОСНОВНОЙ генерации выбирается здесь — ДО
+    # начала генерации. Ошибки LoRA (Incompatible, пропавший файл, битая
+    # конфигурация, недоступный runtime) поднимаются раньше любого yield;
+    # конфигурация чата не изменяется (§7). При lora_enabled=false возвращает
+    # chat.model_name — поведение идентично текущему.
+    generation_model_name, lora_info = await resolve_generation_model(
+        db, client, chat, lora_manager
+    )
+    _lora_warning = lora_first_apply_warning(chat.id, lora_info)
+    if _lora_warning is not None:
+        yield _lora_warning
 
     history_limit = getattr(chat, "max_history_length", settings.default_history_length)
     enable_thinking = bool(getattr(chat, "thinking_mode", settings.enable_thinking))
@@ -929,7 +1031,7 @@ async def process_user_message_streaming(
                 memories=memories_by_character.get(current_character.id, []),
                 other_character_names=other_names,
                 max_history_length=history_limit,
-                model_name=chat.model_name,
+                model_name=generation_model_name,
                 character_names=character_names,
                 summary=summary_text,
                 viewer_character_id=current_character.id,
@@ -2440,6 +2542,8 @@ async def regenerate_message_streaming(
     db: AsyncSession,
     chat_id: int,
     message_id: int,
+    *,
+    lora_manager: LoRAManager | None = None,
 ) -> AsyncIterator[dict]:
     """Regenerate a single character reply with the context of its round.
 
@@ -2451,6 +2555,9 @@ async def regenerate_message_streaming(
       {"type": "token", "text": "...", "character_id": N}
       {"type": "message", "message": MessageRead}
     Raises ValueError for invalid input, RuntimeError on generation failure.
+
+    ``lora_manager`` (Plans/LoRA.md Sprint 3): если передан, LoRA применяется
+    к основному вызову ``ollama_client.generate`` в этом пути перегенерации.
     """
     target = await db.get(models.Message, message_id)
     if target is None or target.chat_id != chat_id:
@@ -2461,6 +2568,16 @@ async def regenerate_message_streaming(
     chat = await crud.get_chat(db, chat_id)
     if chat is None:
         raise ValueError("Чат не найден")
+
+    # Sprint 3 (LoRA): модель для ОСНОВНОЙ генерации выбирается ДО начала
+    # генерации; ошибки LoRA поднимаются раньше любого yield, конфигурация
+    # чата не изменяется (§7). При lora_enabled=false — chat.model_name.
+    generation_model_name, lora_info = await resolve_generation_model(
+        db, client, chat, lora_manager
+    )
+    _lora_warning = lora_first_apply_warning(chat.id, lora_info)
+    if _lora_warning is not None:
+        yield _lora_warning
 
     messages = await crud.get_messages_by_chat(db, chat_id)
     idx = next((i for i, m in enumerate(messages) if m.id == message_id), None)
@@ -2766,7 +2883,7 @@ async def regenerate_message_streaming(
             memories=memories,
             other_character_names=other_names,
             max_history_length=history_limit,
-            model_name=chat.model_name,
+            model_name=generation_model_name,
             character_names=character_names,
             summary=summary_text,
             viewer_character_id=character.id,

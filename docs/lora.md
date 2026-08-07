@@ -2,9 +2,10 @@
 
 Поддержка LoRA-адаптеров для **основного ответа персонажа**. План и полная
 контекстная информация — [`Plans/LoRA.md`](../Plans/LoRA.md). Документ описывает
-реализованные слои **Sprint 1 (модель данных, миграции, CRUD, валидация пути)** и
-**Sprint 2 (runtime-слой: `LoRAManager` + расширение `ollama_client`)**.
-REST API (Sprint 4) и фронтенд (Sprint 5) — в плане, ещё не реализованы.
+реализованные слои **Sprint 1 (модель данных, миграции, CRUD, валидация пути)**,
+**Sprint 2 (runtime-слой: `LoRAManager` + расширение `ollama_client`)**,
+**Sprint 3 (интеграция в основную генерацию)** и **Sprint 4 (REST API)**.
+Фронтенд (Sprint 5) — в плане, ещё не реализован.
 
 ## Ограничения MVP (подтверждены эмпирически, Sprint 0)
 
@@ -16,7 +17,8 @@ REST API (Sprint 4) и фронтенд (Sprint 5) — в плане, ещё н�
 - **Физический файл пользователя никогда не удаляется** — `DELETE` регистрации
   не трогает `.gguf` на диске.
 - Служебные LLM-вызовы (память, отношения, сенсоры, scene state и т.д.) LoRA
-  **не получают** — интеграция только в основной вызов `generate()` (Sprint 3).
+  **не получают** — интеграция только в основной вызов `generate()` (Sprint 3,
+  реализовано).
 
 ## Модель данных
 
@@ -164,6 +166,83 @@ REST API (Sprint 4) и фронтенд (Sprint 5) — в плане, ещё н�
 Ошибки (несовместимость, недоступный runtime, пропавший файл адаптера, битая
 связка конфигурации) → `RuntimeError` с понятным текстом, без silent fallback.
 
+## Интеграция в основную генерацию (Sprint 3)
+
+Точка внедрения — ТОЛЬКО основной вызов `ollama_client.generate()` в
+`app/chat_engine.py`.
+
+### Хелперы `app/chat_engine.py`
+
+| Элемент | Назначение |
+|---------|-----------|
+| `resolve_generation_model(db, client, chat, lora_manager=None)` | выбрать модель для основной генерации: делегирует `LoRAManager.resolve` (семантика `lora_enabled`, §2.4); дефолт — `_default_lora_manager()`, в проде передаётся `app.state.lora_manager` |
+| `lora_first_apply_warning(chat_id, info)` | SSE-событие `{"type": "lora_warning", "kind": "compatibility_unknown", "detail": ...}` ровно один раз на чат (in-process), при первом применении LoRA со статусом `Unknown` |
+
+### Куда подставлен runtime `model_name`
+
+- `process_user_message_streaming` — генерация идёт с `model_name=generation_model_name`;
+- `regenerate_message_streaming` — то же самое.
+
+Служебные вызовы (`extract_scene_state`, `post_round_pipeline`, память,
+отношения, события, сенсоры, консолидация, кризис) **не затронуты** — все
+используют `chat.model_name`.
+
+### Проводка менеджера
+
+- `app/main.py`: `app.state.lora_manager = LoRAManager()` в lifespan;
+- `app/routers/chat_engine.py`: `lora_manager = getattr(request.app.state, "lora_manager", None)` → передаётся в оба генератора (fallback `None` → дефолт в `chat_engine`).
+
+### Поведение ошибок
+
+- Ошибка LoRA **до начала генерации** (Incompatible, пропавший файл адаптера,
+  битая конфигурация, недоступный runtime) → `RuntimeError` из `resolve` до
+  создания user-сообщения; клиенту — понятная ошибка, конфигурация чата не
+  изменяется. НЕ silent fallback.
+- `Unknown` по совместимости (§2.3) → SSE `lora_warning` перед первым токеном
+  (информирование/подтверждение), генерация продолжается на runtime-модели.
+- `Incompatible` → блокировка с текстом (до `lora_warning` не доходит).
+
+Не изменены: Dynamic CTX, thinking reserve, sensor context, memory pipeline,
+relationships, World & Perception Engine, role isolation, retry logic, tool-mode;
+Streaming/Thinking/Instant/stop/retries — без изменений.
+
+## REST API (Sprint 4)
+
+Роутер `app/routers/lora.py` (зарегистрирован в `app/main.py` через
+`api_router.include_router(lora.router)`). **Две логические группы endpoints,
+разделённые по §2.6.**
+
+### Глобальный registry (какие адаптеры доступны приложению)
+
+| Endpoint | Назначение |
+|----------|-----------|
+| `GET /api/lora` | список зарегистрированных адаптеров (`LoRAAdapterRead[]`, новые первыми) |
+| `POST /api/lora` | регистрация: валидация пути (§2.7) + `base_model_identity`; 201 |
+| `PUT /api/lora/{adapter_id}` | изменение; при смене `path`/`format` — повторная валидация и пересчёт sha256 |
+| `DELETE /api/lora/{adapter_id}` | удаление **только регистрации** (физический файл не трогается) |
+
+Тело `POST /api/lora` — `LoRAAdapterCreate`: `name`, `path`, `format`
+(`gguf`/`auto`; `safetensors` отклоняется), `base_model`, `base_model_identity`
+(nullable), `enabled`, `description`, `source`, `metadata`.
+
+### Конфигурация чата (какой адаптер используется в конкретном чате)
+
+| Endpoint | Назначение |
+|----------|-----------|
+| `GET /api/chats/{chat_id}/lora` | `ChatLoRAConfig{enabled, adapter_id}` — один запрос = источник настроек фронта |
+| `PUT /api/chats/{chat_id}/lora` | атомарная замена `{enabled, adapter_id}`; UNIQUE(chat_id) — не более одной связки |
+
+`enabled=true` + `adapter_id=null` — допустимое состояние (§2.4): «LoRA
+включена, но адаптер не выбран»; пустая runtime-модель не создаётся.
+
+### Коды ошибок
+
+| Код | Условие |
+|-----|---------|
+| 404 | чат/адаптер не найден |
+| 409 | `DELETE` регистрации адаптера, используемого ≥1 чатом; `detail` = `{message, chats: [{chat_id, name}]}` |
+| 422 | невалидный путь/формат/файл (§2.7), ссылка на несуществующий адаптер |
+
 ## Тесты
 
 `tests/test_lora_db_crud.py` — 29 тестов (ТЗ §36: 1–13):
@@ -191,9 +270,32 @@ REST API (Sprint 4) и фронтенд (Sprint 5) — в плане, ещё н�
 - `delete_model` через `request("DELETE", json=...)` с телом;
 - `check_capabilities` кэшируется на инстансе.
 
+`tests/test_lora_integration.py` — 6 тестов (ТЗ §36: 21), моки
+`FakeOllamaClient`/`FakeLoRAManager`:
+
+- `lora_enabled=false` → ответ идентичен текущему (base, без runtime-модели);
+- `lora_enabled=true` без адаптера → base, без create;
+- `lora_enabled=true` + адаптер → основной `generate` на runtime-модели,
+  служебные вызовы (`extract_scene_state`, `post_round_pipeline`) — на
+  `chat.model_name`;
+- перегенерация (`regenerate`) — тоже на runtime-модели;
+- Unknown → SSE `lora_warning` (1 раз на чат), конфиг не меняется;
+- Incompatible → `RuntimeError` до генерации, конфиг не меняется.
+
+`tests/test_lora_api.py` — 20 тестов (ТЗ §36: 22–31), клиент через
+`httpx.ASGITransport` + override `get_async_db`:
+
+- registry: пустой список, create (201, auto → gguf, sha256), list;
+- 422: неабсолютный путь, safetensors, не-GGUF, несуществующий путь;
+- PUT: обновление метаданных (sha256 не пересчитывается), смена пути
+  (revalidation + пересчёт sha256), невалидный путь → 422, несуществующий → 404;
+- DELETE: неиспользуемый → 204, файл на диске цел; используемый чатами → 409
+  с `chats: [{chat_id, name}]`; несуществующий → 404;
+- конфигурация чата: GET дефолт `{enabled: false, adapter_id: null}`, чат не
+  найден → 404; PUT enable+adapter / disable / `enabled=true`+`adapter_id=null`
+  (§2.4); атомарная замена (одна связка, старый адаптер освобождается);
+  несуществующий адаптер → 422; несуществующий чат → 404.
+
 ## Дальнейшие спринты (не реализовано)
 
-- **Sprint 3** — интеграция в основной `generate()` (chat_engine): только
-  основной ответ персонажа получает runtime-модель, служебные вызовы — без LoRA
-- **Sprint 4** — REST API `/api/lora` и `/api/chats/{id}/lora`
 - **Sprint 5** — Vue-фронтенд (вкладка «LoRA»)

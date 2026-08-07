@@ -32,6 +32,7 @@ async def _run_generation(
     *,
     visibility: str | None = None,
     target_character_ids: list[int] | None = None,
+    lora_manager=None,
 ) -> None:
     """Run message generation in a detached task with its own DB session."""
     async with AsyncSessionLocal() as db:
@@ -43,6 +44,7 @@ async def _run_generation(
                 content,
                 visibility=visibility,
                 target_character_ids=target_character_ids,
+                lora_manager=lora_manager,
             ):
                 await queue.put(event)
             await queue.put({"type": "done"})
@@ -89,6 +91,7 @@ async def send_message(
         )
 
     client = request.app.state.ollama_client
+    lora_manager = getattr(request.app.state, "lora_manager", None)
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
@@ -100,6 +103,7 @@ async def send_message(
                 message.content,
                 visibility=message.visibility,
                 target_character_ids=message.target_character_ids,
+                lora_manager=lora_manager,
             )
         )
         await generation_tracker.start_generation(chat_id, task)
@@ -292,6 +296,8 @@ async def _run_regeneration(
     client: httpx.AsyncClient,
     chat_id: int,
     message_id: int,
+    *,
+    lora_manager=None,
 ) -> None:
     """Run message regeneration in a detached task with its own DB session."""
     async with AsyncSessionLocal() as db:
@@ -301,6 +307,7 @@ async def _run_regeneration(
                 db,
                 chat_id,
                 message_id,
+                lora_manager=lora_manager,
             ):
                 await queue.put(event)
             await queue.put({"type": "done"})
@@ -354,6 +361,7 @@ async def regenerate_message_endpoint(
         )
 
     client = request.app.state.ollama_client
+    lora_manager = getattr(request.app.state, "lora_manager", None)
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
@@ -363,6 +371,7 @@ async def regenerate_message_endpoint(
                 client,
                 chat_id,
                 message_id,
+                lora_manager=lora_manager,
             )
         )
         await generation_tracker.start_generation(chat_id, task)

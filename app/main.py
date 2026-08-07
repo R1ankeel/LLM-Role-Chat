@@ -19,6 +19,7 @@ from . import task_queue
 from . import avatar_service
 from .config import settings
 from .database import async_engine, Base, ensure_schema, init_db
+from .lora_manager import LoRAManager
 from .routers import (
     characters,
     chat_engine,
@@ -26,6 +27,7 @@ from .routers import (
     debug,
     jobs,
     locations,
+    lora,
     relationships,
 )
 
@@ -205,6 +207,9 @@ async def lifespan(app: FastAPI):
         base_url=settings.ollama_base_url, timeout=settings.generate_timeout
     ) as client:
         app.state.ollama_client = client
+        # LoRA runtime-слой (Plans/LoRA.md Sprint 2/3): кэш runtime-моделей
+        # живёт на инстансе, поэтому он создаётся один раз на lifespan.
+        app.state.lora_manager = LoRAManager()
         try:
             resp = await client.get("/api/tags")
             if resp.status_code == 200:
@@ -304,6 +309,7 @@ api_router.include_router(locations.router)
 api_router.include_router(chat_engine.router)
 api_router.include_router(jobs.router)
 api_router.include_router(relationships.router)
+api_router.include_router(lora.router)
 api_router.include_router(debug.router)
 
 app.include_router(api_router)

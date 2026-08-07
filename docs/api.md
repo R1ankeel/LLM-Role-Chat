@@ -11,6 +11,7 @@
 - [Messages / Chat engine](#messages--chat-engine)
 - [Memory jobs](#memory-jobs)
 - [Relationships](#relationships)
+- [LoRA](#lora)
 - [Служебные](#служебные)
 - [Формат SSE](#формат-sse)
 
@@ -255,6 +256,67 @@ Query-параметр `state`: `open` (default) | `resolved` | `all`. Сорт�
 ### POST `/api/chats/{chat_id}/relationships/{source_id}/{target_id}/issues/{issue_id}/resolve`
 
 Ручное закрытие issue: тело `{"reason": str}`. Только если issue принадлежит именно этой паре.
+
+---
+
+## LoRA
+
+Роутер `lora`. **Две логические группы endpoints, разделённые по §2.6**
+(`Plans/LoRA.md`): глобальный registry адаптеров и конфигурация чата. MVP:
+ровно один адаптер на чат, без weight/scale, только GGUF.
+
+### GET `/api/lora` — список адаптеров
+
+Параметры: `skip` (default 0), `limit` (default 100). Новые первыми. Каждый
+элемент — `LoRAAdapterRead` (`id`, `name`, `path`, `format`, `base_model`,
+`base_model_identity`, `enabled`, `description`, `source`, `metadata`, `sha256`,
+`created_at`, `updated_at`).
+
+### POST `/api/lora` — регистрация адаптера
+
+Тело — `LoRAAdapterCreate`: `name`, `path` (абсолютный путь к `.gguf`),
+`format` (`gguf`/`auto`; `safetensors` отклоняется), `base_model`,
+`base_model_identity` (nullable), `enabled`, `description`, `source`, `metadata`.
+
+Валидация пути по §2.7 (абсолютный, существует, читаемый, валидный GGUF,
+sha256 вычисляется). Невалидный путь/файл → **422**. Ответ — 201
+`LoRAAdapterRead` (`format` нормализуется в `gguf`).
+
+### PUT `/api/lora/{adapter_id}` — изменить адаптер
+
+Тело — `LoRAAdapterUpdate` (все поля опциональны). При изменении `path`/`format`
+выполняется повторная валидация (§2.7) и пересчёт sha256; невалидный путь →
+**422**. Несуществующий адаптер → **404**.
+
+### DELETE `/api/lora/{adapter_id}` — удалить регистрацию
+
+Удаляет **только регистрацию** из registry — физический файл пользователя не
+трогается (§2.7). Если адаптер используется хотя бы одним чатом → **409**:
+
+```json
+{
+  "detail": {
+    "message": "LoRA-адаптер '...' используется чатами: ...",
+    "chats": [{"chat_id": 1, "name": "Чат 1"}]
+  }
+}
+```
+
+Несуществующий адаптер → **404**.
+
+### GET `/api/chats/{chat_id}/lora` — конфигурация LoRA чата
+
+Ответ — `ChatLoRAConfig{enabled, adapter_id}` (один запрос = источник настроек
+фронта). `enabled=true` + `adapter_id=null` — допустимое состояние (§2.4):
+«LoRA включена, но адаптер не выбран». Чат не найден → **404**.
+
+### PUT `/api/chats/{chat_id}/lora` — атомарная замена конфигурации чата
+
+Тело — `ChatLoRAConfig{enabled, adapter_id}` (adapter_id может быть `null`).
+
+Валидация: чат существует (иначе **404**), `adapter_id` ссылается на
+существующий адаптер (иначе **422**), UNIQUE(chat_id) — не более одной связки
+на чат. Замена атомарна (сбой не оставляет половинчатую конфигурацию).
 
 ---
 
