@@ -167,7 +167,6 @@ ACTION_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     (
         "ask_question",
         (
-            r"\?",
             r"спрашив",
             r"поинтерес",
             r"\bask(s|ed|ing)?\b",
@@ -385,6 +384,17 @@ def _core_actions(actions: Iterable[str]) -> frozenset[str]:
     return core if core else s
 
 
+def _loop_actions(actions: Iterable[str]) -> frozenset[str]:
+    """Core actions that signal a *loop* rather than scene progression.
+
+    Progression actions (touch, kiss, stand_up, ask_question, ...) represent
+    escalation/development, so they are excluded from loop/sticky detection.
+    """
+    core = _core_actions(actions)
+    loop = core - PROGRESSION_ACTIONS
+    return loop if loop else frozenset()
+
+
 def _jaccard_sets(a: frozenset[str], b: frozenset[str]) -> float:
     if not a and not b:
         return 0.0
@@ -409,14 +419,14 @@ def _action_overlap_score(
 ) -> tuple[float, list[str]]:
     if not candidate_actions or not prior_same_char:
         return 0.0, []
-    cand = _core_actions(candidate_actions)
+    cand = _loop_actions(candidate_actions)
     if not cand:
         return 0.0, []
 
     best = 0.0
     repeated: Counter[str] = Counter()
     for turn in prior_same_char:
-        prior = _core_actions(turn.actions)
+        prior = _loop_actions(turn.actions)
         if not prior:
             continue
         score = _jaccard_sets(cand, prior)
@@ -427,7 +437,7 @@ def _action_overlap_score(
 
     window_counts: Counter[str] = Counter()
     for turn in prior_same_char:
-        window_counts.update(_core_actions(turn.actions))
+        window_counts.update(_loop_actions(turn.actions))
     sticky = [a for a, c in window_counts.items() if c >= 2 and a in cand]
     for a in sticky:
         repeated[a] += 1
@@ -436,7 +446,7 @@ def _action_overlap_score(
     if len(cand) >= settings.repetition_min_bundle_size and best >= 0.5:
         best = min(1.0, best + 0.15)
     if sticky and len(sticky) >= settings.repetition_min_bundle_size:
-        best = min(1.0, max(best, 0.75))
+        best = min(1.0, max(best, settings.repetition_sticky_floor))
     return best, ordered
 
 
@@ -461,7 +471,7 @@ def _cooldown_hits(
 
     hits = []
     for a in candidate_actions:
-        if a in SOFT_ACTIONS:
+        if a in SOFT_ACTIONS or a in PROGRESSION_ACTIONS:
             continue
         if a in recent_core:
             hits.append(a)
@@ -472,10 +482,10 @@ def _interaction_loop_score(
     turns_with_candidate: list[ActionTurn],
 ) -> tuple[float, str, list[str]]:
     """Detect multi-character oscillating / stagnant interaction patterns."""
-    if len(turns_with_candidate) < 4:
+    if len(turns_with_candidate) < settings.repetition_loop_min_turns:
         return 0.0, "", []
 
-    cores = [_core_actions(t.actions) for t in turns_with_candidate]
+    cores = [_loop_actions(t.actions) for t in turns_with_candidate]
 
     by_char: dict[int | None, list[frozenset[str]]] = {}
     for t, core in zip(turns_with_candidate, cores):
@@ -506,9 +516,9 @@ def _interaction_loop_score(
             score = max(score, min(1.0, avg_self + 0.1))
 
     if global_sticky and len(global_sticky) >= settings.repetition_min_bundle_size:
-        score = max(score, 0.8)
+        score = max(score, settings.repetition_global_sticky_floor)
     elif global_sticky:
-        score = max(score, 0.55)
+        score = max(score, settings.repetition_global_sticky_low_floor)
 
     if len(by_char) >= 2 and self_sims and sum(self_sims) / len(self_sims) >= 0.55:
         char_unions = [set().union(*seq) if seq else set() for seq in by_char.values()]
@@ -520,7 +530,7 @@ def _interaction_loop_score(
                 if a not in SOFT_ACTIONS or a == "maintain_eye_contact"
             }
             if len(shared_all) >= settings.repetition_min_bundle_size:
-                score = max(score, 0.85)
+                score = max(score, settings.repetition_shared_floor)
                 sticky_actions.update(shared_all)
 
     pattern_parts = [a for a, _ in sticky_actions.most_common(6)]
@@ -700,18 +710,25 @@ def analyze_response(
     )
 
     score = 0.0
-    score = max(score, text_score * 0.95)
-    score = max(score, action_score * 0.9)
-    score = max(score, interaction_score * 0.95)
-    score = max(score, ngram_score * 0.4)
-    if cool_hits and not soft_only:
+    # Weighted composition of normalized components (was hard max() + floors).
+    score = min(
+        1.0,
+        text_score * 0.5
+        + action_score * 0.25
+        + interaction_score * 0.15
+        + ngram_score * 0.1
+        + 0.12 * min(len(cool_hits), 2),
+    )
+    if (
+        cool_hits
+        and not soft_only
+        and len(cool_hits) >= settings.repetition_cooldown_hits_required
+    ):
         score = max(score, 0.7)
-        if len(cool_hits) >= 2:
-            score = max(score, 0.85)
     if stagnation:
-        score = max(score, 0.75)
-        if progression < 0.2:
-            score = max(score, 0.88)
+        score = max(score, 0.75 if progression >= 0.2 else 0.88)
+    if text_score >= settings.repetition_text_jaccard:
+        score = max(score, text_score)
 
     if soft_only and text_score < settings.repetition_text_jaccard and interaction_score < 0.7:
         score *= 0.35
@@ -722,7 +739,11 @@ def analyze_response(
     character_level = (
         text_score >= settings.repetition_text_jaccard
         or action_score >= thr
-        or bool(cool_hits and not soft_only)
+        or bool(
+            cool_hits
+            and not soft_only
+            and len(cool_hits) >= settings.repetition_cooldown_hits_required
+        )
     )
     interaction_level = interaction_score >= thr or (
         stagnation and interaction_score >= 0.5
@@ -731,6 +752,17 @@ def analyze_response(
     is_repetitive = score >= thr and (
         character_level or interaction_level or stagnation
     )
+
+    # Scene-developing gate: when the scene is clearly progressing (new content,
+    # escalation actions like touch/kiss), loop/stagnation flags are suppressed.
+    # Only near-verbatim textual repetition and immediate cooldown repeats stay.
+    if (
+        progression >= settings.repetition_scene_gate
+        and not cool_hits
+        and text_score < settings.repetition_text_jaccard
+    ):
+        is_repetitive = False
+        score = min(score, thr - 0.01)
 
     if is_repetitive and soft_only and not stagnation and text_score < 0.9:
         is_repetitive = False

@@ -224,18 +224,18 @@ def test_action_cooldown_blocks_immediate_repeat():
     history = [
         _msg(
             "character",
-            "*Сокращаю расстояние* «Ну?»",
+            "*Делаю шаг ближе* «Каков твой следующий шаг?»",
             character_id=1,
         ),
     ]
-    candidate = "*Делаю шаг ближе* «Ну же?»"
+    candidate = "*Снова делаю шаг ближе* «Это вызов.»"
     result = analyze_response(
         candidate,
         character_id=1,
         messages=history,
         cooldown_turns=2,
     )
-    assert "move_closer" in result.cooldown_hits or result.is_repetitive
+    assert "move_closer" in result.cooldown_hits
     assert result.score >= 0.7
 
 
@@ -295,10 +295,12 @@ async def test_generate_repetition_retry_with_feedback():
     client = httpx.AsyncClient(base_url="http://test")
     client.post = fake_post  # type: ignore[method-assign]
 
-    with patch("app.ollama_client.USE_CHAT_API", True), patch(
-        "app.ollama_client.ENABLE_THINKING", False
-    ), patch("app.ollama_client.REPETITION_DETECTION_ENABLED", True), patch(
-        "app.ollama_client.MAX_REPETITION_RETRIES", 2
+    with patch(
+        "app.ollama_client.settings.enable_thinking", False
+    ), patch(
+        "app.ollama_client.settings.repetition_detection_enabled", True
+    ), patch(
+        "app.ollama_client.settings.max_repetition_retries", 2
     ):
         events = []
         async for event in ollama_client.generate(
@@ -370,11 +372,15 @@ async def test_repetition_retry_limit():
     client = httpx.AsyncClient(base_url="http://test")
     client.post = fake_post  # type: ignore[method-assign]
 
-    with patch("app.ollama_client.USE_CHAT_API", True), patch(
-        "app.ollama_client.ENABLE_THINKING", False
-    ), patch("app.ollama_client.REPETITION_DETECTION_ENABLED", True), patch(
-        "app.ollama_client.MAX_REPETITION_RETRIES", 2
-    ), patch("app.ollama_client.MAX_ROLE_ISOLATION_RETRIES", 3):
+    with patch(
+        "app.ollama_client.settings.enable_thinking", False
+    ), patch(
+        "app.ollama_client.settings.repetition_detection_enabled", True
+    ), patch(
+        "app.ollama_client.settings.max_repetition_retries", 2
+    ), patch(
+        "app.ollama_client.settings.max_role_isolation_retries", 3
+    ):
         events = []
         async for event in ollama_client.generate(
             client,
@@ -453,3 +459,32 @@ def test_soft_smile_alone_not_loop():
     candidate = "*Улыбаюсь* «Хорошо. Я готова.»"
     result = analyze_response(candidate, character_id=1, messages=history)
     assert result.is_repetitive is False
+
+
+def test_intimate_escalation_scene_not_a_loop():
+    history = [
+        _msg("character", "*Делаю шаг ближе* «Ты мне нравишься.»", character_id=1),
+        _msg("character", "*Улыбается* «Правда?»", character_id=2),
+        _msg("character", "*Беру её за руку* «Да.»", character_id=1),
+        _msg("character", "*Краснеет* «Не ожидала.»", character_id=2),
+        _msg("character", "*Наклоняюсь и целую её* «Теперь веришь?»", character_id=1),
+    ]
+    candidate = "*Обнимаю её и шепчу* «Верю.»"
+    result = analyze_response(candidate, character_id=1, messages=history)
+    assert result.is_repetitive is False
+    assert result.progression_score >= 0.3
+
+
+def test_progression_actions_not_cooldown_hits():
+    history = [
+        _msg("character", "*Обнимаю её* «Идём.»", character_id=1),
+    ]
+    candidate = "*Целую её* «Идём.»"
+    result = analyze_response(
+        candidate,
+        character_id=1,
+        messages=history,
+        cooldown_turns=2,
+    )
+    assert "touch" not in result.cooldown_hits
+    assert "kiss" not in result.cooldown_hits

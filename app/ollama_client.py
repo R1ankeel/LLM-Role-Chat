@@ -1775,6 +1775,75 @@ async def _generate_once(
     )
 
 
+_INFLECTION_SUFFIXES = (
+    "аются", "ются", "ется", "аться", "иться", "еться",
+    "ешься", "ишься", "его", "ому", "ему", "ыми", "ими", "ого",
+    "ая", "яя", "ое", "ее", "ые", "ие", "ый", "ий", "ой",
+    "ую", "юю", "ею", "ою", "ами", "ями", "ов", "ев", "ам", "ям",
+    "ах", "ях", "ом", "ем", "им", "ым", "ей", "у", "ю", "е", "о",
+    "ы", "и", "а", "я",
+)
+
+
+def _vocab_key(word: str) -> str:
+    """Coarse morphological normalization for Russian words.
+
+    Strips common inflectional endings so different forms of the same stem
+    (e.g. ``рука``/``рукой``/``руки``) collapse to one key. Keeps stems >= 3
+    chars so short function words stay intact.
+    """
+    w = re.sub(r"[^а-яёa-z]", "", word.lower().replace("ё", "е"))
+    for suf in _INFLECTION_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[: len(w) - len(suf)]
+    return w
+
+
+# Base roots treated as non-distinctive shared vocabulary (common Russian +
+# physical/intimacy words any two characters may legitimately both use).
+_VOCAB_STOP_ROOTS = {
+    "что", "это", "так", "вот", "все", "или", "как", "его", "она", "они",
+    "только", "если", "нет", "да", "уже", "еще", "там", "тут", "когда",
+    "даже", "меня", "тебя", "него", "них", "мой", "твой", "свой", "наш",
+    "ваш", "этот", "быть", "будет", "стать", "сказать", "такое", "сейчас",
+    "здесь", "тогда", "потом", "вдруг", "опять", "снова", "чтобы", "потому",
+    "поэтому", "который", "очень", "просто", "совсем", "бы", "же", "ли",
+    "не", "ни", "а", "но", "да", "кто", "чего", "чем", "кому", "себя",
+    "будто", "словно", "пока", "ведь", "наконец", "кстати", "между", "через",
+    "около", "почти", "мимо", "вокруг", "перед", "после", "среди", "сам",
+    "весь", "ничего", "никогда", "всегда", "более", "менее", "нужно",
+    "можно", "нельзя", "надо", "хотеть", "мочь", "должен", "знать",
+    "понимать", "видеть", "слышать", "думать", "казаться", "конечно",
+    "наверное", "вероятно", "возможно", "правда", "честно", "точно",
+    "действительно", "пожалуй", "скорее", "почему", "отчего", "зачем",
+    "какой", "намного", "чуть", "немного", "слишком", "гораздо",
+    "рука", "губы", "тело", "плечо", "близко", "рядом", "вместе", "друг",
+    "голова", "лицо", "глаза", "взгляд", "смотреть", "глядеть", "улыбка",
+    "улыбнуться", "дыхание", "сердце", "кожа", "шея", "волосы", "пальцы",
+    "ладонь", "спина", "живот", "грудь", "бедра", "ноги", "поцелуй",
+    "поцеловать", "целовать", "обнять", "обнимать", "объятие", "касаться",
+    "коснуться", "прикосновение", "шептать", "шепот", "дышать", "дрожать",
+    "дрожь", "тепло", "жар", "страсть", "желание", "нежность", "нежный",
+    "мягкий", "сильно", "крепкий", "медленный", "осторожно", "тихо",
+    "громко", "чувствовать", "чувство", "волна", "напряжение", "спокойный",
+    "долго", "день", "ночь", "утро", "вечер", "сегодня", "завтра",
+    "язык", "слово", "голос", "смех", "вздох", "стон", "запах", "вкус",
+}
+
+_VOCAB_STOP_KEYS = {_vocab_key(w) for w in _VOCAB_STOP_ROOTS}
+
+
+def _content_words(text: str) -> set[str]:
+    """Set of normalized content-word keys, with global stopwords removed."""
+    if not text:
+        return set()
+    words = {
+        _vocab_key(w)
+        for w in re.findall(r"\b[а-яёa-z-]{4,}\b", text.lower())
+    }
+    return words - _VOCAB_STOP_KEYS
+
+
 def _check_vocabulary_borrowing(
     text: str,
     character: Any,
@@ -1784,6 +1853,10 @@ def _check_vocabulary_borrowing(
 ) -> str:
     """Check if the character's response borrows vocabulary from other characters.
 
+    The character's own vocabulary is derived from ``speech_style`` +
+    ``example_messages`` + their own recent replies (ground-truth usage), so
+    common/shared vocabulary in intimate scenes is NOT treated as borrowing.
+
     Returns a description of the character's own speech style if borrowing
     is detected, or empty string if clean.
     """
@@ -1791,14 +1864,10 @@ def _check_vocabulary_borrowing(
         return ""
 
     own_style = (getattr(character, "speech_style", "") or "").strip()
-    if not own_style:
-        return ""
+    example_messages = getattr(character, "example_messages", "") or ""
 
-    # Extract distinctive words from character's own style
-    own_words = set(re.findall(r'\b[а-яёa-z-]{4,}\b', own_style.lower()))
-
-    # Collect words from other characters' recent replies
-    foreign_words: set[str] = set()
+    own_history: list[str] = []
+    foreign_replies: list[str] = []
     for msg in messages_history:
         if getattr(msg, "role", None) != "character":
             continue
@@ -1806,35 +1875,43 @@ def _check_vocabulary_borrowing(
         if cid is None:
             continue
         name = (character_names or {}).get(int(cid), "")
-        if not name or name == character.name or name not in other_character_names:
+        if not name or name not in other_character_names:
             continue
         content = getattr(msg, "content", "") or ""
-        foreign_words.update(re.findall(r'\b[а-яёa-z-]{4,}\b', content.lower()))
+        if name == character.name:
+            own_history.append(content)
+        else:
+            foreign_replies.append(content)
 
-    if not foreign_words:
+    if not foreign_replies:
         return ""
 
-    # Check if the response uses foreign words not in own style
-    response_words = set(re.findall(r'\b[а-яёa-z-]{4,}\b', text.lower()))
-    borrowed = (response_words & foreign_words) - own_words
-    common_stop = {
-        "что", "это", "так", "вот", "все", "или", "как", "его", "она", "они",
-        "только", "если", "нет", "да", "уже", "еще", "там", "тут", "когда",
-        "даже", "меня", "тебя", "него", "нее", "них", "мой", "твой", "свой",
-        "наш", "ваш", "эти", "этот", "было", "будет", "стал", "сказал",
-        "такое", "сейчас", "здесь", "тогда", "потом", "вдруг", "опять",
-    }
-    borrowed -= common_stop
+    own_words = _content_words(f"{own_style} {example_messages}") | _content_words(
+        " ".join(own_history)
+    )
+    foreign_words = _content_words(" ".join(foreign_replies))
+    if not own_words or not foreign_words:
+        return ""
 
-    # Require at least 3 borrowed words that aren't common
+    response_words = _content_words(text)
+    if not response_words:
+        return ""
+
+    # Distinctive words: used by other characters, NOT used by this character
+    # (in their style, examples, or own history), NOT global stopwords.
+    borrowed = (response_words & foreign_words) - own_words
+
+    # Require at least 3 borrowed distinctive words.
     if len(borrowed) < 3:
         return ""
 
-    # Check proportion: if borrowed < 20% of response vocab, it's mild
-    if response_words and len(borrowed) / len(response_words) < 0.2:
+    # Require them to make up a meaningful share of the response vocabulary.
+    if len(borrowed) / len(response_words) < 0.2:
         return ""
 
-    return own_style
+    if own_style:
+        return own_style
+    return "свой характерный стиль"
 
 
 async def generate(
@@ -1908,6 +1985,7 @@ async def generate(
 
     isolation_attempt = 0
     repetition_attempt = 0
+    borrowing_attempt = 0
     repetition_feedback = ""
     strict_isolation = False
 
@@ -1920,15 +1998,23 @@ async def generate(
     # Isolation-valid candidates ranked for best-of on exhaustion
     candidates: list[tuple[str, RepetitionAnalysis | None]] = []
 
-    # Bound total LLM calls: isolation budget + repetition budget + small slack
-    max_total_calls = settings.max_role_isolation_retries + settings.max_repetition_retries + 1
+    # Bound total LLM calls: each retry type has its own budget + slack for the
+    # fallback attempt. Counters are incremented ONLY for their own failure type,
+    # so repetition/borrowing retries never consume the isolation budget.
+    max_total_calls = (
+        settings.max_role_isolation_retries
+        + settings.max_repetition_retries
+        + settings.max_borrowing_retries
+        + settings.wpe_action_consistency_max_retries
+        + 2
+    )
 
     for call_idx in range(1, max_total_calls + 1):
-        isolation_attempt += 1
         label = (
             f"call={call_idx} isolation={isolation_attempt}/"
             f"{settings.max_role_isolation_retries} rep={repetition_attempt}/"
-            f"{settings.max_repetition_retries}"
+            f"{settings.max_repetition_retries} borrow={borrowing_attempt}/"
+            f"{settings.max_borrowing_retries}"
         )
 
         (
@@ -1986,6 +2072,7 @@ async def generate(
         )
 
         if not isolation_ok:
+            isolation_attempt += 1
             if isolation_attempt < settings.max_role_isolation_retries:
                 strict_isolation = True
                 logger.warning(
@@ -2007,8 +2094,8 @@ async def generate(
                 character_names,
             )
         if borrowing_issue:
-            if repetition_attempt < settings.max_repetition_retries:
-                repetition_attempt += 1
+            if borrowing_attempt < settings.max_borrowing_retries:
+                borrowing_attempt += 1
                 repetition_feedback = (
                     "ОБНАРУЖЕНО ЗАИМСТВОВАНИЕ СТИЛЯ.\n\n"
                     f"Твой ответ содержит слова и выражения, не характерные для {character.name}. "
@@ -2018,8 +2105,8 @@ async def generate(
                 )
                 logger.warning(
                     "[chat_id=%d] Borrowing detected for %s — retry (%d/%d)",
-                    chat_id, character.name, repetition_attempt,
-                    settings.max_repetition_retries,
+                    chat_id, character.name, borrowing_attempt,
+                    settings.max_borrowing_retries,
                 )
                 continue
 
@@ -2186,6 +2273,32 @@ async def generate(
                     fallback_verdict = action_resolution.classify_consistency(
                         fallback_turn_output, sanitized
                     )
+                # Last-resort output is accepted regardless, but log if the
+                # repetition/borrowing guards still trip on it.
+                if settings.repetition_detection_enabled:
+                    fb_analysis = analyze_response(
+                        sanitized,
+                        character_id=int(character.id),
+                        messages=filtered_history,
+                        character_names=character_names,
+                    )
+                    if fb_analysis.is_repetitive:
+                        logger.warning(
+                            "[chat_id=%d] Fallback output for %s still flagged "
+                            "repetitive (score=%.2f) — accepting",
+                            chat_id, character.name, fb_analysis.score,
+                        )
+                if settings.enable_vocabulary_control:
+                    fb_borrow = _check_vocabulary_borrowing(
+                        sanitized, character, other_character_names,
+                        filtered_history, character_names,
+                    )
+                    if fb_borrow:
+                        logger.warning(
+                            "[chat_id=%d] Fallback output for %s still flagged "
+                            "as borrowing — accepting",
+                            chat_id, character.name,
+                        )
                 logger.info(
                     "[chat_id=%d] Full-context fallback succeeded for %s",
                     chat_id,
