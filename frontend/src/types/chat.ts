@@ -8,6 +8,9 @@ export interface Chat {
   player_location: string
   locations: string
   created_at: string
+  /** LoRA (§2.3): identity базовой модели для compatibility check. Backend отдаёт
+   * только при явном задании; отсутствует → статус совместимости Unknown. */
+  base_model_identity?: string | null
 }
 
 export interface ChatListItem {

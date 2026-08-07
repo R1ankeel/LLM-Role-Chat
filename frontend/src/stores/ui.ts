@@ -5,7 +5,7 @@ export type Viewport = 'desktop' | 'tablet' | 'mobile'
 
 export type ToastType = 'success' | 'info' | 'error' | 'warning'
 
-export type SettingsTab = 'general' | 'player' | 'characters' | 'locations'
+export type SettingsTab = 'general' | 'player' | 'characters' | 'locations' | 'lora'
 
 export interface Toast {
   id: number

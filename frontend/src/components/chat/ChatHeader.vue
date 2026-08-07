@@ -1,15 +1,28 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useChatsStore } from '@/stores/chats'
+import { useLoraStore } from '@/stores/lora'
 import { useUiStore } from '@/stores/ui'
 import Badge from '@/components/common/Badge.vue'
 
 const ui = useUiStore()
 const chats = useChatsStore()
+const lora = useLoraStore()
 
 const chat = computed(() => chats.currentChat)
 const isMobile = computed(() => ui.viewport === 'mobile')
 const isDesktopRightVisible = computed(() => ui.viewport === 'desktop' && ui.rightPanelOpen)
+
+// Индикатор «LoRA» при активной конфигурации: enabled=true + выбранный адаптер (§2.4).
+const loraActive = computed(() => lora.config?.enabled === true && lora.config.adapter_id != null)
+
+watch(
+  () => chats.currentChatId,
+  (id) => {
+    if (id != null) void lora.loadConfig(id)
+  },
+  { immediate: true },
+)
 
 function toggleRightPanel() {
   if (ui.viewport === 'desktop') {
@@ -40,6 +53,9 @@ function toggleRightPanel() {
         <span class="chat-header__model">{{ chat?.model_name ?? '—' }}</span>
         <Badge :tone="chat?.thinking_mode ? 'accent' : 'neutral'">
           {{ chat?.thinking_mode ? '🧠 Thinking' : '⚡ Instant' }}
+        </Badge>
+        <Badge v-if="loraActive" tone="accent" title="LoRA включена: к основному ответу применяется адаптер">
+          LoRA
         </Badge>
       </div>
     </div>

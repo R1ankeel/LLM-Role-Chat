@@ -113,6 +113,10 @@ class ChatRead(ChatBase):
 
     id: int
     created_at: datetime
+    # LoRA (§2.3): identity базовой модели для compatibility check. UI показывает
+    # статус Compatible/Incompatible/Unknown; NULL → fallback на model_name
+    # (результат Unknown). Добавлено в Sprint 5.
+    base_model_identity: Optional[str] = None
 
 
 # ---------------------------- Character ----------------------------

@@ -9,6 +9,7 @@ const tabs: { id: SettingsTab; label: string }[] = [
   { id: 'player', label: 'Игрок' },
   { id: 'characters', label: 'Персонажи' },
   { id: 'locations', label: 'Локации' },
+  { id: 'lora', label: 'LoRA' },
 ]
 </script>
 

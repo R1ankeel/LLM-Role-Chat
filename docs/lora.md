@@ -4,8 +4,8 @@
 контекстная информация — [`Plans/LoRA.md`](../Plans/LoRA.md). Документ описывает
 реализованные слои **Sprint 1 (модель данных, миграции, CRUD, валидация пути)**,
 **Sprint 2 (runtime-слой: `LoRAManager` + расширение `ollama_client`)**,
-**Sprint 3 (интеграция в основную генерацию)** и **Sprint 4 (REST API)**.
-Фронтенд (Sprint 5) — в плане, ещё не реализован.
+**Sprint 3 (интеграция в основную генерацию)**, **Sprint 4 (REST API)** и
+**Sprint 5 (Vue-фронтенд: вкладка «LoRA» + индикатор в шапке чата)**.
 
 ## Ограничения MVP (подтверждены эмпирически, Sprint 0)
 
@@ -298,4 +298,65 @@ Streaming/Thinking/Instant/stop/retries — без изменений.
 
 ## Дальнейшие спринты (не реализовано)
 
-- **Sprint 5** — Vue-фронтенд (вкладка «LoRA»)
+- **Sprint 6** — документация и финальная проверка (ТЗ §38–§42, acceptance на
+  реальной модели `Dark-Goetia-26B-A4B-LoRA-RU-v1`).
+
+## Frontend (Sprint 5, Vue)
+
+Вкладка «LoRA» в модальном окне настроек + индикатор в шапке чата.
+
+### Файлы
+
+| Файл | Назначение |
+|------|-----------|
+| `frontend/src/types/lora.ts` | `LoRAAdapter`, `ChatLoRAConfig`, `CompatibilityStatus` |
+| `frontend/src/api/lora.ts` | `fetch/create/update/deleteLoraAdapter`, `fetch/updateChatLoraConfig` |
+| `frontend/src/api/types.ts` | методы `Api` (registry + chat config) |
+| `frontend/src/stores/lora.ts` | Pinia: **раздельные** registry (`adapters`) и chat config (`config`) |
+| `frontend/src/components/settings/LoRASettings.vue` | вкладка «LoRA» — две секции (§2.6) |
+| `frontend/src/components/chat/ChatHeader.vue` | бейдж-индикатор «LoRA» |
+| `frontend/src/mocks/data.ts` / `service.ts` | mock-адаптеры, mock-конфиги, mock-API |
+
+### Две логические части UI (§2.6)
+
+- **«Доступные LoRA» (глобальный registry)** — список адаптеров (name, путь,
+  base model/identity, статус Compatible/Incompatible/Unknown относительно
+  базовой модели текущего чата), «+ Добавить LoRA» → форма
+  (название/путь/формат/base model identity/базовая модель/описание),
+  редактирование, удаление (409 → список чатов).
+- **«LoRA этого чата» (конфигурация)** — тумблер «Включить LoRA», селектор
+  **ровно одного** адаптера, кнопка «Убрать».
+
+### Три состояния `lora_enabled` (§2.4)
+
+- `enabled=true` + адаптер не выбран → предупреждение «LoRA включена, но
+  адаптер не выбран»;
+- `enabled=false` → нейтральный вид;
+- `enabled=true` + адаптер → рабочий вид (селектор + «Убрать»).
+
+### Ограничения runtime в UI (§2.5)
+
+- ровно один адаптер: селектор, без мультивыбора и weight-контролов;
+- `supports_safetensors=false`: в форме регистрации только `gguf`/`auto`;
+- статус `Unknown` — явное предупреждение (badge в списке + inline-блок при
+  выборе), не блокирует молча.
+
+### Единый источник состояния
+
+Единственный объект `{enabled, adapter_id}`. В компоненте — локальный draft,
+синхронизируемый **только** из серверного ответа; после Save источник истины —
+`GET/PUT /api/chats/{id}/lora` (стор `lora.config`). Без сабмита изменения
+сбрасываются (компонент пересоздаётся при закрытии модалки / смене чата).
+
+### Статус совместимости в UI (§2.3)
+
+Статус считается по `base_model_identity` адаптера и чата. Для этого в `ChatRead`
+добавлено поле `base_model_identity` (nullable). Если identity не задана (у
+адаптера или у чата) — статус `Unknown` (честное предупреждение). Обратная
+совместимость: старый backend не отдаёт поле → статус `Unknown`.
+
+### Проверка
+
+`npm run build` (vue-tsc) без ошибок; мануальные сценарии (фронт-тест-раннер
+отсутствует). Backend после уточнения `ChatRead` — полный LoRA-прогон 76 passed,
+chat/memory/ollama 41 passed.

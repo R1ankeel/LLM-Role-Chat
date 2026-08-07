@@ -1,6 +1,7 @@
 import type { Chat, ChatListItem } from '@/types/chat'
 import type { Character, CharacterSummary } from '@/types/character'
 import type { Location } from '@/types/location'
+import type { ChatLoRAConfig, LoRAAdapter } from '@/types/lora'
 import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
@@ -11,7 +12,7 @@ import type {
   RelationshipTimeline,
 } from '@/types/relationship'
 import type { MessageStream } from '@/api/sse'
-import type { ApiError } from '@/api/client'
+import { ApiError } from '@/api/client'
 import type {
   Api,
   ChatDetail,
@@ -30,12 +31,15 @@ import type {
   TimelinePage,
   InterventionRead,
 } from '@/api/types'
+import type { LoRAAdapterCreateInput, LoRAAdapterUpdateInput } from '@/api/lora'
 import {
   MOCK_MODELS as mockModels,
   chatToListItem,
   mockCharacters,
+  mockChatLoraConfig,
   mockChats,
   mockLocations,
+  mockLoraAdapters,
   mockMemories,
   mockMessages,
   mockRelationshipEvents,
@@ -700,5 +704,83 @@ export const mockApi: Api = {
         total: all.length,
       },
     })
+  },
+
+  fetchLoraAdapters(): Promise<LoRAAdapter[]> {
+    return delay(clone(mockLoraAdapters))
+  },
+
+  createLoraAdapter(input: LoRAAdapterCreateInput): Promise<LoRAAdapter> {
+    const now = nowIso()
+    const adapter: LoRAAdapter = {
+      id: nextId(),
+      name: input.name,
+      path: input.path,
+      format: input.format === 'safetensors' ? 'safetensors' : 'gguf',
+      base_model: input.base_model ?? '',
+      base_model_identity: input.base_model_identity ?? null,
+      enabled: input.enabled ?? true,
+      description: input.description ?? '',
+      source: input.source ?? '',
+      metadata: input.metadata ?? {},
+      sha256: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      created_at: now,
+      updated_at: now,
+    }
+    mockLoraAdapters.unshift(adapter)
+    return delay(clone(adapter))
+  },
+
+  updateLoraAdapter(adapterId: number, patch: LoRAAdapterUpdateInput): Promise<LoRAAdapter> {
+    const adapter = mockLoraAdapters.find((a) => a.id === adapterId)
+    if (!adapter) throw new Error('LoRA-адаптер не найден')
+    if (patch.name != null) adapter.name = patch.name
+    if (patch.path != null) adapter.path = patch.path
+    if (patch.format != null) adapter.format = patch.format === 'safetensors' ? 'safetensors' : 'gguf'
+    if (patch.base_model != null) adapter.base_model = patch.base_model
+    if (patch.base_model_identity !== undefined) adapter.base_model_identity = patch.base_model_identity
+    if (patch.enabled != null) adapter.enabled = patch.enabled
+    if (patch.description != null) adapter.description = patch.description
+    if (patch.source != null) adapter.source = patch.source
+    if (patch.metadata != null) adapter.metadata = patch.metadata
+    adapter.updated_at = nowIso()
+    return delay(clone(adapter))
+  },
+
+  async deleteLoraAdapter(adapterId: number): Promise<void> {
+    await delay(undefined)
+    const usedBy = Object.entries(mockChatLoraConfig)
+      .filter(([, cfg]) => cfg.adapter_id === adapterId)
+      .map(([chatId]) => Number(chatId))
+    if (usedBy.length) {
+      const chats = usedBy.map((id) => {
+        const chat = mockChats.find((c) => c.id === id)
+        return { chat_id: id, name: chat?.name ?? 'Чат' }
+      })
+      throw new ApiError(409, `LoRA-адаптер используется чатами: ${chats.map((c) => c.name).join(', ')}`, false, {
+        message: `LoRA-адаптер используется чатами: ${chats.map((c) => c.name).join(', ')}`,
+        chats,
+      })
+    }
+    const index = mockLoraAdapters.findIndex((a) => a.id === adapterId)
+    if (index !== -1) mockLoraAdapters.splice(index, 1)
+    for (const cfg of Object.values(mockChatLoraConfig)) {
+      if (cfg.adapter_id === adapterId) cfg.adapter_id = null
+    }
+  },
+
+  fetchChatLoraConfig(chatId: number): Promise<ChatLoRAConfig> {
+    return delay(clone(mockChatLoraConfig[chatId] ?? { enabled: false, adapter_id: null }))
+  },
+
+  async updateChatLoraConfig(chatId: number, config: ChatLoRAConfig): Promise<ChatLoRAConfig> {
+    await delay(undefined)
+    if (!mockChats.some((c) => c.id === chatId)) throw new Error('Чат не найден')
+    if (config.adapter_id != null && !mockLoraAdapters.some((a) => a.id === config.adapter_id)) {
+      throw new ApiError(422, 'LoRA-адаптер не найден', false, { message: 'LoRA-адаптер не найден' })
+    }
+    const saved: ChatLoRAConfig = { enabled: config.enabled, adapter_id: config.adapter_id }
+    mockChatLoraConfig[chatId] = saved
+    return delay(clone(saved))
   },
 }

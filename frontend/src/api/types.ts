@@ -10,6 +10,8 @@ import type {
   RelationshipTimeline,
 } from '@/types/relationship'
 import type { SceneState } from '@/types/scene'
+import type { ChatLoRAConfig, LoRAAdapter } from '@/types/lora'
+import type { LoRAAdapterCreateInput, LoRAAdapterUpdateInput } from '@/api/lora'
 import type { MessageStream } from '@/api/sse'
 
 export type ClearScope = 'messages' | 'messages_memories' | 'full'
@@ -220,4 +222,10 @@ export interface Api {
     targetId: number,
     page?: TimelinePage,
   ): Promise<RelationshipTimeline>
+  fetchLoraAdapters(): Promise<LoRAAdapter[]>
+  createLoraAdapter(input: LoRAAdapterCreateInput): Promise<LoRAAdapter>
+  updateLoraAdapter(adapterId: number, patch: LoRAAdapterUpdateInput): Promise<LoRAAdapter>
+  deleteLoraAdapter(adapterId: number): Promise<void>
+  fetchChatLoraConfig(chatId: number): Promise<ChatLoRAConfig>
+  updateChatLoraConfig(chatId: number, config: ChatLoRAConfig): Promise<ChatLoRAConfig>
 }

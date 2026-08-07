@@ -1,6 +1,7 @@
 import type { Chat, ChatListItem } from '@/types/chat'
 import type { Character, CharacterSummary } from '@/types/character'
 import type { Location } from '@/types/location'
+import type { ChatLoRAConfig, LoRAAdapter } from '@/types/lora'
 import type { Memory } from '@/types/memory'
 import type { Message, WorldEvent } from '@/types/message'
 import type { SceneState } from '@/types/scene'
@@ -23,6 +24,7 @@ export const mockChats: Chat[] = [
     thinking_mode: true,
     player_location: 'Таверна',
     locations: '["Таверна","Улица","Городские ворота"]',
+    base_model_identity: 'Naphula/Goetia-26B-A4B-v1.3-Absolute-Heretic-ARA',
     created_at: '2026-08-01T18:00:00Z',
   },
   {
@@ -34,6 +36,7 @@ export const mockChats: Chat[] = [
     thinking_mode: false,
     player_location: 'Аудитория',
     locations: '["Аудитория","Лаборатория","Библиотека"]',
+    base_model_identity: 'Qwen/Qwen2.5-7B-Instruct',
     created_at: '2026-08-01T16:30:00Z',
   },
   {
@@ -48,6 +51,77 @@ export const mockChats: Chat[] = [
     created_at: '2026-08-02T09:00:00Z',
   },
 ]
+
+/* ── LoRA (Sprint 5) ───────────────────────────────────────── */
+
+export const mockLoraAdapters: LoRAAdapter[] = [
+  {
+    id: 901,
+    name: 'Dark Goetia RU',
+    path: 'D:\\models\\lora\\Dark-Goetia-26B-A4B-LoRA-RU-v1.Q4_K_M.gguf',
+    format: 'gguf',
+    base_model: 'goetia-26b',
+    base_model_identity: 'Naphula/Goetia-26B-A4B-v1.3-Absolute-Heretic-ARA',
+    enabled: true,
+    description: 'Русскоязычный LoRA для Goetia 26B (Gemma 4 MoE).',
+    source: 'huggingface',
+    metadata: {},
+    sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    created_at: '2026-08-05T10:00:00Z',
+    updated_at: '2026-08-05T10:00:00Z',
+  },
+  {
+    id: 902,
+    name: 'Goetia Literary',
+    path: 'C:\\lora\\goetia-literary-q8.gguf',
+    format: 'gguf',
+    base_model: 'goetia-26b',
+    base_model_identity: 'Naphula/Goetia-26B-A4B-v1.3-Absolute-Heretic-ARA',
+    enabled: true,
+    description: 'Литературный стиль для Goetia 26B.',
+    source: 'local',
+    metadata: {},
+    sha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    created_at: '2026-08-06T12:00:00Z',
+    updated_at: '2026-08-06T12:00:00Z',
+  },
+  {
+    id: 903,
+    name: 'Qwen2.5 RU chat',
+    path: 'D:\\lora\\qwen2.5-ru-chat.f16.gguf',
+    format: 'gguf',
+    base_model: 'qwen2.5:7b',
+    base_model_identity: 'Qwen/Qwen2.5-7B-Instruct',
+    enabled: true,
+    description: 'Разговорный русский для Qwen2.5 7B.',
+    source: 'huggingface',
+    metadata: {},
+    sha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    created_at: '2026-08-04T09:00:00Z',
+    updated_at: '2026-08-04T09:00:00Z',
+  },
+  {
+    id: 904,
+    name: 'Mistral RU (identity не задана)',
+    path: 'C:\\lora\\mistral-ru-v2.gguf',
+    format: 'gguf',
+    base_model: 'mistral:7b',
+    base_model_identity: null,
+    enabled: true,
+    description: 'Identity базовой модели не указана — статус совместимости Unknown.',
+    source: 'local',
+    metadata: {},
+    sha256: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    created_at: '2026-08-03T15:00:00Z',
+    updated_at: '2026-08-03T15:00:00Z',
+  },
+]
+
+export const mockChatLoraConfig: Record<number, ChatLoRAConfig> = {
+  1: { enabled: true, adapter_id: 901 },
+  2: { enabled: false, adapter_id: null },
+  3: { enabled: true, adapter_id: null },
+}
 
 export const mockLocations: Record<number, Location[]> = {
   1: [

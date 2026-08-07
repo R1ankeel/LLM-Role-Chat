@@ -5,6 +5,7 @@ import type { Api } from '@/api/types'
 import * as chatsApi from '@/api/chats'
 import * as charactersApi from '@/api/characters'
 import * as locationsApi from '@/api/locations'
+import * as loraApi from '@/api/lora'
 import * as messagesApi from '@/api/messages'
 import * as interventionApi from '@/api/intervention'
 import * as sceneApi from '@/api/scene'
@@ -32,6 +33,12 @@ export const api: Api = useMocks
       createLocation: locationsApi.createLocation,
       updateLocation: locationsApi.updateLocation,
       deleteLocation: locationsApi.deleteLocation,
+      fetchLoraAdapters: loraApi.fetchLoraAdapters,
+      createLoraAdapter: loraApi.createLoraAdapter,
+      updateLoraAdapter: loraApi.updateLoraAdapter,
+      deleteLoraAdapter: loraApi.deleteLoraAdapter,
+      fetchChatLoraConfig: loraApi.fetchChatLoraConfig,
+      updateChatLoraConfig: loraApi.updateChatLoraConfig,
       fetchMemories: charactersApi.fetchMemories,
       deleteMemory: charactersApi.deleteMemory,
       fetchCharacterSummary: charactersApi.fetchCharacterSummary,

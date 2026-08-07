@@ -6,6 +6,7 @@ import GeneralSettings from '@/components/settings/GeneralSettings.vue'
 import PlayerSettings from '@/components/settings/PlayerSettings.vue'
 import CharacterSettings from '@/components/settings/CharacterSettings.vue'
 import LocationSettings from '@/components/settings/LocationSettings.vue'
+import LoRASettings from '@/components/settings/LoRASettings.vue'
 import CharacterCreateModal from '@/components/settings/CharacterCreateModal.vue'
 import CharacterDeleteConfirm from '@/components/settings/CharacterDeleteConfirm.vue'
 
@@ -20,7 +21,8 @@ const ui = useUiStore()
         <GeneralSettings v-if="ui.settingsTab === 'general'" />
         <PlayerSettings v-else-if="ui.settingsTab === 'player'" />
         <CharacterSettings v-else-if="ui.settingsTab === 'characters'" />
-        <LocationSettings v-else />
+        <LocationSettings v-else-if="ui.settingsTab === 'locations'" />
+        <LoRASettings v-else />
       </div>
     </div>
   </Modal>
