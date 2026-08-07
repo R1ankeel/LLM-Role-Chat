@@ -414,3 +414,9 @@ legacy-safety-net с deprecation-логом `[WPE-P8]`, источник ист�
 | `WORLD_ENGINE_THREADS_ENABLED` | `false` | Thread/ThreadParticipantState в проде: доставка по удалённому каналу независимо от локации (Фаза 6, реализована) |
 | `WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED` | `false` | частичное восприятие по каналам: рёбра + громкость + невидимость + voice familiarity (Фаза 6, Ул.2, реализована) |
 | `WORLD_ENGINE_EVENT_BUS_ENABLED` | `false` | Event Bus / буждение NPC: очередь приоритетов, один ответ за раунд (Фаза 7, Ул.5, реализована) |
+
+## LoRA
+
+Специальных переменных окружения для LoRA **нет** — вся конфигурация хранится в
+БД и управляется через UI/API: `chats.lora_enabled`, registry `/api/lora`,
+конфигурация чата `/api/chats/{id}/lora`. Подробно — [lora.md](lora.md).

@@ -1,8 +1,8 @@
 # LoRA-адаптеры — план реализации
 
-**Статус:** план утверждён, реализация идёт по спринтам. **Sprint 0 выполнен** (2026-08-07, протокол `research/lora-spike/PROTOCOL.md`, §3), **Sprint 1 (модель данных и миграции) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_db_crud.py`), **Sprint 2 (LoRAManager + расширение OllamaClient) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_runtime.py`), **Sprint 3 (интеграция в основную генерацию) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_integration.py`), **Sprint 4 (REST API) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_api.py`, 20 тестов, ТЗ §36: 22–31), **Sprint 5 (Frontend Vue) выполнен** (2026-08-07, см. §3; проверка — `npm run build` (vue-tsc), мануальные сценарии; ТЗ §36: 32–39). Скорректирован по ревью (см. §8). **Объём MVP сужен (2026-08-07): ровно один LoRA-адаптер на чат, без weight/scale и без N-адаптеров (см. §2.5, §8.6).**
+**Статус:** план утверждён, реализация идёт по спринтам. **Sprint 0 выполнен** (2026-08-07, протокол `research/lora-spike/PROTOCOL.md`, §3), **Sprint 1 (модель данных и миграции) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_db_crud.py`), **Sprint 2 (LoRAManager + расширение OllamaClient) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_runtime.py`), **Sprint 3 (интеграция в основную генерацию) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_integration.py`), **Sprint 4 (REST API) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_api.py`, 20 тестов, ТЗ §36: 22–31), **Sprint 5 (Frontend Vue) выполнен** (2026-08-07, см. §3; проверка — `npm run build` (vue-tsc), мануальные сценарии; ТЗ §36: 32–39), **Sprint 6 (документация и финальная проверка) выполнен** (2026-08-07, см. §3.7; приёмка на реальной модели — `research/lora-acceptance/ACCEPTANCE.md`, 12/12 PASS). Скорректирован по ревью (см. §8). **Объём MVP сужен (2026-08-07): ровно один LoRA-адаптер на чат, без weight/scale и без N-адаптеров (см. §2.5, §8.6).**
 **Дата:** 2026-08-07
-**Блокирующий этап:** Sprint 0 (Ollama LoRA Compatibility Spike) — **✅ ВЫПОЛНЕН** (протокол приложен). Sprint 1 (модель данных и миграции) — **✅ ВЫПОЛНЕН**. Sprint 2 (runtime-слой) — **✅ ВЫПОЛНЕН**. Sprint 3 (интеграция) — **✅ ВЫПОЛНЕН**. Sprint 4 (REST API) — **✅ ВЫПОЛНЕН**. Sprint 5 (Frontend Vue) — **✅ ВЫПОЛНЕН**. Sprint 6 может начинаться.
+**Блокирующий этап:** Sprint 0 (Ollama LoRA Compatibility Spike) — **✅ ВЫПОЛНЕН** (протокол приложен). Sprint 1 (модель данных и миграции) — **✅ ВЫПОЛНЕН**. Sprint 2 (runtime-слой) — **✅ ВЫПОЛНЕН**. Sprint 3 (интеграция) — **✅ ВЫПОЛНЕН**. Sprint 4 (REST API) — **✅ ВЫПОЛНЕН**. Sprint 5 (Frontend Vue) — **✅ ВЫПОЛНЕН**. Sprint 6 (документация и финальная проверка) — **✅ ВЫПОЛНЕН**.
 **Основание:** Техническое задание (42 пункта), приложенное к запросу
 **Ограничение (конвенция проекта):** Vanilla JS SPA в `app/static/` (index.html + app.js) **НЕ изменяется**. Все правки — в новом Vue-фронтенде (`frontend/src/`) и бэкенде. Аналогично плану `Plans/locations2.md`.
 
@@ -390,7 +390,44 @@ Capability-флаги: `supports_lora=true`, `supports_multiple_loras=false`, `s
 
 **Критерий готовности:** все пункты §38–§42 закрыты, в `app/static/` нет изменений; приёмка с реальной моделью выполнена и задокументирована.
 
-**Проверка:** полный тестовый прогон + мануальный сценарий на реальном Ollama.
+**Проверка:** полный тестовый прогон + мануальный сценарий на реальном Ollama. 
+
+**Статус:** ✅ выполнен (2026-08-07). Задачи 1–4 закрыты; протокол —
+`research/lora-acceptance/ACCEPTANCE.md`.
+
+### 3.7. Sprint 6 — итоги
+
+1. **Документация** — обновлены `docs/README.md`, `docs/architecture.md`, `docs/api.md`,
+   `docs/database.md`, `docs/configuration.md`; добавлен `docs/lora.md` (включение ровно
+   одной LoRA, ограничения runtime — одна LoRA без весов, FAQ по Ollama). `app/static/`
+   не изменён.
+2. **pytest** — LoRA-набор зелёный: 78 passed (`tests/test_lora_db_crud.py`,
+   `tests/test_lora_runtime.py`, `tests/test_lora_integration.py`, `tests/test_lora_api.py`).
+   Полный прогон: 1264 passed / 31 failed / 1 error — все падения предсуществующие и вне
+   LoRA (memory_service, memory_perception, task_queue, stream_disconnect, token_counter,
+   repetition_detector, embeddings, adaptive_consolidation, attention, character_state,
+   hybrid_rerank, llm_serialization, post_round_pipeline); к LoRA-изменениям отношения не
+   имеют. Пункт DoD «pytest зелёный» закрыт частично (см. §6).
+3. **Приёмка на реальной модели** — `research/lora-acceptance/ACCEPTANCE.md`, **12/12 PASS**:
+   register adapter (sha256 совпадает с blob) → select adapter → enable LoRA → resolve →
+   runtime-модель создана/переиспользована в реальном Ollama → `compatibility=Compatible` →
+   generate с LoRA → disable LoRA → generate без LoRA. Созданная runtime-модель
+   `hf-co-mradermacher-goetia--lora-7c9839ab`.
+4. **Дефекты, найденные и исправленные при приёмке:**
+   - `runtime_name` превышал лимит имени модели Ollama (40 симв.) → 400 "invalid model name".
+     Слаг обрезается до `40 - len("-lora-{hash8}")`; регрессия
+     `test_runtime_name_truncated_for_long_base_model`.
+   - Повторный запуск пересоздавал runtime-модель: Ollama отдаёт в `GET /api/tags` модель
+     без тега как `name:latest`, а сверка искала голое `name`. Добавлен
+     `_model_exists_in_ollama()` (учёт `:latest`); регрессия
+     `test_fresh_manager_reuses_model_listed_with_latest_tag`.
+   - Acceptance-скрипт: `httpx.AsyncClient` без таймаута (дефолт 5 с) → `Ollama chat
+     timeout` на холодной загрузке 14 ГБ модели; таймаут клиента 900 с. Повторное создание
+     персонажа → `order_index=1 уже занят`; персонаж создаётся один раз.
+5. **Boot-smoke сервера:** uvicorn (как в `start_server.bat`) поднимается;
+   `GET /api/health` → `{"status":"ok","ollama":"ok",...}`.
+
+---
 
 ---
 
@@ -412,23 +449,23 @@ Capability-флаги: `supports_lora=true`, `supports_multiple_loras=false`, `s
 
 ## 5. Acceptance criteria (ТЗ §37)
 
-- A. Создание/редактирование адаптера в модальных настройках (registry).
-- B. Включение LoRA + назначение адаптеров чату (config).
-- C. Перегенерация ответа идёт с LoRA; служебные вызовы без LoRA.
-- D. Смена адаптера → новая runtime-модель (без «залипания» старой).
-- E. Несовместимость/недоступность → понятная ошибка, без молчаливого игнора.
-- F. `lora_enabled=false` → поведение идентично текущему.
-- G. `enabled=true` + адаптер не выбран → предупреждение «LoRA включена, но адаптер не выбран»; пустая runtime-модель не создаётся.
-- H. **Приёмка на реальной модели:** `Dark-Goetia-26B-A4B-LoRA-RU-v1` + базовая Goetia: полный цикл register → select → enable → generate → streaming → disable → generate без LoRA.
-- I. Совместимость по identity, а не по имени: адаптер с HF-идентификатором ≠ локального имени применяется (Compatible/Unknown), не блокируется строковым `==`; `Unknown` — понятное предупреждение.
+- [x] A. Создание/редактирование адаптера в модальных настройках (registry). — выполнено (Sprint 4 REST + Sprint 5 UI; `tests/test_lora_api.py`).
+- [x] B. Включение LoRA + назначение адаптеров чату (config). — выполнено (Sprint 2–5; `tests/test_lora_runtime.py`, `tests/test_lora_api.py`, UI).
+- [x] C. Перегенерация ответа идёт с LoRA; служебные вызовы без LoRA. — выполнено (Sprint 3; `tests/test_lora_integration.py`).
+- [x] D. Смена адаптера → новая runtime-модель (без «залипания» старой). — выполнено (Sprint 2; `tests/test_lora_runtime.py`).
+- [x] E. Несовместимость/недоступность → понятная ошибка, без молчаливого игнора. — выполнено (Sprint 2; `tests/test_lora_runtime.py`).
+- [x] F. `lora_enabled=false` → поведение идентично текущему. — выполнено (Sprint 2; `tests/test_lora_runtime.py`).
+- [x] G. `enabled=true` + адаптер не выбран → предупреждение «LoRA включена, но адаптер не выбран»; пустая runtime-модель не создаётся. — выполнено (Sprint 2; `tests/test_lora_runtime.py`).
+- [x] H. **Приёмка на реальной модели:** `Dark-Goetia-26B-A4B-LoRA-RU-v1` + базовая Goetia: полный цикл register → select → enable → generate → streaming → disable → generate без LoRA. — **выполнено** (Sprint 6; `research/lora-acceptance/ACCEPTANCE.md`, 12/12 PASS).
+- [x] I. Совместимость по identity, а не по имени: адаптер с HF-идентификатором ≠ локального имени применяется (Compatible/Unknown), не блокируется строковым `==`; `Unknown` — понятное предупреждение. — выполнено (Sprint 2/4; `tests/test_lora_runtime.py`, `tests/test_lora_api.py`).
 
 ## 6. Definition of Done (ТЗ §42)
 
-- Все спринты закрыты по критериям готовности.
-- `pytest` зелёный, `npm run build` без ошибок vue-tsc.
-- `app/static/` не изменён.
-- Документация обновлена.
-- Пункты ТЗ §1–§42 покрыты/разъяснены в этом файле.
+- ✅ Все спринты закрыты по критериям готовности (Sprint 0–6; итоги Sprint 6 — §3.7).
+- `pytest` зелёный — **частично**: `npm run build` ✅ (vue-tsc, Sprint 5); LoRA-набор ✅ 78 passed; полный прогон 1264 passed / 31 failed / 1 error — предсуществующие падения вне LoRA (см. §3.7).
+- ✅ `app/static/` не изменён.
+- ✅ Документация обновлена (Sprint 6; `docs/lora.md` + README/architecture/api/database/configuration, см. §3.7).
+- ✅ Пункты ТЗ §1–§42 покрыты/разъяснены в этом файле (кроме полного «зелёного» pytest, см. выше).
 
 ## 7. Запрещённые решения (ТЗ §40 — сводка для контроля)
 

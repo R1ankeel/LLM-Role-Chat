@@ -5,7 +5,10 @@
 реализованные слои **Sprint 1 (модель данных, миграции, CRUD, валидация пути)**,
 **Sprint 2 (runtime-слой: `LoRAManager` + расширение `ollama_client`)**,
 **Sprint 3 (интеграция в основную генерацию)**, **Sprint 4 (REST API)** и
-**Sprint 5 (Vue-фронтенд: вкладка «LoRA» + индикатор в шапке чата)**.
+**Sprint 5 (Vue-фронтенд: вкладка «LoRA» + индикатор в шапке чата)** и
+**Sprint 6 (документация, полный pytest, приёмка на реальной модели —
+`research/lora-acceptance/ACCEPTANCE.md`, 12/12 PASS; найденные дефекты — ниже в
+«Приёмка на реальной модели»)**.
 
 ## Ограничения MVP (подтверждены эмпирически, Sprint 0)
 
@@ -360,3 +363,67 @@ Streaming/Thinking/Instant/stop/retries — без изменений.
 `npm run build` (vue-tsc) без ошибок; мануальные сценарии (фронт-тест-раннер
 отсутствует). Backend после уточнения `ChatRead` — полный LoRA-прогон 76 passed,
 chat/memory/ollama 41 passed.
+## Приёмка на реальной модели (Sprint 6)
+
+Скрипт `research/lora-acceptance/run_acceptance.py` прогоняет полный цикл на
+**реальной** модели из задачи (`SubMaroonDark-Goetia-26B-A4B-LoRA-RU-v1.gguf` +
+`Goetia-26B-A4B...IQ4_XS.gguf`, локальный Ollama 0.32.6) через реальные модули
+приложения (`crud`, `LoRAManager`, `ollama_client`); БД — временный SQLite-файл.
+
+Итог: **12/12 PASS** (протокол — `research/lora-acceptance/ACCEPTANCE.md`):
+register adapter (sha256 совпадает с blob) → select adapter → enable LoRA → resolve →
+runtime-модель создана/переиспользована в реальном Ollama → `Compatible` →
+generate с LoRA → disable → generate без LoRA.
+
+### Дефекты, найденные при приёмке и исправленные
+
+1. **Имя runtime-модели длиннее 40 символов → `400 invalid model name`.**
+   Ollama ограничивает длину имени модели (`MaxModelNameLength = 40`). Для длинных
+   HF-путей (``hf.co/mradermacher/...:...gguf``) slug базовой модели обрезается до
+   `40 - len("-lora-{hash8}")`; уникальность сохраняется через `hash8` (runtime key).
+   Регрессия: `tests/test_lora_runtime.py::test_runtime_name_truncated_for_long_base_model`.
+2. **Повторный запуск пересоздавал runtime-модель.** Модель, созданная без явного
+   тега, в `GET /api/tags` отдаётся как `name:latest`; сверка искала голое `name`.
+   Исправлено: `_model_exists_in_ollama()` учитывает и `name:latest`.
+   Регрессия: `tests/test_lora_runtime.py::test_fresh_manager_reuses_model_listed_with_latest_tag`.
+3. **Acceptance-скрипт:** `httpx.AsyncClient` без таймаута (дефолт 5 с) → `Ollama chat
+   timeout` на холодной загрузке 14 ГБ модели; таймаут клиента 900 с. Повторное
+   создание персонажа → `order_index=1 уже занят`; персонаж создаётся один раз.
+
+## FAQ по Ollama
+
+**Как Ollama применяет LoRA?** Runtime-модель создаётся структурным `POST /api/create`
+с `from` (базовая модель) и ровно одним `adapters: {filename: digest}`. В 0.32.6
+модель принимает **ровно один** адаптер; механизма `weight/scale` нет. Приложение
+не вызывает `ollama create` на каждое сообщение — runtime-модель создаётся один раз
+и переиспользуется (кэш + сверка `GET /api/tags`).
+
+**Почему `ollama run <base>` не показывает эффект LoRA?** LoRA «вшит» только в
+отдельную runtime-модель. Базовую модель без адаптера менять нельзя — генерировать
+нужно через runtime-имя (приложение делает это автоматически при `enabled=true`).
+
+**Почему runtime-модель в `ollama list` имеет тег `:latest`?** Модель создаётся без
+явного тега, Ollama добавляет `:latest`. Это учтено в сверке существования.
+
+**Почему первая генерация после создания модели медленная/таймаутит?** Холодная
+загрузка модели в VRAM (на RTX 5070 Ti — десятки секунд для 14 ГБ GGUF). Клиент
+должен иметь таймаут больше времени загрузки (в acceptance — 900 с).
+
+**Почему лимит имени 40 символов?** `MaxModelNameLength` в Ollama. Длинные имена
+базовых моделей из HuggingFace обрезаются в runtime-имени; уникальность — через
+`hash8` runtime key.
+
+**Можно ли очистить runtime-модели?** MVP не удаляет их автоматически (без GC).
+При необходимости — вручную: `ollama rm <runtime-name>`. При следующем `resolve`
+модель будет пересоздана.
+
+**Какие форматы адаптеров поддерживаются?** Только GGUF (`.gguf`). В 0.32.6
+safetensors-адаптеры не поддерживаются (`supports_safetensors=false`, подтверждено
+Sprint 0).
+
+**Можно ли несколько LoRA одновременно?** Нет — ровно одна на runtime-модель
+(ограничение Ollama) и ровно одна на чат (ограничение MVP, `UNIQUE(chat_id)`).
+
+**Как пересоздать runtime-модель при смене адаптера?** Любое изменение
+(другой адаптер / другой файл / другая `base_model_identity`) даёт новый runtime key
+→ новая runtime-модель автоматически; старые остаются в Ollama до ручной очистки.

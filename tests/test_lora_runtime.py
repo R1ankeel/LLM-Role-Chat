@@ -174,6 +174,28 @@ def test_runtime_name_format():
     assert runtime_name("", key).startswith("model-lora-")
 
 
+def test_runtime_name_truncated_for_long_base_model():
+    """Ollama: имя модели ≤ 40 символов; длинные HF-имена обрезаются (§2.2).
+
+    Регрессия Sprint 6 (acceptance на реальной модели): имя
+    ``{slug(HF-путь)}-lora-{hash8}`` превышало лимит → 400 "invalid model name".
+    """
+    key = "b" * 64
+    long_base = (
+        "hf.co/mradermacher/Goetia-26B-A4B-v1.3-Absolute-Heretic-ARA-GGUF:"
+        "Goetia-26B-A4B-v1.3-Absolute-Heretic-ARA.IQ4_XS.gguf"
+    )
+    name = runtime_name(long_base, key)
+    assert len(name) <= 40
+    assert name.endswith(f"-lora-{key[:8]}")
+    # slug базовой модели в имени присутствует (обрезанный префикс)
+    assert name.startswith("hf-co-")
+    # короткие имена не трогаются
+    assert runtime_name("goetia-26b", key) == f"goetia-26b-lora-{key[:8]}"
+    # два разных ключа для одной базы дают разные (корректные) имена
+    assert runtime_name(long_base, "c" * 64) != name
+
+
 # ------------------------------ семантика lora_enabled (§2.4) ------------------------------
 
 
@@ -329,6 +351,29 @@ async def test_fresh_manager_reuses_existing_model_via_list_models(lora_setup, d
     assert info.created is False
     assert fake.calls["create"] == 0
     assert fake.calls["tags"] >= 1  # сверка list_models была
+    assert fake.calls["blob_post"] == 0
+
+
+async def test_fresh_manager_reuses_model_listed_with_latest_tag(lora_setup, db_session):
+    """Ollama отдаёт модели без тега как ``name:latest`` — повторный запуск
+    не должен пересоздавать runtime-модель (регрессия Sprint 6)."""
+    chat, adapter, gguf = lora_setup
+    key = runtime_key(
+        base_identity="goetia-26b",
+        adapter_id=adapter.id,
+        file_sha256=adapter.sha256,
+    )
+    name = runtime_name("goetia-26b", key)
+    fake = OllamaFake()
+    fake.models.append(f"{name}:latest")  # так реально выглядит GET /api/tags
+
+    manager = LoRAManager()
+    async with fake.client() as client:
+        model, info = await manager.resolve(db_session, client, chat)
+
+    assert model == name
+    assert info.created is False
+    assert fake.calls["create"] == 0
     assert fake.calls["blob_post"] == 0
 
 

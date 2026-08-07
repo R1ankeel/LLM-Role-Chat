@@ -263,7 +263,8 @@ Query-параметр `state`: `open` (default) | `resolved` | `all`. Сорт�
 
 Роутер `lora`. **Две логические группы endpoints, разделённые по §2.6**
 (`Plans/LoRA.md`): глобальный registry адаптеров и конфигурация чата. MVP:
-ровно один адаптер на чат, без weight/scale, только GGUF.
+ровно один адаптер на чат, без weight/scale, только GGUF. Приёмка на реальной
+модели — Sprint 6 (`research/lora-acceptance/ACCEPTANCE.md`, 12/12 PASS).
 
 ### GET `/api/lora` — список адаптеров
 

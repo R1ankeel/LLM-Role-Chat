@@ -395,7 +395,36 @@ Scene-блок (`prompt_builder.build_scene_block`) принимает `characte
 - Детерминированный интерпретатор превращает числа в семантические ярлыки для промпта (никаких чисел персонажу).
 - Open issues — сюжетные крючки с салience-счётчиком и весовым proactive-бустом.
 
+## LoRA (runtime-архитектура)
+
+Подробно — [lora.md](lora.md); план — [`Plans/LoRA.md`](../Plans/LoRA.md).
+MVP: **ровно один LoRA-адаптер на чат**, без weight/scale, только GGUF.
+
+**Место в конвейере.** LoRA применяется **только** к основному ответу персонажа:
+`chat_engine` получает runtime `model_name` из `LoRAManager.resolve()` и передаёт
+его в `ollama_client.generate()`. Служебные LLM-вызовы (память, отношения,
+сенсоры, scene state, валидаторы и пр.) LoRA **не получают**.
+
+**`LoRAManager.resolve()` (Sprint 2):**
+
+- `lora_enabled=false` или `enabled=true` без адаптера → базовая модель, к Ollama
+  не обращаемся.
+- `enabled=true` + адаптер: compatibility check по `base_model_identity`
+  (`Compatible` / `Incompatible` / `Unknown`); при `Incompatible` — явная ошибка,
+  без silent fallback.
+- runtime key = sha256(`base_identity + adapter_id + sha256 файла`); имя
+  runtime-модели = `{slug(base)}-lora-{hash8}`, ограничено 40 символами
+  (лимит имени модели в Ollama).
+
+**Жизненный цикл runtime-модели.** Создаётся структурным `POST /api/create`
+(один `ADAPTER`) **максимум 1×**: кэш `key → exists` → сверка `GET /api/tags`
+(повторный запуск / другой процесс; модель без тега отдаётся как `name:latest` —
+учитывается) → под lock → загрузка blob (`sha256:…`) → create. Модель **не
+удаляется автоматически** (без GC, §2.7) — при необходимости вручную
+`ollama rm <runtime-name>`; при следующем `resolve` пересоздаётся.
+
 ## Валидация и надёжность
+
 
 - **Rate limit**: 1 сообщение / 5 сек на чат (считается от завершённой генерации).
 - **Одна транзакция на раунд**: сообщения раунда коммитятся в конце запроса; ошибки валидации откатывают раунд.

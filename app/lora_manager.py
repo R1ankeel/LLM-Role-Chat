@@ -263,13 +263,36 @@ def runtime_key(*, base_identity: str, adapter_id: int, file_sha256: str) -> str
 
 
 def runtime_name(base_model: str, key: str) -> str:
-    """Имя runtime-модели: ``{slug(base)}-lora-{hash8}``."""
-    return f"{_slugify(base_model)}-lora-{key[:8]}"
+    """Имя runtime-модели: ``{slug(base)}-lora-{hash8}``.
+
+    Ollama ограничивает длину имени модели 40 символами (``MaxModelNameLength``):
+    для длинных имён базовых моделей (например, HuggingFace-путей вида
+    ``hf.co/.../Goetia-...:tag``) slug обрезается до ``40 - len("-lora-{hash8}")``.
+    Уникальность при обрезке сохраняется через ``hash8`` (runtime key §2.2:
+    base identity + adapter_id + sha256 содержимого).
+    """
+    suffix = f"-lora-{key[:8]}"
+    slug = _slugify(base_model)
+    max_slug_len = 40 - len(suffix)
+    if len(slug) > max_slug_len:
+        slug = slug[:max_slug_len]
+    return f"{slug}{suffix}"
 
 
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
     return slug or "model"
+
+
+def _model_exists_in_ollama(name: str, models: list[str]) -> bool:
+    """Проверка наличия runtime-модели по именам из ``GET /api/tags``.
+
+    Модель, созданная без явного тега (наш случай — ``runtime_name`` всегда
+    без тега), Ollama отдаёт в списке как ``name:latest``. Поэтому сверка при
+    повторном запуске должна распознавать и ``name:latest`` — иначе runtime-
+    модель будет лишний раз пересоздаваться.
+    """
+    return name in models or f"{name}:latest" in models
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +478,7 @@ class LoRAManager:
             return False
 
         models = await ollama_client.list_models(client)
-        if name in models:
+        if _model_exists_in_ollama(name, models):
             self._exists_cache[key] = name
             logger.info(
                 "LoRA runtime-модель уже существует в Ollama (list_models): %s",
@@ -471,7 +494,7 @@ class LoRAManager:
                     name,
                 )
                 return False
-            if name in models:
+            if _model_exists_in_ollama(name, models):
                 # другой конкурент уже создал модель, пока мы ждали lock
                 self._exists_cache[key] = name
                 return False
