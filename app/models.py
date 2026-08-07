@@ -53,6 +53,13 @@ class Chat(Base):
     lora_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # LoRA (§2.3): identity базовой модели для compatibility check, nullable.
+    # Если не задано — низкодоверенная fallback на `model_name`. В отличие от
+    # `model_name` (имя для API Ollama), identity — это, например, HF-идентификатор
+    # (`Naphula/Goetia-...`), который нельзя сравнивать строковым `==` с именем.
+    base_model_identity: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Каскадное удаление: вместе с чатом удаляются персонажи, сообщения и память

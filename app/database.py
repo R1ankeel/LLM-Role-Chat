@@ -1264,6 +1264,19 @@ def ensure_schema(db_engine) -> None:
                 )
             )
             logger.info("Added lora_enabled column to chats (LoRA, Sprint 1)")
+        # chats.base_model_identity: identity базовой модели для compatibility
+        # check (§2.3), nullable. Идемпотентный ALTER; backfill не нужен (NULL =
+        # низкодоверенная fallback на model_name).
+        if "base_model_identity" not in chat_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE chats ADD COLUMN base_model_identity "
+                    "VARCHAR(512) NULL"
+                )
+            )
+            logger.info(
+                "Added base_model_identity column to chats (LoRA, Sprint 2)"
+            )
 
         conn.execute(
             text(

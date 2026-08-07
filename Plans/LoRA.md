@@ -1,8 +1,8 @@
 # LoRA-адаптеры — план реализации
 
-**Статус:** план утверждён, реализация идёт по спринтам. **Sprint 0 выполнен** (2026-08-07, протокол `research/lora-spike/PROTOCOL.md`, §3), **Sprint 1 (модель данных и миграции) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_db_crud.py`). Скорректирован по ревью (см. §8). **Объём MVP сужен (2026-08-07): ровно один LoRA-адаптер на чат, без weight/scale и без N-адаптеров (см. §2.5, §8.6).**
+**Статус:** план утверждён, реализация идёт по спринтам. **Sprint 0 выполнен** (2026-08-07, протокол `research/lora-spike/PROTOCOL.md`, §3), **Sprint 1 (модель данных и миграции) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_db_crud.py`), **Sprint 2 (LoRAManager + расширение OllamaClient) выполнен** (2026-08-07, см. §3; покрытие — `tests/test_lora_runtime.py`). Скорректирован по ревью (см. §8). **Объём MVP сужен (2026-08-07): ровно один LoRA-адаптер на чат, без weight/scale и без N-адаптеров (см. §2.5, §8.6).**
 **Дата:** 2026-08-07
-**Блокирующий этап:** Sprint 0 (Ollama LoRA Compatibility Spike) — **✅ ВЫПОЛНЕН** (протокол приложен). Sprint 1 (модель данных и миграции) — **✅ ВЫПОЛНЕН**. Sprint 2+ может начинаться.
+**Блокирующий этап:** Sprint 0 (Ollama LoRA Compatibility Spike) — **✅ ВЫПОЛНЕН** (протокол приложен). Sprint 1 (модель данных и миграции) — **✅ ВЫПОЛНЕН**. Sprint 2 (runtime-слой) — **✅ ВЫПОЛНЕН**. Sprint 3+ может начинаться.
 **Основание:** Техническое задание (42 пункта), приложенное к запросу
 **Ограничение (конвенция проекта):** Vanilla JS SPA в `app/static/` (index.html + app.js) **НЕ изменяется**. Все правки — в новом Vue-фронтенде (`frontend/src/`) и бэкенде. Аналогично плану `Plans/locations2.md`.
 
@@ -129,7 +129,7 @@ chat_engine: ollama_client.generate(model_name=runtime_name, ...)
 Compatibility check сравнивает **идентичность базовой модели**, а не произвольные имена. Механизм:
 
 1. Identity адаптера: явное поле `base_model_identity` → если пусто, попытка автоопределения (метаданные GGUF/имя файла) → иначе identity не определена.
-2. Identity базовой модели чата: явное поле `Chat.base_model_identity` (nullable, в MVP можно не добавлять) → если не задано, низкодоверенная fallback на `chat.model_name`.
+2. Identity базовой модели чата: явное поле `Chat.base_model_identity` (nullable, **добавлено в Sprint 2** — идемпотентный ALTER в `ensure_schema`) → если не задано, низкодоверенная fallback на `chat.model_name`.
 3. Результат:
    - **Compatible** — идентичности определены и совпадают → применяем.
    - **Incompatible** — определены и не совпадают → явная ошибка, применение блокируется.
@@ -253,29 +253,32 @@ Capability-флаги: `supports_lora=true`, `supports_multiple_loras=false`, `s
 
 ---
 
-### Спринт 2 — LoRAManager + расширение OllamaClient
+### Спринт 2 — LoRAManager + расширение OllamaClient — **✅ ВЫПОЛНЕН (2026-08-07)**
 
 **Цель:** runtime-слой: создание/кэширование/проверка runtime-моделей.
 
-**Задачи:**
-1. Новый `app/lora_manager.py`:
-   - `RuntimeCapabilities` (`supports_lora`, `supports_safetensors`, §2.5) + `check_capabilities(client)`.
-   - `validate()` — путь (по §2.7) + **compatibility check по base_model_identity** (§2.3): результат `Compatible / Incompatible / Unknown`. `Unknown` → предупреждение/подтверждение, НЕ silent fallback и НЕ блокировка.
-   - `runtime_key(...)` — sha256 (детерминированный, §2.2) и `runtime_name(...)` — `{slug(base)}-lora-{hash8}`.
-   - `resolve(db, client, chat)` → `(model_name, info)`: по семантике `lora_enabled` (§2.4):
-     - `enabled=false` → `chat.model_name`;
-     - `enabled=true` + адаптер не выбран → `chat.model_name`, runtime-модель НЕ создаётся;
-     - `enabled=true` + 1 адаптер → compatibility check → runtime-модель.
-   - `ensure_runtime_model()` — кэш `key → exists`; при промахе `create_model()`; блокировка повторного создания (lock).
-   - **БЕЗ `cleanup()`/GC runtime-моделей** (удалено из MVP, §2.7). Runtime-модели остаются в Ollama.
-   - Логирование: создание/кэш-хит/ошибка/статус Unknown.
-2. OllamaClient: `create_model(name, from, adapters: dict[str, str])` (POST `/api/create`, структурный `from`+`adapters`), `upload_adapter_file(path, digest)` (HEAD+POST `/api/blobs/:digest`), `delete_model(name)` (DELETE `/api/delete` — вызывается только явно, автоудаления нет; **в httpx 0.28.1 `Client.delete()` не принимает body → использовать `client.request("DELETE", url, json=...)`**), `list_models()` (GET `/api/tags`), `check_capabilities()`.
-3. Пайплайн создания runtime-модели без shell: sha256 файла → `HEAD /api/blobs/:digest` (200/404) → при 404 `POST` байтами файла → `POST /api/create {from, adapters}`. **`modelfile`-строку не передавать** (0.32.6 возвращает 400); в `adapters` ровно один адаптер (§2.5).
-4. Ошибки: несовместимость / невозможность создать runtime-модель → `RuntimeError` с текстом (не silent fallback).
+**Статус:** выполнен. Все задачи 1–4 закрыты; покрытие — `tests/test_lora_runtime.py` (21 тест, ТЗ §36: 14–21, моки httpx `MockTransport`). Итоговая реализация:
 
-**Критерий готовности:** для одной конфигурации `ollama create` выполняется максимум 1 раз; смена адаптера даёт новый ключ; повторный запуск не пересоздаёт модель (сверка `list_models`); ни один код не вызывает `ollama create` на каждое сообщение.
+- **`app/lora_manager.py`** (новый):
+  - `RuntimeCapabilities` (`supports_lora`, `supports_safetensors`, §2.5) + `check_capabilities(client)` (GET `/api/version`; недоступность → `RuntimeError`).
+  - `validate(adapter, chat)` — путь (§2.7, без пересчёта sha256 — хранимый blob-диджест авторитетен, §2.2) + compatibility check (§2.3) → `ValidationResult{path_ok, compatibility}`.
+  - `check_compatibility(adapter, chat)` — статусы `Compatible / Incompatible / Unknown`; `Unknown` при неопределённой/низкодоверенной identity (fallback на `chat.model_name`, автоопределение) — НЕ silent fallback и НЕ блокировка (в `resolve` — предупреждение).
+  - `runtime_key(base_identity, adapter_id, file_sha256)` — детерминированный sha256 (§2.2); `runtime_name(base_model, key)` — `{slug(base)}-lora-{hash8}`.
+  - `LoRAManager.resolve(db, client, chat)` → `(model_name, ResolveResult)` по семантике `lora_enabled` (§2.4): `false` → `chat.model_name`; `true` без адаптера → `chat.model_name` (runtime-модель НЕ создаётся); `true` + 1 адаптер → compatibility check → runtime-модель. `Incompatible`/битая конфигурация/невозможность создать → `RuntimeError` с текстом (не silent fallback).
+  - `LoRAManager.ensure_runtime_model()` — кэш `key → exists` → сверка `list_models` (GET `/api/tags`, покрывает повторный запуск) → под per-event-loop lock (двойная проверка) → валидация пути → blob-флоу → create. Максимум 1× `POST /api/create` на конфигурацию.
+  - **БЕЗ `cleanup()`/GC runtime-моделей** (§2.7): метод не существует; runtime-модели остаются в Ollama. Удаление — только явный `delete_model`.
+  - Логирование: создание, кэш-хит (в т.ч. после блокировки), ошибка, статус Unknown.
+- **OllamaClient** (`app/ollama_client.py`, модульные функции — в проекте нет класса):
+  - `create_model(name, from, adapters)` — POST `/api/create` со структурным телом `{model, from, adapters, stream:false}`; **`modelfile`-строка не передаётся** (0.32.6 → 400); в `adapters` ровно один адаптер (§2.5), иначе `RuntimeError`.
+  - `upload_adapter_file(path, digest)` — HEAD `/api/blobs/:digest` (200/404) → при 404 POST байтами файла.
+  - `delete_model(name)` — DELETE `/api/delete`, **только явный вызов**; в httpx 0.28.1 `Client.delete()` не принимает body → `client.request("DELETE", url, json=...)`; 404 трактуется как успех.
+  - `list_models()` — GET `/api/tags` (отсортированный уникальный список имён).
+  - `check_capabilities()` — доступность + флаги (ленивый импорт `RuntimeCapabilities` из `lora_manager`, чтобы не было цикла импортов).
+- **Модель данных** (небольшое расширение Sprint 1, §2.3): добавлено `Chat.base_model_identity` (nullable, миграция `ensure_schema` — идемпотентный ALTER). Поле делает статусы `Compatible/Incompatible` достижимыми; без него (fallback на `model_name`) результат всегда `Unknown`.
 
-**Проверка:** `pytest` — тесты runtime (ТЗ §36: 14–21) с моками httpx.
+**Критерий готовности:** ✅ для одной конфигурации `ollama create` выполняется максимум 1 раз (тест `test_resolve_compatible_creates_runtime_model_once`: create==1, повторный resolve — кэш-хит, даже `/api/tags` не дёргается); ✅ смена адаптера даёт новый ключ (`test_adapter_change_gives_new_runtime_model`); ✅ повторный запуск не пересоздаёт модель (`test_fresh_manager_reuses_existing_model_via_list_models`: сверка `list_models`, create==0); ✅ ни один код не вызывает `ollama create` на каждое сообщение.
+
+**Проверка:** `pytest tests/test_lora_runtime.py` — 21 passed (ТЗ §36: 14–21), моки httpx.
 
 ---
 
@@ -370,7 +373,9 @@ Capability-флаги: `supports_lora=true`, `supports_multiple_loras=false`, `s
 |---|---|---|
 | 1–4 | БД: таблицы, UNIQUE(chat_id), миграция/backfill, lora_enabled=false по умолчанию | 1 |
 | 5–13 | CRUD: create/update/delete, валидация пути, атомарный PUT, delete с usage | 1 |
-| 14–21 | Runtime: ключ, кэш (1× create), пересоздание при смене адаптера, несовместимость, ошибки, служебные без LoRA | 2–3 |
+| 14–18 | Runtime: ключ/имя, семантика `lora_enabled` (false / true без адаптера), Compatible → runtime-модель, Incompatible/ошибки, Unknown не блокирует | 2 |
+| 19–20 | Runtime: кэш (1× create), пересоздание при смене адаптера, повторный запуск (list_models) | 2 |
+| 21 | Служебные LLM-вызовы без LoRA (интеграция в `generate()`) | 3 |
 | 22–31 | API: endpoints, коды ошибок, атомарность | 4 |
 | 32–39 | Frontend: тумблер, селектор, форма, индикация, состояние | 5 |
 

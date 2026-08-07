@@ -100,12 +100,19 @@ def compute_sha256(path: str) -> str:
     return digest.hexdigest()
 
 
-def validate_adapter_path(path: str, format: str = "auto") -> AdapterFileInfo:
+def validate_adapter_path(
+    path: str, format: str = "auto", with_sha256: bool = True
+) -> AdapterFileInfo:
     """Валидирует путь к LoRA-адаптеру по §2.7.
 
     Возвращает ``AdapterFileInfo`` (sha256 + определённый формат) либо бросает
     ``LoRAValidationError``. ``format`` normalise: ``gguf``/``auto`` — валидные
     GGUF; ``safetensors`` отклоняется.
+
+    ``with_sha256=False`` — пропускает чтение всего файла для хеширования
+    (runtime-проверка пути при промахе кэша, Sprint 2): валидность GGUF и
+    доступность всё равно проверяются, но ``sha256`` возвращается пустым
+    (хранимый в БД blob-диджест остаётся авторитетным, §2.2).
     """
     fmt = (format or "auto").strip().lower()
     if fmt not in SUPPORTED_FORMATS:
@@ -135,5 +142,8 @@ def validate_adapter_path(path: str, format: str = "auto") -> AdapterFileInfo:
 
     # Чтение заголовка = проверка валидности GGUF + доступности для чтения.
     read_gguf_header(path)
-    sha256 = compute_sha256(path)
+    if with_sha256:
+        sha256 = compute_sha256(path)
+    else:
+        sha256 = ""
     return AdapterFileInfo(sha256=sha256, detected_format="gguf")

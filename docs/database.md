@@ -25,6 +25,7 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 | `story_prompt` | TEXT NULL | текущий story prompt (эволюционирующий; Sprint 8) |
 | `story_enabled` | BOOLEAN (default 0) | включение динамического сюжета (Sprint 8) |
 | `lora_enabled` | BOOLEAN (default 0) | включение LoRA на чат (LoRA Sprint 1, §2.4: 3 состояния — false / true без адаптера / true с адаптером) |
+| `base_model_identity` | VARCHAR(512) NULL | identity базовой модели чата для compatibility check (§2.3, LoRA Sprint 2); NULL → fallback на `model_name` (результат `Unknown`) |
 | `created_at` | DATETIME | |
 
 ### `characters`
@@ -514,3 +515,4 @@ UNIQUE `(character_id)`. Индекс `ix_consolidation_state_chat_id`.
 - **Sprint 0 (backfill локаций событий)**: `crud.backfill_event_location_ids` — из строковой `world_events.location` через `resolve_location_name` (+ shared-scene правило `perception.is_shared_scene`), идемпотентно, отчёт `EventLocationBackfillReport` (нерезолвленные → NULL + список); запуск `scripts/backfill_event_location_ids.py`. Сам backfill — обновление данных, не изменение схемы.
 - **Sprint 1 (§15)**: `world_events.action` (TEXT NOT NULL DEFAULT '{}'), `world_events.importance`/`story_salience`/`emotional_salience` (REAL NULL), `relationship_events.event_id` (FK → `world_events.id` ON DELETE SET NULL, nullable, + индекс `ix_rel_events_event_id`). Идемпотентно (только если колонки/индекс отсутствуют); пишет только раундная extraction при `EVENT_EXTRACTION_ENABLED=true`, откат — флаг off. Backfill не требуется.
 - **LoRA (Sprint 1)**: `chats.lora_enabled` (BOOLEAN NOT NULL DEFAULT 0 — существующие чаты получают false через DEFAULT), таблицы `lora_adapters`/`chat_lora_adapters` (+ `uq_chat_lora_chat UNIQUE(chat_id)`, индексы `ix_lora_adapters_enabled`/`ix_chat_lora_adapter_id`). Идемпотентно; read-path (chat_engine) новые таблицы пока не читает (Sprint 2/3).
+- **LoRA (Sprint 2)**: `chats.base_model_identity` (VARCHAR(512) NULL — идемпотентный `ALTER TABLE`; существующие чаты остаются NULL → compatibility `Unknown`). Идемпотентно; read-path (chat_engine) колонку пока не читает (Sprint 3).
