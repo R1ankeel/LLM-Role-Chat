@@ -79,11 +79,12 @@ def test_sensors_service_empty_model_disabled():
 
 def test_sensors_model_not_used_outside_service():
     """R15: `sensors_model` (атрибут) не используется вне config/sensors_service."""
-    allowed = {"config.py", "sensors_service.py"}
+    allowed = {"config.py", "config/sensors.py", "sensors_service.py"}
     root = Path(__file__).resolve().parent.parent / "app"
     offenders = []
     for py in sorted(root.rglob("*.py")):
-        if py.name in allowed:
+        rel = py.relative_to(root).as_posix()
+        if rel in allowed:
             continue
         if "sensors_model" in py.read_text(encoding="utf-8"):
             offenders.append(str(py))

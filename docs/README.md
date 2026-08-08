@@ -26,6 +26,9 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [adaptive_consolidation.md](adaptive_consolidation.md) | Adaptive Consolidation (Sprint 12): замена 24h-таймера на score-based soft/hard/critical — `consolidation_state` counters, `compute_consolidation_score`, `is_critical_event` (детерм.), idle-чат не консолидируется, critical → немедленно (дедуп ≤ N/раунд), полный набор memory+summary+relationship+anchors+story+index |
 | [context_v2.md](context_v2.md) | Context Builder v2 (Sprint 13): приоритизированная сборка WORLD/WHAT YOU KNOW/WHAT YOU PERCEIVE/YOUR STATE/RELATIONSHIP/ACTIVE GOAL/RELEVANT MEMORY/STORY под флагом `context_v2_enabled`, токен-подбюджеты, удаление дублирующих legacy-блоков (scene → WORLD, relationships → RELATIONSHIP), debug-контур §29.1 (`/api/debug` + `static/debug.html`) |
 | [lora.md](lora.md) | LoRA-адаптеры (MVP: одна LoRA на чат, без весов): модель данных, миграции, валидация пути (§2.7), CRUD, runtime-слой `LoRAManager` (Sprint 2), интеграция в основную генерацию (Sprint 3), REST API `/api/lora` + `/api/chats/{id}/lora` (Sprint 4), Vue-фронтенд — вкладка «LoRA» + индикатор в шапке чата (Sprint 5), приёмка на реальной модели (Sprint 6, `research/lora-acceptance/ACCEPTANCE.md`, 12/12 PASS); план — `Plans/LoRA.md` |
+| [deps-before.md](deps-before.md) | Dependency graph «до спринта 1» (baseline): циклы `crud ↔ сервисы`, развязка которых выполнена в спринте 1 |
+| [deps-after-sprint1.md](deps-after-sprint1.md) | Dependency graph «после спринта 1»: `memory/retrieval.py`, `perception_utils.py`, handler-registry, фасад `llm.generation.invoke_json` |
+| [deps-after-sprint2.md](deps-after-sprint2.md) | Dependency graph «после спринта 2»: разбиение `config.py` и `models.py` на пакеты |
 
 ## Краткий обзор
 
@@ -54,15 +57,18 @@ ai-roleplay-chat/
 ├── main.py                  # устаревшая точка входа (см. app/main.py)
 ├── app/
 │   ├── main.py              # FastAPI app, lifespan, фоновые воркеры, CORS
-│   ├── config.py            # pydantic-settings, все настройки
+│   ├── config/              # ПАКЕТ (Sprint 2): доменные миксины Settings + синглтон settings
 │   ├── database.py          # SQLite sync+async, индексы, миграции
-│   ├── models.py            # ORM: Chat, Character, Message, Memory, ...
+│   ├── models/              # ПАКЕТ (Sprint 2): 12 доменных модулей ORM, реэкспорт всех классов
 │   ├── schemas.py           # Pydantic-схемы, нормализация категорий/visibility
 │   ├── crud.py              # слой доступа к данным (async)
 │   ├── perception.py        # правила восприятия событий (локация/visibility/каналы)
+│   ├── perception_utils.py  # чистые хелперы локаций/адресатов (Sprint 1)
 │   ├── witness_model.py     # фильтрация истории и памяти по presence
 │   ├── prompt_builder.py    # сборка system-промптов из шаблонов ru.json
 │   ├── ollama_client.py     # клиент Ollama (генерация, извлечение, retry, streaming)
+│   ├── llm/                 # ПАКЕТ (Sprint 1): фасад generation.py (invoke_json)
+│   ├── memory/              # ПАКЕТ (Sprint 1): retrieval.py (BM25/rerank), create.py (интерфейс памяти)
 │   ├── chat_engine.py       # движок раунда: генерация, presence, сцена, отношения
 │   ├── memory_service.py    # извлечение фактов, саммари, консолидация, embed-задачи
 │   ├── context_builder.py   # токено-ориентированная сборка контекста

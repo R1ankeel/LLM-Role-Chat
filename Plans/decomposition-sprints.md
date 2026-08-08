@@ -1,11 +1,94 @@
 # План декомпозиции по спринтам
 
-> Статус: **черновик для обсуждения** (ревизия 2026-08-08)
+> Статус: **в работе** — спринты 1–2 выполнены, спринт 2 подготовлен к коммиту
+> (ревизия 2026-08-08)
 > Дата: 2026-08-08
 > Исходник: [Plans/decomposition.md](decomposition.md) — §9 (поэтапный план) и §10 (риски)
 > Правило: код в рамках этой работы не меняется по логике — только перенос,
 > переименования и разбиение импортов. **Каждый спринт заканчивается зелёным
 > `pytest -q` и ручной проверкой одного раунда чата (SSE streaming работает).**
+
+---
+
+## 0.1 Статус выполнения
+
+### Спринт 1 — выполнено (коммиты `9ee9bba`, `2416bff`)
+
+**Что сделано (все шаги §2):**
+
+1. **Базовая линия (этап 0).** `pytest -q` — 1293 passed / 49 failed (докоммитный
+   baseline); стартовый dependency graph сохранён в `docs/deps-before.md`.
+2. **`crud ↔ memory_service`.** Чистые BM25/rerank-функции вынесены в
+   `app/memory/retrieval.py`; из `crud.py` убраны верхнеуровневые импорты
+   `memory_service`/`embedding_service`. Для потребителей (`chat_engine`) оставлен
+   фасад-реэкспорт `crud.get_*` (снят в спринте 10).
+3. **`crud` → WPE/сервисы.** Из `crud.py` убраны локальные импорты `perception`,
+   `witness_model`, `attention`, `wpe_shadow`, `sensors_service`, `belief_service`.
+   Presence/attention пересчитываются в `post_round_pipeline.py`
+   (`_attention_score_for`, `compute_and_save_presence_for_message/round`,
+   `_chat_world_state_for_characters`). Чистые хелперы локаций/адресатов вынесены
+   в `app/perception_utils.py` (без DB/LLM).
+4. **`relationship_service ↔ crud`.** Создание памяти из событий — через явный
+   интерфейс `memory/create.py::create_memory`; локальные импорты `crud` подняты
+   на верхний уровень.
+5. **`task_queue ↔ memory_service`.** Handler-registry
+   (`register_handler`/`get_handler`); `task_queue` больше не импортирует
+   `memory_service`; `run_job(job, handler=None)`.
+6. **`wpe_shadow ↔ crud`.** Shadow-perception перенесён в сервисный слой:
+   `chat_engine._create_message_with_shadow` → `wpe_shadow.maybe_run_shadow_perception`;
+   `crud.create_message` больше не вызывает WPE.
+7. **Фасад LLM.** Публичный `app/llm/generation.py::invoke_json` /
+   `extract_json_payload`; `relationship_analyzer` и `sensors_service` переведены
+   на него (приватные `_invoke_llm`/`_build_*` через границу больше не ходят).
+
+**Gate:** `pytest -q` зелёный (попутно переведены тесты на async-сессии:
+`test_task_queue.py`, `test_attention.py` и др.); `compileall` OK; сервер стартует;
+ручной раунд чата OK; `rg` по `crud.py`: сервисных импортов нет.
+
+**Артефакт:** `docs/deps-before.md` (baseline) + `docs/deps-after-sprint1.md`.
+
+### Спринт 2 — выполнено (не закоммичен)
+
+**Что сделано (все шаги §3):**
+
+1. **`config.py` → пакет `config/`.** 10 миксинов + композиция `Settings`
+   (`core.py` — `SettingsBase` + base/url/model/история, `memory.py`, `context.py`,
+   `relationships.py`, `repetition.py`, `wpe.py`, `story.py`, `sensors.py`,
+   `task_queue.py`, `avatar.py`). Синглтон `settings = Settings()` сохранён,
+   доступ `settings.<attr>` не менялся. **MRO-конфликт решён:** миксины — простые
+   классы (не наследники `SettingsBase`), чтобы порядок разрешения полей не
+   ломался.
+2. **`models.py` → пакет `models/`.** 12 доменных модулей: `chat.py`,
+   `character.py`, `message.py`, `memory.py`, `relationship.py`, `presence.py`,
+   `scene.py`, `world.py`, `story.py`, `state.py`, `intent.py`, `lora.py`.
+   `models/__init__.py` реэкспортирует весь API; `Base.metadata` не изменился.
+3. Проверка путей импорта: внешние сущности используют только
+   `from app.models import X`.
+
+**Отклонение от §4.9:** `config/lora.py` не создан — в исходном `config.py`
+нет LoRA-полей (пустой модуль не нужен); `world.py` добавлен в `models/`
+для `WorldEvent`/`Thread`/`ThreadParticipantState` (в §4.8 не был назван явно).
+
+**Верификация (gate):**
+
+- `init_db` на чистой (копии) БД — OK, `configure_mappers` OK.
+- **Публичный API `models/`:** 50 символов совпадают до/после
+  (`Plans/artifacts/models-api-before.txt`); 27 таблиц идентичны
+  (`metadata-tables-before.txt`); class→table без расхождений
+  (`models-classes-before.txt`).
+- **Настройки:** все 276 полей и значения совпадают
+  (`settings-fields-before.txt`, `settings-values-before.json`); API `config/`
+  (5 символов) совпадает (`config-api-before.txt`).
+- **`pytest -q`:** 41 failed / 1301 passed — набор упавших **идентичен**
+  монолитному состоянию до резки (41 пред-существующий LLM/env-зависимый фейл,
+  включая флаки `test_llm_serialization.py::test_call_ollama_chat_holds_lock_while_request_in_flight`);
+  `tests/test_sensors.py::test_sensors_model_not_used_outside_service` обновлён
+  под пакетную структуру (сравнение по относительным путям, разрешён
+  `config/sensors.py`).
+- Сервер стартует; `GET /api/chats` → 200; ручной раунд чата OK.
+
+**Артефакты:** `Plans/artifacts/` (gitignored) — снапшоты API/таблиц/настроек
+до и после; `docs/deps-after-sprint2.md`.
 
 ---
 
