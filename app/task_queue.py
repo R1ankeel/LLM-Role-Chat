@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import structlog
 from sqlalchemy import delete, select
@@ -12,7 +12,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from . import crud
 from . import embedding_service
-from . import memory_service
 from . import models
 from .config import settings
 from .database import AsyncSessionLocal
@@ -20,18 +19,29 @@ from .database import AsyncSessionLocal
 logger = structlog.get_logger(__name__)
 
 
-# Job handler mapping
-async def _dispatch_job(job_type: str, payload: dict) -> dict:
-    """Dispatch job to appropriate handler based on type."""
-    if job_type == "post_round":
-        return await memory_service._process_post_round_job(payload)
-    elif job_type == "consolidation":
-        return await memory_service._process_consolidation_job(payload)
-    elif job_type == "embed_memory":
-        return await memory_service._process_embed_memory_job(payload)
-    elif job_type == "backfill_embeddings":
-        return await memory_service._process_backfill_embeddings_job(payload)
-    else:
+# ---------------------------------------------------------------------------
+# Handler-registry (Sprint 1, §7.1 decomposition.md)
+# ---------------------------------------------------------------------------
+# Диспетчер джобов НЕ знает обработчики напрямую: обработчики регистрируются
+# (паттерн handler-registry), направление — сервис → task_queue. Цикл
+# ``task_queue ↔ memory_service`` разорван: task_queue больше не импортирует
+# memory_service.
+_HANDLERS: dict[str, Callable[..., Awaitable[dict]]] = {}
+
+
+def register_handler(
+    job_type: str,
+    handler: Callable[..., Awaitable[dict]],
+) -> None:
+    """Зарегистрировать обработчик джоба по типу (вызывается сервисом)."""
+    _HANDLERS[job_type] = handler
+
+
+def get_handler(job_type: str) -> Callable[..., Awaitable[dict]]:
+    """Получить обработчик по типу; ValueError при неизвестном типе."""
+    try:
+        return _HANDLERS[job_type]
+    except KeyError:
         raise ValueError(f"Unknown job type: {job_type}")
 
 
@@ -111,8 +121,13 @@ class MemoryJobQueue:
     async def run_job(
         self,
         job: models.MemoryJob,
+        handler: Callable[..., Awaitable[dict]] | None = None,
     ) -> None:
-        """Execute job with retry logic and status updates."""
+        """Execute job with retry logic and status updates.
+
+        ``handler`` — обработчик payload'а; если не передан, берётся из
+        handler-registry по ``job.job_type`` (Sprint 1, §7.1).
+        """
         semaphore = self._get_semaphore()
         async with semaphore:
             async with AsyncSessionLocal() as db:
@@ -148,7 +163,8 @@ class MemoryJobQueue:
                         )
 
                         try:
-                            result = await _dispatch_job(job.job_type, payload)
+                            resolver = handler or get_handler(job.job_type)
+                            result = await resolver(payload)
 
                             # Success
                             job = await db.get(models.MemoryJob, job.id)

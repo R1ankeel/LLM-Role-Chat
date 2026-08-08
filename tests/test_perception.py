@@ -12,6 +12,7 @@ from app import chat_engine
 from app import crud
 from app import ollama_client
 from app import perception
+from app import post_round_pipeline
 from app import schemas
 from app import witness_model
 from tests.conftest import create_characters
@@ -219,7 +220,7 @@ async def test_compute_and_save_presence_uses_locations(db_session, chat):
             visibility="local",
         ),
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b], {a.id: a.name, b.id: b.name}
     )
     assert result[a.id] == "present"

@@ -13,6 +13,23 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from .config import settings
+# Sprint 1 (§7.1): чистые хелперы локаций/адресатов вынесены в perception_utils
+# (crud не импортирует perception, но использует эти функции). Реэкспорт
+# сохраняет прежний публичный API модуля (from .perception import ...).
+from .perception_utils import (
+    REMOTE_CHANNELS,
+    SHARED_SCENE_NAME,
+    _adjacency_name,
+    _get_attr,
+    _parse_adjacency_list,
+    build_adjacency_index,
+    is_shared_scene,
+    locations_match,
+    normalize_location,
+    parse_target_ids,
+    serialize_adjacency,
+    serialize_target_ids,
+)
 from .stimuli import (
     AUDIBLE_STIMULUS_TYPES,
     INVISIBILITY_STIMULUS_TYPE,
@@ -37,9 +54,6 @@ VALID_VISIBILITIES = frozenset(
     {"private", "local", "targeted", "public", "global"}
 )
 
-# Communication channels that bridge location isolation
-REMOTE_CHANNELS = frozenset({"magic", "phone", "radio", "messenger"})
-
 # ---------------------------------------------------------------------------
 # LEGACY-BRIDGE (WPE 3.0, Фаза 1) — строковое сравнение локаций.
 # Существующий движок (witness_model / chat_engine / context_builder) и
@@ -49,18 +63,6 @@ REMOTE_CHANNELS = frozenset({"magic", "phone", "radio", "messenger"})
 # (Фаза 1), строковый путь остаётся как legacy-bridge до cutover'а Фазы 4
 # и как fallback для legacy-чатов (откат: `WORLD_ENGINE_LOCATIONS_ENABLED`).
 # ---------------------------------------------------------------------------
-
-
-def normalize_location(location: str | None) -> str:
-    """Normalize location labels for comparison (legacy-bridge, WPE 3.0 Фаза 1)."""
-    text = (location or "").strip()
-    if settings.normalize_locations:
-        return text.casefold()
-    return text
-
-
-def locations_match(a: str | None, b: str | None) -> bool:
-    return normalize_location(a) == normalize_location(b)
 
 
 def same_location_identity(
@@ -104,42 +106,6 @@ def compute_is_isolated(
         if locations_match(char_loc, other_loc):
             return False
     return True
-
-
-def _adjacency_name(item: Any) -> str:
-    """Extract an adjacent location name from a string or a permeability object."""
-    if isinstance(item, dict):
-        return str(item.get("name") or "").strip()
-    return str(item).strip()
-
-
-def _parse_adjacency_list(raw: Any) -> list[str]:
-    """Parse a JSON list of adjacent location names (from ``locations.adjacent_to``).
-
-    Tolerates the WPE 3.0 object form ``{"name": ..., "visual_permeability": ...,
-    "audio_permeability": ...}`` — only the name is used (legacy 1D index).
-    """
-    if raw is None or raw == "":
-        return []
-    if isinstance(raw, str):
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return []
-        if isinstance(data, list):
-            return [n for n in (_adjacency_name(x) for x in data) if n]
-        return []
-    if isinstance(raw, list):
-        return [n for n in (_adjacency_name(x) for x in raw) if n]
-    return []
-
-
-def serialize_adjacency(names: list[str] | None) -> str:
-    """Serialize an adjacency list to a JSON string for ``locations.adjacent_to``."""
-    if not names:
-        return "[]"
-    cleaned = [str(x).strip() for x in names if str(x).strip()]
-    return json.dumps(cleaned, ensure_ascii=False)
 
 
 def _toponym_prefix_fallback(a: str, b: str) -> bool:
@@ -264,62 +230,11 @@ def _stimulus_targets_viewer(stimulus: Stimulus, viewer_name: str) -> bool:
     return normalize_location(stimulus.target_character) == normalize_location(viewer_name)
 
 
-def parse_target_ids(raw: Any) -> list[int]:
-    """Parse target character ids from list, JSON string, or empty."""
-    if raw is None or raw == "":
-        return []
-    if isinstance(raw, list):
-        result: list[int] = []
-        for item in raw:
-            try:
-                result.append(int(item))
-            except (TypeError, ValueError):
-                continue
-        return result
-    if isinstance(raw, int):
-        return [raw]
-    if isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return []
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            parts = [p.strip() for p in text.split(",") if p.strip()]
-            result = []
-            for part in parts:
-                try:
-                    result.append(int(part))
-                except ValueError:
-                    continue
-            return result
-        return parse_target_ids(data)
-    return []
-
-
-def serialize_target_ids(ids: list[int] | None) -> str:
-    if not ids:
-        return "[]"
-    cleaned: list[int] = []
-    for item in ids:
-        try:
-            cleaned.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return json.dumps(cleaned, ensure_ascii=False)
-
-
 def normalize_visibility(value: str | None) -> str:
     text = (value or settings.default_event_visibility).strip().lower()
     if text not in VALID_VISIBILITIES:
         return settings.default_event_visibility
     return text
-
-
-def _get_attr(obj: Any, key: str, default: Any = None) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
 
 
 def event_from_message(message: Any) -> dict[str, Any]:
@@ -502,9 +417,6 @@ AudioPermeability = Literal["full", "muffled", "none"]
 DEFAULT_EDGE_VISUAL = "none"
 DEFAULT_EDGE_AUDIO = "muffled"
 
-# Каноническая "Общая сцена": пустая строка и явное имя — эквиваленты.
-SHARED_SCENE_NAME = "общая сцена"
-
 # Громкие стимулы повышают audio_level: muffled -> full.
 LOUD_STIMULUS_TYPES = frozenset(AUDIBLE_STIMULUS_TYPES)
 
@@ -653,11 +565,6 @@ def build_permeability_index(
             index.setdefault(name, {})[neighbor] = edge
             index.setdefault(neighbor, {})[name] = edge
     return index
-
-
-def is_shared_scene(location_norm: str) -> bool:
-    """Whether a (normalized) location label is the canonical shared scene."""
-    return location_norm == "" or location_norm == SHARED_SCENE_NAME
 
 
 def same_canonical_location(

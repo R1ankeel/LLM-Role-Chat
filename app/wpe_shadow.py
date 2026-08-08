@@ -30,6 +30,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from . import crud
 from . import perception
 from .config import settings
 
@@ -180,7 +181,8 @@ async def run_shadow_perception(
 
     Чисто наблюдательный: логирует расхождения, обновляет ``WPE_SHADOW_STATS``,
     в сборку контекста ничего не подаёт. Ошибки shadow не должны ломать
-    сохранение сообщения — вызов обёрнут в try/except на стороне вызывающего.
+    сохранение сообщения — вызов обёрнут в try/except на стороне вызывающего
+    (``maybe_run_shadow_perception``).
     """
     if not settings.world_engine_events_enabled:
         return
@@ -188,8 +190,6 @@ async def run_shadow_perception(
     chat_id = getattr(message, "chat_id", None)
     if chat_id is None:
         return
-
-    from . import crud  # локальный импорт против цикла crud -> wpe_shadow
 
     event = perception.event_from_message(message)
     chars = list(characters) if characters is not None else await crud.get_characters_by_chat(db, chat_id)
@@ -255,4 +255,23 @@ async def run_shadow_perception(
             new_result.addressed,
             category,
             sublabel,
+        )
+
+
+async def maybe_run_shadow_perception(db: Any, message: Any) -> None:
+    """Shadow-триггер для сервисного слоя (Sprint 1, §7.1 decomposition.md).
+
+    Перенесён из ``crud.create_message``: crud больше не вызывает shadow
+    (однонаправленная зависимость сервис → crud). Флаг-гард и try/except
+    сохранены 1:1 — shadow не должен ломать сохранение сообщения.
+    """
+    if not settings.world_engine_events_enabled:
+        return
+    try:
+        await run_shadow_perception(db, message)
+    except Exception:
+        logger.exception(
+            "[WPE-P3] shadow perception failed chat_id=%s msg_id=%s",
+            getattr(message, "chat_id", None),
+            getattr(message, "id", None),
         )

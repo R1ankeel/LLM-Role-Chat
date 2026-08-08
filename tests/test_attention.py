@@ -25,6 +25,7 @@ from app import memory_service
 from app import models
 from app import schemas
 from app import witness_model
+from app.post_round_pipeline import compute_and_save_presence_for_round
 
 
 def _event(content: str, *, role: str = "character", author: int = 2,
@@ -227,7 +228,7 @@ async def test_round_pass_writes_attention(
             ),
         ),
     ]
-    await crud.compute_and_save_presence_for_round(
+    await compute_and_save_presence_for_round(
         db_session,
         msgs,
         [x.id for x in three_characters],
@@ -258,7 +259,7 @@ async def test_round_pass_attention_null_when_flag_off(
             ),
         )
     ]
-    await crud.compute_and_save_presence_for_round(
+    await compute_and_save_presence_for_round(
         db_session,
         msgs,
         [x.id for x in three_characters],

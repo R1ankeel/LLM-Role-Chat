@@ -24,6 +24,8 @@ from . import round_engine
 from . import relationship_analyzer
 from . import relationship_service
 from . import schemas
+from . import wpe_shadow
+from .post_round_pipeline import compute_and_save_presence_for_message
 from .relationship_interpreter import interpret as _interpret_rel, TRUST_LOW
 from .config import settings
 from .context_builder import ContextBuilder
@@ -37,6 +39,23 @@ from .witness_model import Presence, resolve_presence
 from . import witness_model
 
 logger = logging.getLogger(__name__)
+
+
+async def _create_message_with_shadow(
+    db: AsyncSession,
+    message: schemas.MessageCreate,
+    *,
+    round_id: str | None = None,
+) -> models.Message:
+    """Create a message and run WPE shadow-perception (Sprint 1, §7.1).
+
+    Shadow-триггер перенесён из ``crud.create_message`` в сервисный слой:
+    направление зависимостей — сервис → crud. ``maybe_run_shadow_perception``
+    сам держит флаг-гард и try/except, поэтому поведение 1:1 с прежним.
+    """
+    saved = await crud.create_message(db, message, round_id=round_id)
+    await wpe_shadow.maybe_run_shadow_perception(db, saved)
+    return saved
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +684,7 @@ async def process_user_message_streaming(
     all_characters = await crud.get_characters_by_chat(db, chat_id, include_player=True)
     character_names = {c.id: c.name for c in all_characters}  # includes player
 
-    user_message = await crud.create_message(
+    user_message = await _create_message_with_shadow(
         db,
         schemas.MessageCreate(
             chat_id=chat_id,
@@ -730,7 +749,7 @@ async def process_user_message_streaming(
     try:
         _chat_locations_orm = await crud.get_chat_locations(db, chat_id)
         loc_id_by_name = {
-            crud.perception.normalize_location(loc.name): loc.id
+            perception.normalize_location(loc.name): loc.id
             for loc in _chat_locations_orm
         }
     except Exception as exc:  # noqa: BLE001 — локации не роняют раунд
@@ -738,7 +757,7 @@ async def process_user_message_streaming(
 
     def _resolve_loc_id(loc_name: str | None, fallback: int | None = None) -> int | None:
         if loc_name:
-            found = loc_id_by_name.get(crud.perception.normalize_location(loc_name))
+            found = loc_id_by_name.get(perception.normalize_location(loc_name))
             if found is not None:
                 return found
         return fallback
@@ -756,7 +775,7 @@ async def process_user_message_streaming(
     announced_movements: dict[int, str] = {}
 
     # Persist presence for the user event immediately (before any character reply)
-    await crud.compute_and_save_presence_for_message(
+    await compute_and_save_presence_for_message(
         db,
         user_message,
         characters,
@@ -1291,7 +1310,7 @@ async def process_user_message_streaming(
                 rejected=rejected,
             )
             for remark in remarks:
-                remark_message = await crud.create_message(
+                remark_message = await _create_message_with_shadow(
                     db,
                     schemas.MessageCreate(
                         chat_id=chat_id,
@@ -1341,7 +1360,7 @@ async def process_user_message_streaming(
                 detector_confirmed_locs[current_character.name] = movement_target
 
                 loc_msg_text = f"*{current_character.name} переместился в {movement_target}*"
-                loc_message = await crud.create_message(
+                loc_message = await _create_message_with_shadow(
                     db,
                     schemas.MessageCreate(
                         chat_id=chat_id,
@@ -1397,7 +1416,7 @@ async def process_user_message_streaming(
         msg_visibility = settings.default_event_visibility
         if msg_channel != "direct" and msg_targets:
             msg_visibility = "targeted"
-        char_message = await crud.create_message(
+        char_message = await _create_message_with_shadow(
             db,
             schemas.MessageCreate(
                 chat_id=chat_id,
@@ -1421,7 +1440,7 @@ async def process_user_message_streaming(
             round_id=round_id,
         )
         # Perception for this reply before the next character generates
-        await crud.compute_and_save_presence_for_message(
+        await compute_and_save_presence_for_message(
             db,
             char_message,
             characters,
@@ -1556,7 +1575,7 @@ async def process_user_message_streaming(
                 old_loc = old_locations.get(cname, "")
                 if old_loc and new_loc and old_loc != new_loc:
                     loc_msg_text = f"*{cname} переместился в {new_loc}*"
-                    loc_message = await crud.create_message(
+                    loc_message = await _create_message_with_shadow(
                         db,
                         schemas.MessageCreate(
                             chat_id=chat_id,
@@ -3152,7 +3171,7 @@ async def regenerate_message_streaming(
             reflected,
             rejected=rejected,
         ):
-            await crud.create_message(
+            await _create_message_with_shadow(
                 db,
                 schemas.MessageCreate(
                     chat_id=chat_id,
@@ -3194,7 +3213,7 @@ async def regenerate_message_streaming(
     msg_visibility = settings.default_event_visibility
     if msg_channel != "direct" and msg_targets:
         msg_visibility = "targeted"
-    new_message = await crud.create_message(
+    new_message = await _create_message_with_shadow(
         db,
         schemas.MessageCreate(
             chat_id=chat_id,
@@ -3212,7 +3231,7 @@ async def regenerate_message_streaming(
             ],
         ),
     )
-    await crud.compute_and_save_presence_for_message(
+    await compute_and_save_presence_for_message(
         db, new_message, characters, character_names
     )
     await crud.delete_message(db, message_id)

@@ -172,7 +172,7 @@ async def test_pipeline_stage_failure_is_isolated(
     async def boom(*args, **kwargs):
         raise RuntimeError("presence сломался")
 
-    monkeypatch.setattr("app.crud.compute_and_save_presence_for_round", boom)
+    monkeypatch.setattr("app.post_round_pipeline.compute_and_save_presence_for_round", boom)
     report = await run_post_round_pipeline(**kwargs)
 
     assert report["presence"]["ok"] is False

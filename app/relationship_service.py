@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .config import settings
+from . import crud
+from .memory.create import create_memory as memory_create_memory
 from .models import (
     DEFAULT_AFFECTION,
     DEFAULT_ATTRACTION,
@@ -29,7 +31,7 @@ from .relationship_interpreter import (
     interpret,
     weighted_behavior_drivers,
 )
-from .schemas import ISSUE_TYPES, IssueDelta, RelationshipDelta
+from .schemas import ISSUE_TYPES, IssueDelta, MemoryCreate, RelationshipDelta
 from .prompt_builder import (
     build_behavior_drivers_block as _wrap_drivers_block,
     build_epistemic_mask_block as _wrap_epistemic_block,
@@ -593,8 +595,6 @@ async def build_relationships_block(
     anchors_by_rel: dict[int, list] = {}
     if settings.anchors_enabled:
         try:
-            from . import crud
-
             anchors_by_rel = await crud.get_anchors_for_relationships(
                 db, [r.id for r in rels], limit=None,
             )
@@ -615,8 +615,6 @@ async def build_relationships_block(
             anchors = anchors_by_rel.get(rel.id, [])
             if anchors:
                 try:
-                    from . import crud
-
                     top_anchors = crud.select_top_anchors(
                         anchors, settings.relationship_anchor_max,
                     )
@@ -695,8 +693,6 @@ async def _beliefs_by_subject(
 ) -> dict[str, dict]:
     """Beliefs персонажа, ключ — subject (lowercased). Sprint 5, §9."""
     try:
-        from . import crud
-
         beliefs = await crud.get_beliefs_for_character(
             db,
             character_id,
@@ -741,8 +737,6 @@ async def compute_reciprocity_belief_multiplier(
     if not settings.reciprocity_enabled or not settings.beliefs_enabled:
         return 1.0
     try:
-        from . import crud
-
         beliefs = await crud.get_beliefs_for_character(db, source_character_id)
     except Exception as exc:  # noqa: BLE001 — никогда не роняет раунд
         logger.warning(
@@ -1424,8 +1418,6 @@ async def apply_decay(
     state_by_character: dict[int, Any] = {}
     if settings.dynamic_decay_enabled:
         try:
-            from . import crud
-
             states = await crud.get_character_states_for_chat(db, chat_id)
             state_by_character = {s.character_id: s for s in states}
         except Exception as exc:  # noqa: BLE001 — decay никогда не роняет раунд
@@ -1679,10 +1671,7 @@ async def _maybe_create_memory_from_event(
     except Exception:
         source_msg_ids = []
 
-    # Create memory via crud
-    from . import crud
-    from .schemas import MemoryCreate
-
+    # Память из события — через явный интерфейс `memory/` (Sprint 1, §7.1).
     memory = MemoryCreate(
         chat_id=chat_id,
         character_id=rel.source_character_id,
@@ -1693,7 +1682,7 @@ async def _maybe_create_memory_from_event(
         memory_type="social" if settings.memory_types_enabled else None,
     )
 
-    created = await crud.create_memory(db, memory, source_message_ids=source_msg_ids)
+    created = await memory_create_memory(db, memory, source_message_ids=source_msg_ids)
 
     # Sprint 2 (§7/§13): эмоциональный якорь для значимого события отношения.
     # Якорь пишется движком (не Sensors); гейтится ANCHORS_ENABLED.
@@ -1777,9 +1766,7 @@ async def _maybe_create_memory_from_resolved_issue(
     except Exception:
         source_msg_ids = []
 
-    from . import crud
-    from .schemas import MemoryCreate
-
+    # Память из события — через явный интерфейс `memory/` (Sprint 1, §7.1).
     memory = MemoryCreate(
         chat_id=chat_id,
         character_id=rel.source_character_id,
@@ -1790,7 +1777,7 @@ async def _maybe_create_memory_from_resolved_issue(
         memory_type="social" if settings.memory_types_enabled else None,
     )
 
-    created = await crud.create_memory(db, memory, source_message_ids=source_msg_ids)
+    created = await memory_create_memory(db, memory, source_message_ids=source_msg_ids)
     return created
 
 

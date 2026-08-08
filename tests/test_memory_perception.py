@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app import crud
 from app import memory_service
+from app import post_round_pipeline
 from app import prompt_builder
 from app import schemas
 from app import witness_model
@@ -241,7 +242,7 @@ async def test_cross_location_memory_extraction_skip(
     )
 
     round_messages = [user_msg, maxim_msg, katya_msg, oleg_msg, alina_msg]
-    crud.compute_and_save_presence_for_round(
+    post_round_pipeline.compute_and_save_presence_for_round(
         db_session,
         round_messages,
         [c.id for c in characters],
@@ -361,7 +362,7 @@ async def test_first_person_pronoun_no_leak_to_remote(
         ),
     )
     round_messages = [maxim_msg, katya_msg]
-    crud.compute_and_save_presence_for_round(
+    post_round_pipeline.compute_and_save_presence_for_round(
         db_session,
         round_messages,
         [c.id for c in characters],
@@ -435,7 +436,7 @@ async def test_information_transfer_after_telling(
             location="street",
         ),
     )
-    crud.compute_and_save_presence_for_message(
+    post_round_pipeline.compute_and_save_presence_for_message(
         db_session,
         kiss,
         [alina, maxim, katya],
@@ -489,7 +490,7 @@ async def test_information_transfer_after_telling(
         ),
     )
     characters = [alina, maxim, katya]
-    crud.compute_and_save_presence_for_round(
+    post_round_pipeline.compute_and_save_presence_for_round(
         db_session,
         [telling, alina_reply],
         [c.id for c in characters],
@@ -616,10 +617,10 @@ async def test_bad_llm_fact_for_non_witness_grounding(
             location="home",
         ),
     )
-    crud.compute_and_save_presence_for_message(
+    post_round_pipeline.compute_and_save_presence_for_message(
         db_session, m1, [alina], {alina.id: alina.name}
     )
-    crud.compute_and_save_presence_for_message(
+    post_round_pipeline.compute_and_save_presence_for_message(
         db_session, m2, [alina], {alina.id: alina.name}
     )
 
@@ -693,7 +694,7 @@ async def test_memory_attribution_speaker_preserved_same_room(
         ),
     )
     round_messages = [user_msg, anna_msg]
-    await crud.compute_and_save_presence_for_round(
+    await post_round_pipeline.compute_and_save_presence_for_round(
         db_session,
         round_messages,
         [c.id for c in characters],

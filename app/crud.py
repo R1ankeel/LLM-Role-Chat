@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from typing import Any, Literal, Optional, Tuple
@@ -14,18 +13,37 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import embedding_service
-from . import memory_service
 from . import models
-from . import perception
 from . import schemas
-from . import witness_model
+# Sprint 1 (§7.1): crud не импортирует perception (WPE-слой) — только чистые
+# хелперы локаций/адресатов из perception_utils (см. deps-before §2.1).
+from .perception_utils import (
+    REMOTE_CHANNELS,
+    _parse_adjacency_list,
+    build_adjacency_index,
+    is_shared_scene,
+    locations_match,
+    normalize_location,
+    parse_target_ids,
+    serialize_adjacency,
+    serialize_target_ids,
+)
 from .config import settings
 from .database import memory_content_hash
 from .lora_validation import (
     LoRAInUseError,
     LoRAValidationError,
     validate_adapter_path,
+)
+# Фасад (Sprint 1, §7.1): гибридный retrieval перенесён в memory/retrieval.py.
+# Временный реэкспорт — существующие потребители (chat_engine) продолжают
+# работать через crud.*; удаляется на этапе чисточных работ (этап 19).
+from .memory.retrieval import (
+    RerankContext,
+    RerankSignals,
+    build_rerank_signals,
+    get_hybrid_memories_for_characters,
+    get_relevant_memories_for_characters,
 )
 
 logger = logging.getLogger(__name__)
@@ -435,14 +453,15 @@ async def create_message(
     """Create a message; with `WORLD_ENGINE_EVENTS_ENABLED` also writes its
     `WorldEvent` atomically (same transaction, WPE.md Фаза 3 dual-write).
 
-    The dual-write is a no-op by default (flag off). Shadow perception
-    (`run_shadow_perception`) runs after commit and never affects the result.
+    The dual-write is a no-op by default (flag off). Shadow perception is
+    triggered by the service layer (`wpe_shadow.maybe_run_shadow_perception`)
+    after the message is persisted — never affects the result (Sprint 1, §7.1).
     """
     kwargs = message.orm_kwargs() if hasattr(message, "orm_kwargs") else message.model_dump()
     if "target_character_ids" in kwargs and not isinstance(
         kwargs["target_character_ids"], str
     ):
-        kwargs["target_character_ids"] = perception.serialize_target_ids(
+        kwargs["target_character_ids"] = serialize_target_ids(
             kwargs["target_character_ids"]
         )
     db_message = models.Message(**kwargs)
@@ -454,17 +473,6 @@ async def create_message(
         await ensure_message_thread_delivery(db, db_message)
     await db.commit()
     await db.refresh(db_message)
-    if settings.world_engine_events_enabled:
-        try:
-            from . import wpe_shadow
-
-            await wpe_shadow.run_shadow_perception(db, db_message)
-        except Exception:
-            logger.exception(
-                "[WPE-P3] shadow perception failed chat_id=%s msg_id=%s",
-                db_message.chat_id,
-                db_message.id,
-            )
     return db_message
 
 
@@ -739,7 +747,9 @@ async def filter_memories_by_witness(
     presence_rows = list(result.scalars().all())
     msg_presence: dict[int, str] = {row.message_id: row.presence for row in presence_rows}
 
-    OBSERVABLE = witness_model.MEMORY_OBSERVABLE_PRESENCES  # {"present", "told"}
+    # Sprint 1 (§7.1): константа инлайнится из witness_model.MEMORY_OBSERVABLE_PRESENCES
+    # (crud не импортирует WPE-модули). {"present", "told"}
+    OBSERVABLE = frozenset({"present", "told"})
 
     filtered: list[models.Memory] = []
     quality_map: dict[int, str] = {}
@@ -779,83 +789,6 @@ def _apply_witness_boost(
             0 if quality_map.get(m.id) == "direct" else 1,
         ),
     )
-
-
-# ----------------- Hybrid Retrieval v2 (Plans/update20.md §14, Sprint 6) ----
-async def build_rerank_signals(
-    db: AsyncSession,
-    chat_id: int,
-    character_ids: list[int],
-    character_names: dict[int, str],
-) -> dict[int, memory_service.RerankSignals]:
-    """Сигналы текущего контекста для rerank (§14): направленные отношения
-    персонажа (имена targets) и активные ``story_threads``.
-
-    Собирается только при ``hybrid_rerank_enabled`` (read-path canary);
-    пустые сигналы (нет отношений/потоков) — валидный результат: rerank просто
-    работает без relationship/story-слагаемых. write-path ``story_threads`` —
-    Sprint 8, поэтому на текущий момент поток обычно пуст (story-ось работает
-    по ``memory_type='story'`` с мягким базовым бустом).
-    """
-    if not character_ids or not settings.hybrid_rerank_enabled:
-        return {}
-
-    rel_stmt = select(
-        models.CharacterRelationship.source_character_id,
-        models.CharacterRelationship.target_character_id,
-    ).where(
-        models.CharacterRelationship.chat_id == chat_id,
-        models.CharacterRelationship.source_character_id.in_(character_ids),
-    )
-    rel_result = await db.execute(rel_stmt)
-    rel_targets: dict[int, list[int]] = {cid: [] for cid in character_ids}
-    for source_id, target_id in rel_result.all():
-        rel_targets.setdefault(int(source_id), []).append(int(target_id))
-
-    thread_stmt = select(models.StoryThread.name).where(
-        models.StoryThread.chat_id == chat_id,
-        models.StoryThread.status == "active",
-    )
-    thread_result = await db.execute(thread_stmt)
-    active_threads = tuple(
-        name for (name,) in thread_result.all() if name and str(name).strip()
-    )
-
-    signals: dict[int, memory_service.RerankSignals] = {}
-    for cid in character_ids:
-        names = tuple(
-            n
-            for t in rel_targets.get(cid, [])
-            if (n := character_names.get(int(t)))
-        )
-        signals[cid] = memory_service.RerankSignals(
-            relationship_target_names=names,
-            active_threads=active_threads,
-        )
-    return signals
-
-
-def _apply_rerank(
-    selected: list[models.Memory],
-    *,
-    query_text: str,
-    query_embedding: list[float] | None,
-    signals: memory_service.RerankSignals | None,
-) -> list[models.Memory]:
-    """Применить rerank после RRF/BM25, до witness-boost (Sprint 6, §14).
-
-    No-op (возвращает список без изменений) при выключенном
-    ``hybrid_rerank_enabled`` или отсутствии сигналов — RRF-путь не меняется.
-    """
-    if not settings.hybrid_rerank_enabled or not signals:
-        return selected
-    context = memory_service.RerankContext(
-        query_text=query_text,
-        query_embedding=query_embedding,
-        relationship_target_names=signals.relationship_target_names,
-        active_threads=signals.active_threads,
-    )
-    return memory_service.rerank_memories(selected, context)
 
 
 async def decay_memory_importance(db: AsyncSession) -> None:
@@ -931,222 +864,6 @@ async def get_memories_for_characters(
     for cid in grouped:
         grouped[cid].reverse()
     return grouped
-
-
-async def _build_scoring_context(
-    context_text: str,
-    character_summaries: dict[int, str] | None,
-    cid: int,
-) -> str:
-    """Augment the BM25 scoring context with the character's summary when available."""
-    if not character_summaries:
-        return context_text
-    summary = character_summaries.get(cid)
-    if not summary:
-        return context_text
-    return f"{context_text}\n\n{summary}"
-
-
-async def get_relevant_memories_for_characters(
-    db: AsyncSession,
-    character_ids: list[int],
-    context_text: str,
-    top_k: int | None = None,
-    *,
-    witness_filter: bool = True,
-    character_summaries: dict[int, str] | None = None,
-    rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
-) -> dict[int, list[models.Memory]]:
-    """Load and rank memories by BM25 relevance to current context (P1).
-
-    When *witness_filter* is True (default), memories whose *source_message_ids*
-    reference messages the character did not witness (present/told) are filtered
-    out before ranking.
-
-    When *character_summaries* is provided, each character's summary is appended
-    to the scoring context so BM25 biases toward memories relevant to the
-    character's current state.
-
-    Sprint 6 (§14): when *rerank_signals* is provided and ``hybrid_rerank_enabled``
-    is on, the BM25-selected top candidates are reranked (semantic-ось отпадает —
-    embeddings не используются на этом пути, веса нормируются) before the
-    witness boost. Without the flag the behaviour is unchanged.
-    """
-    if not character_ids:
-        return {}
-    if not settings.enable_relevant_memory_selection:
-        return await get_memories_for_characters(
-            db, character_ids, top_k or settings.memory_relevance_top_k
-        )
-
-    candidate_limit = (top_k or settings.memory_relevance_top_k) * 4
-    # Decay importance periodically (approx every 20th call)
-    if random.random() < 0.05:
-        await decay_memory_importance(db)
-    relevant: dict[int, list[models.Memory]] = {}
-    for cid in character_ids:
-        candidates = await get_memories_by_character(db, cid, candidate_limit)
-        quality_map: dict[int, WitnessQuality] = {}
-        if witness_filter and settings.enable_witness_memory_filter:
-            candidates, quality_map = await filter_memories_by_witness(db, candidates, cid)
-        scoring_context = await _build_scoring_context(context_text, character_summaries, cid)
-        selected = memory_service.select_relevant_memories(
-            candidates, scoring_context, top_k or settings.memory_relevance_top_k
-        )
-        # Sprint 6 (§14): rerank после BM25, до witness-boost (fallback без
-        # embeddings — semantic-слагаемое отбрасывается, веса нормируются).
-        selected = _apply_rerank(
-            selected,
-            query_text=scoring_context,
-            query_embedding=None,
-            signals=rerank_signals.get(cid) if rerank_signals else None,
-        )
-        if quality_map:
-            selected = _apply_witness_boost(selected, quality_map)
-        # Touch last_accessed_at for selected memories
-        if selected:
-            now = datetime.utcnow()
-            for mem in selected:
-                mem.last_accessed_at = now
-            await db.commit()
-        relevant[cid] = selected
-    return relevant
-
-
-async def get_hybrid_memories_for_characters(
-    db: AsyncSession,
-    character_ids: list[int],
-    context_text: str,
-    top_k: int | None = None,
-    bm25_weight: float | None = None,
-    vector_weight: float | None = None,
-    *,
-    witness_filter: bool = True,
-    character_summaries: dict[int, str] | None = None,
-    rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
-) -> dict[int, list[models.Memory]]:
-    """
-    Hybrid retrieval: BM25 (lexical) + Vector (semantic) with RRF fusion (P3).
-
-    When *witness_filter* is True (default), memories whose *source_message_ids*
-    reference messages the character did not witness are filtered out first.
-
-    When *character_summaries* is provided, each character's summary is appended
-    to the BM25 scoring context.
-    
-    Sprint 6 (§14): when *rerank_signals* is provided and ``hybrid_rerank_enabled``
-    is on, the RRF top-K are reranked (lexical/semantic/emotional/story/
-    relationship/recency/salience) BEFORE the witness boost. Without the flag the
-    RRF path is unchanged.
-    
-    Returns top_k memories per character ranked by reciprocal rank fusion.
-    """
-    if not character_ids:
-        return {}
-    
-    if not settings.embedding_enabled:
-        logger.info("Embeddings disabled, falling back to BM25-only")
-        return await get_relevant_memories_for_characters(
-            db, character_ids, context_text, top_k,
-            witness_filter=witness_filter,
-            character_summaries=character_summaries,
-            rerank_signals=rerank_signals,
-        )
-    
-    bm25_w = bm25_weight if bm25_weight is not None else settings.hybrid_bm25_weight
-    vector_w = vector_weight if vector_weight is not None else settings.hybrid_vector_weight
-    rrf_k = settings.hybrid_rrf_k
-    
-    top_k = top_k or settings.memory_relevance_top_k
-    candidate_limit = top_k * 8  # Get more candidates for better fusion
-    
-    emb_service = embedding_service.get_embedding_service()
-    query_embedding = await emb_service.embed_single(context_text)
-    
-    if not query_embedding:
-        logger.warning("Failed to generate query embedding, falling back to BM25")
-        return await get_relevant_memories_for_characters(
-            db, character_ids, context_text, top_k,
-            witness_filter=witness_filter,
-            character_summaries=character_summaries,
-            rerank_signals=rerank_signals,
-        )
-    
-    # Decay importance periodically (approx every 20th call)
-    if random.random() < 0.05:
-        await decay_memory_importance(db)
-    relevant: dict[int, list[models.Memory]] = {}
-    
-    for cid in character_ids:
-        candidates = await get_memories_by_character(db, cid, candidate_limit)
-        quality_map: dict[int, WitnessQuality] = {}
-        if witness_filter and settings.enable_witness_memory_filter:
-            candidates, quality_map = await filter_memories_by_witness(db, candidates, cid)
-        
-        if not candidates:
-            relevant[cid] = []
-            continue
-        
-        scoring_context = await _build_scoring_context(context_text, character_summaries, cid)
-        
-        # BM25 ranking
-        bm25_results = memory_service.select_relevant_memories(
-            candidates, scoring_context, candidate_limit
-        )
-        bm25_rank = {mem.id: rank for rank, mem in enumerate(bm25_results)}
-        
-        # Vector ranking
-        vector_scores = []
-        for mem in candidates:
-            if mem.embedding:
-                mem_emb = emb_service.unpack_embedding(mem.embedding)
-                if mem_emb:
-                    sim = emb_service.cosine_similarity(query_embedding, mem_emb)
-                    vector_scores.append((sim, mem))
-        
-        vector_scores.sort(key=lambda x: x[0], reverse=True)
-        vector_rank = {mem.id: rank for rank, (_, mem) in enumerate(vector_scores)}
-        
-        # RRF fusion
-        all_mem_ids = set(bm25_rank.keys()) | set(vector_rank.keys())
-        rrf_scores = {}
-        
-        for mem_id in all_mem_ids:
-            bm25_r = bm25_rank.get(mem_id, len(bm25_results))
-            vec_r = vector_rank.get(mem_id, len(vector_scores))
-            rrf = bm25_w / (rrf_k + bm25_r + 1) + vector_w / (rrf_k + vec_r + 1)
-            rrf_scores[mem_id] = rrf
-        
-        # Sort by RRF score
-        sorted_mem_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
-        top_mem_ids = sorted_mem_ids[:top_k]
-        
-        # Get memory objects
-        mem_map = {mem.id: mem for mem in candidates}
-        selected = [mem_map[mid] for mid in top_mem_ids if mid in mem_map]
-        
-        # Sprint 6 (§14): rerank после RRF, до witness-boost.
-        selected = _apply_rerank(
-            selected,
-            query_text=scoring_context,
-            query_embedding=query_embedding,
-            signals=rerank_signals.get(cid) if rerank_signals else None,
-        )
-        
-        # Apply witness boost — direct facts rank before hearsay
-        if quality_map:
-            selected = _apply_witness_boost(selected, quality_map)
-        
-        # Touch last_accessed_at
-        if selected:
-            now = datetime.utcnow()
-            for mem in selected:
-                mem.last_accessed_at = now
-            await db.commit()
-        
-        relevant[cid] = selected
-    
-    return relevant
 
 
 async def delete_memory(db: AsyncSession, memory_id: int) -> bool:
@@ -1590,363 +1307,6 @@ async def _attention_context_for_chat(
     }
 
 
-def _attention_score_for(
-    *,
-    message,
-    character_id: int,
-    presence: str,
-    character_names: dict[int, str],
-    rel_targets: set[int],
-    anchor_authors: set[int],
-    sensors_significance: float | None = None,
-) -> float:
-    """Детерминированный attention score пары (персонаж, событие) (§11).
-
-    Sensors ``significance`` (если передан) применяется как подсказка в рамках
-    caps — Sensors не решает доступность информации (presence) и не принимает
-    решение о внимании.
-    """
-    from . import attention
-
-    author_id = getattr(message, "character_id", None)
-    anchor_active = False
-    if author_id is not None:
-        try:
-            anchor_active = int(author_id) in anchor_authors
-        except (TypeError, ValueError):
-            pass
-    score = attention.compute_attention_score(
-        presence=presence,
-        event=perception.event_from_message(message),
-        observer={
-            "character_id": character_id,
-            "name": character_names.get(character_id, ""),
-        },
-        character_names=character_names,
-        relationship_target_ids=rel_targets,
-        anchor_active=anchor_active,
-    )
-    if sensors_significance is not None:
-        score = attention.apply_sensors_significance(score, sensors_significance)
-    return score
-
-
-def _round_text_snippet(round_messages: list, max_len: int = 1500) -> str:
-    """Короткий текст раунда для sensor-задачи (минимальный контекст §5.1.7)."""
-    parts: list[str] = []
-    for message in round_messages:
-        role = getattr(message, "role", None)
-        content = str(getattr(message, "content", "") or "")
-        if not content:
-            continue
-        if role == "user":
-            parts.append(f"Игрок: {content}")
-        elif role == "system":
-            parts.append(f"Система: {content}")
-        else:
-            name = getattr(getattr(message, "character", None), "name", None) or ""
-            parts.append(f"{name}: {content}")
-    snippet = "\n".join(parts)
-    return snippet[:max_len]
-
-
-def _build_perception_world_state(
-    locations: list,
-    thread_deliveries: set[int] | frozenset[int] | None = None,
-) -> perception.PerceptionWorldState | None:
-    """Build the pure world snapshot for the two-channel cutover (Фаза 4).
-
-    ``thread_deliveries`` (Фаза 6) — id персонажей, которым событие доставлено
-    через тред/удалённый канал; источник ``remote_status=delivered`` (§4).
-    """
-    return perception.PerceptionWorldState(
-        adjacency=perception.build_permeability_index(locations or []),
-        thread_deliveries=frozenset(thread_deliveries or ()),
-    )
-
-
-async def _chat_world_state_for_characters(
-    db: AsyncSession, characters: list
-) -> perception.PerceptionWorldState | None:
-    """World snapshot from the chat of ``characters`` (None if flag off / no chat)."""
-    if not settings.world_engine_perception_enabled:
-        return None
-    chat_id = None
-    for character in characters:
-        chat_id = getattr(character, "chat_id", None)
-        if chat_id is not None:
-            break
-    if chat_id is None:
-        return None
-    locations = await get_chat_locations(db, chat_id)
-    return _build_perception_world_state(locations)
-
-
-async def _chat_world_state_for_message(
-    db: AsyncSession, message, characters: list
-) -> perception.PerceptionWorldState | None:
-    """World snapshot scoped to one event (Фаза 6): включает доставки тредов.
-
-    ``thread_deliveries`` события вычисляются из ``ThreadParticipantState``
-    (см. ``thread_delivery_ids_for_message``), чтобы `perceive()` мог отдать
-    ``remote_status=delivered`` адресату независимо от локации (Golden #6).
-    """
-    if not settings.world_engine_perception_enabled:
-        return None
-    chat_id = getattr(message, "chat_id", None)
-    if chat_id is None:
-        for character in characters:
-            chat_id = getattr(character, "chat_id", None)
-            if chat_id is not None:
-                break
-    if chat_id is None:
-        return None
-    locations = await get_chat_locations(db, chat_id)
-    deliveries = await thread_delivery_ids_for_message(db, message)
-    return _build_perception_world_state(locations, thread_deliveries=deliveries)
-
-
-async def compute_and_save_presence_for_message(
-    db: AsyncSession,
-    message,
-    characters: list,
-    character_names: dict[int, str] | None = None,
-) -> dict[int, str]:
-    """Compute and persist presence for one event for all characters.
-
-    Returns {character_id: presence} for the given message.
-
-    Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
-    presence пишется через двухканальный ``perceive()`` (Renderer
-    ``witness_model.perceive_presence_for_character``), а не через legacy
-    ``can_character_perceive_event``. Откат — выключить флаг.
-
-    Фаза 6: world-state строится по событию (включая ``thread_deliveries``),
-    а при ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`` голосовая атрибуция
-    ``voice_known`` берётся из отношений наблюдателя (WPE.md §4).
-    """
-    names = character_names or {c.id: c.name for c in characters}
-    locations = {c.id: getattr(c, "location", "") or "" for c in characters}
-    message_id = getattr(message, "id", None)
-    if message_id is None:
-        return {}
-
-    world_state = await _chat_world_state_for_message(db, message, characters)
-    known_voices = None
-    if settings.world_engine_partial_perception_enabled:
-        chat_id = getattr(message, "chat_id", None)
-        if chat_id is not None:
-            known_voices = await _known_voices_for_chat(db, chat_id)
-
-    # Sprint 4 (§11): attention score считается детерминированно вместе с
-    # presence (только для включённого флага). Sensors perception-proposal не
-    # вызывается на синхронном пути — только в пост-раунд presence pass.
-    attention_ctx: dict[int, dict[str, set[int]]] = {}
-    if settings.attention_enabled:
-        chat_id = getattr(message, "chat_id", None)
-        if chat_id is None:
-            for character in characters:
-                chat_id = getattr(character, "chat_id", None)
-                if chat_id is not None:
-                    break
-        if chat_id is not None:
-            attention_ctx = await _attention_context_for_chat(
-                db, chat_id, [c.id for c in characters]
-            )
-
-    records: list[schemas.MessagePresenceCreate] = []
-    result: dict[int, str] = {}
-    for character in characters:
-        if world_state is not None:
-            presence = witness_model.perceive_presence_for_character(
-                message,
-                character,
-                world_state,
-                voice_known=witness_model.voice_familiarity(
-                    character.id,
-                    getattr(message, "character_id", None),
-                    known_voices,
-                ),
-            )
-        else:
-            presence = witness_model.compute_mvp_presence(
-                message,
-                character.id,
-                names,
-                viewer_location=locations.get(character.id, ""),
-                viewer_location_id=getattr(character, "location_id", None),
-                character_locations=locations,
-            )
-        result[character.id] = presence
-        attention = None
-        if attention_ctx:
-            ctx = attention_ctx.get(character.id, {})
-            attention = _attention_score_for(
-                message=message,
-                character_id=character.id,
-                presence=presence,
-                character_names=names,
-                rel_targets=ctx.get("rel_targets", set()),
-                anchor_authors=ctx.get("anchor_authors", set()),
-            )
-        records.append(
-            schemas.MessagePresenceCreate(
-                message_id=message_id,
-                character_id=character.id,
-                presence=presence,
-                attention=attention,
-            )
-        )
-    await upsert_message_presence_batch(db, records)
-    return result
-
-
-async def compute_and_save_presence_for_round(
-    db: AsyncSession,
-    round_messages: list,
-    character_ids: list[int],
-    character_names: dict[int, str],
-    *,
-    characters: list | None = None,
-    character_locations: dict[int, str] | None = None,
-    client: Any = None,
-) -> None:
-    """Persist perception-based presence for all messages in a completed round.
-
-    Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
-    presence пишется через ``perceive()`` (см. Фаза 4 / Golden #14).
-
-    Фаза 6: для событий удалённых каналов доставки тредов подставляются
-    по-событийно, voice familiarity — из отношений при включённом
-    ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED``.
-
-    Sprint 4 (§11): вместе с presence детерминированно пишется attention score.
-    Sensors perception-proposal (§5.1.3) вызывается только здесь (пост-раунд,
-    один вызов на раунд при ``sensors_perception_enabled``): предложенная
-    ``significance`` применяется как подсказка к attention в рамках
-    ``SENSORS_PERCEPTION_SIGNIFICANCE_CAP``; доступность информации (presence)
-    Sensors не определяет. Недоступен Sensors → детерминированный путь.
-    """
-    if characters is None:
-        characters = []
-        for cid in character_ids:
-            char = await get_character(db, cid)
-            if char is not None:
-                characters.append(char)
-
-    locations = character_locations or {
-        c.id: getattr(c, "location", "") or "" for c in characters
-    }
-    if not locations and character_ids:
-        locations = {cid: "" for cid in character_ids}
-
-    world_state = await _chat_world_state_for_characters(db, characters)
-    known_voices = None
-    chat_id = None
-    if settings.world_engine_partial_perception_enabled and characters:
-        chat_id = getattr(characters[0], "chat_id", None)
-        if chat_id is not None:
-            known_voices = await _known_voices_for_chat(db, chat_id)
-    if chat_id is None and characters:
-        chat_id = getattr(characters[0], "chat_id", None)
-
-    # Sprint 4 (§11): attention-контекст персонажей + Sensors perception-подсказка
-    # (significance раунда, один вызов, только пост-раунд).
-    attention_ctx: dict[int, dict[str, set[int]]] = {}
-    sensors_significance: float | None = None
-    if settings.attention_enabled:
-        attention_ctx = await _attention_context_for_chat(db, chat_id, character_ids)
-        if chat_id is not None and client is not None:
-            try:
-                from .sensors_service import sensors_service
-
-                if sensors_service.is_enabled("perception"):
-                    minimal_context = _round_text_snippet(round_messages)
-                    if minimal_context:
-                        sensors_result = await sensors_service.run(
-                            client, task="perception", minimal_context=minimal_context
-                        )
-                        if sensors_result is not None:
-                            sensors_significance = sensors_result.get("significance")
-            except Exception:  # noqa: BLE001 — Sensors не должен ронять раунд
-                logger.warning(
-                    "[chat_id=%s] Sensors perception proposal failed; "
-                    "deterministic attention only",
-                    chat_id,
-                )
-
-    records: list[schemas.MessagePresenceCreate] = []
-    for message in round_messages:
-        message_id = getattr(message, "id", None)
-        if message_id is None:
-            continue
-        deliveries = frozenset()
-        if world_state is not None and settings.world_engine_threads_enabled:
-            deliveries = await thread_delivery_ids_for_message(db, message)
-        for character_id in character_ids:
-            if world_state is not None:
-                character = next(
-                    (c for c in characters if c.id == character_id), None
-                )
-                if character is None:
-                    continue
-                message_world_state = (
-                    perception.PerceptionWorldState(
-                        adjacency=world_state.adjacency,
-                        thread_deliveries=deliveries,
-                    )
-                    if deliveries
-                    else world_state
-                )
-                presence = witness_model.perceive_presence_for_character(
-                    message,
-                    character,
-                    message_world_state,
-                    voice_known=witness_model.voice_familiarity(
-                        character.id,
-                        getattr(message, "character_id", None),
-                        known_voices,
-                    ),
-                )
-            else:
-                character = next(
-                    (c for c in characters if c.id == character_id), None
-                )
-                presence = witness_model.compute_mvp_presence(
-                    message,
-                    character_id,
-                    character_names,
-                    viewer_location=locations.get(character_id, ""),
-                    viewer_location_id=(
-                        getattr(character, "location_id", None)
-                        if character is not None
-                        else None
-                    ),
-                    character_locations=locations,
-                )
-            attention = None
-            if attention_ctx:
-                ctx = attention_ctx.get(character_id, {})
-                attention = _attention_score_for(
-                    message=message,
-                    character_id=character_id,
-                    presence=presence,
-                    character_names=character_names,
-                    rel_targets=ctx.get("rel_targets", set()),
-                    anchor_authors=ctx.get("anchor_authors", set()),
-                    sensors_significance=sensors_significance,
-                )
-            records.append(
-                schemas.MessagePresenceCreate(
-                    message_id=message_id,
-                    character_id=character_id,
-                    presence=presence,
-                    attention=attention,
-                )
-            )
-    await upsert_message_presence_batch(db, records)
-
-
 # ------------------------ Character Location --------------------------
 async def update_character_location(
     db: AsyncSession, character_id: int, location: str
@@ -2151,7 +1511,7 @@ async def apply_character_actions(
                 event_type="speech",
                 location=current_location,
                 round_id=round_id,
-                target_character_ids=perception.serialize_target_ids(targets),
+                target_character_ids=serialize_target_ids(targets),
             )
         )
         if settings.world_engine_threads_enabled:
@@ -2186,7 +1546,7 @@ async def apply_character_actions(
 
 def _locations_same(a: str, b: str) -> bool:
     """Сравнение локаций по каноническому имени (legacy-bridge, как Фаза 1)."""
-    return perception.locations_match(a, b)
+    return locations_match(a, b)
 
 
 # -------------------- WPE 3.0: Threads / мессенджер (Фаза 6) --------------------
@@ -2266,7 +1626,7 @@ async def _ensure_thread_for_action(
     Доставка (`mark_thread_delivered`) проставляется позже в ``create_message``
     для реального сообщения с ``message.id``.
     """
-    if channel not in perception.REMOTE_CHANNELS:
+    if channel not in REMOTE_CHANNELS:
         return
     thread = await get_or_create_thread(db, chat_id, channel)
     members = set(targets)
@@ -2287,7 +1647,7 @@ async def ensure_message_thread_delivery(db: AsyncSession, message) -> None:
     if not settings.world_engine_threads_enabled:
         return
     channel = (getattr(message, "channel", None) or "direct").strip().lower()
-    if channel not in perception.REMOTE_CHANNELS:
+    if channel not in REMOTE_CHANNELS:
         return
     chat_id = getattr(message, "chat_id", None)
     message_id = getattr(message, "id", None)
@@ -2295,7 +1655,7 @@ async def ensure_message_thread_delivery(db: AsyncSession, message) -> None:
         return
     thread = await get_or_create_thread(db, chat_id, channel)
     author_id = getattr(message, "character_id", None)
-    targets = perception.parse_target_ids(
+    targets = parse_target_ids(
         getattr(message, "target_character_ids", None)
     )
     members = set(targets)
@@ -2317,7 +1677,7 @@ async def thread_delivery_ids_for_message(
     if not settings.world_engine_threads_enabled:
         return frozenset()
     channel = (getattr(message, "channel", None) or "direct").strip().lower()
-    if channel not in perception.REMOTE_CHANNELS:
+    if channel not in REMOTE_CHANNELS:
         return frozenset()
     chat_id = getattr(message, "chat_id", None)
     message_id = getattr(message, "id", None)
@@ -2377,7 +1737,7 @@ async def get_adjacency_index(
     Used by the perception layer for AUDIBLE / MENTIONED levels (§6, Sprint 2).
     """
     locations = await get_chat_locations(db, chat_id)
-    return perception.build_adjacency_index(locations)
+    return build_adjacency_index(locations)
 
 
 async def get_location(db: AsyncSession, location_id: int) -> models.Location | None:
@@ -2394,17 +1754,17 @@ def resolve_location_name(
 ) -> models.Location | None:
     """Чистый резолвер: строковая локация → каноническая ``Location``.
 
-    Регистронезависимый матч через ``perception.locations_match`` (тот же
+    Регистронезависимый матч через ``locations_match`` (тот же
     normalize, что и у сравнения строк в движке). "Общая сцена" (пустая
     строка / каноническое имя) → None: у общей сцены нет id.
     """
     needle = (name or "").strip()
     if not needle:
         return None
-    if perception.is_shared_scene(perception.normalize_location(needle)):
+    if is_shared_scene(normalize_location(needle)):
         return None
     for loc in locations:
-        if perception.locations_match(loc.name, needle):
+        if locations_match(loc.name, needle):
             return loc
     return None
 
@@ -2474,8 +1834,8 @@ async def backfill_character_location_ids(
 
     for character in characters:
         raw = (character.location or "").strip()
-        if not raw or perception.is_shared_scene(
-            perception.normalize_location(raw)
+        if not raw or is_shared_scene(
+            normalize_location(raw)
         ):
             if character.location_id is not None:
                 character.location_id = None
@@ -2601,8 +1961,8 @@ async def backfill_event_location_ids(
 
     for event in events:
         raw = (event.location or "").strip()
-        if not raw or perception.is_shared_scene(
-            perception.normalize_location(raw)
+        if not raw or is_shared_scene(
+            normalize_location(raw)
         ):
             if event.location_id is not None:
                 event.location_id = None
@@ -2647,7 +2007,7 @@ def _location_name_conflict(
     for loc in existing:
         if exclude_id is not None and loc.id == exclude_id:
             continue
-        if perception.locations_match(loc.name, new_name):
+        if locations_match(loc.name, new_name):
             return loc
     return None
 
@@ -2669,7 +2029,7 @@ async def create_location(
         chat_id=chat_id,
         name=name,
         description=(location.description or ""),
-        adjacent_to=perception.serialize_adjacency(
+        adjacent_to=serialize_adjacency(
             getattr(location, "adjacent_to", None)
         ),
     )
@@ -2699,14 +2059,14 @@ async def update_location(
         if not new_name:
             raise ValueError("Название локации не может быть пустым")
         update_data["name"] = new_name
-        if not perception.locations_match(old_name, new_name):
+        if not locations_match(old_name, new_name):
             existing = await get_chat_locations(db, db_location.chat_id)
             conflict = _location_name_conflict(existing, new_name, exclude_id=db_location.id)
             if conflict is not None:
                 raise ValueError(f"Локация «{conflict.name}» уже существует")
     for field, value in update_data.items():
         if field == "adjacent_to":
-            value = perception.serialize_adjacency(value)
+            value = serialize_adjacency(value)
         setattr(db_location, field, value)
     try:
         await db.commit()
@@ -2715,7 +2075,7 @@ async def update_location(
         raise ValueError(f"Локация «{new_name}» уже существует") from exc
     await db.refresh(db_location)
 
-    if new_name is not None and not perception.locations_match(old_name, new_name):
+    if new_name is not None and not locations_match(old_name, new_name):
         await _rename_location_references(db, db_location.chat_id, old_name, new_name)
     await _sync_chat_locations_cache(db, db_location.chat_id)
     return db_location
@@ -2735,7 +2095,7 @@ async def _rename_location_references(
     )
     char_updates: list[int] = []
     for char_id, loc in char_rows.all():
-        if perception.locations_match(loc or "", old_name):
+        if locations_match(loc or "", old_name):
             char_updates.append(char_id)
     if char_updates:
         await db.execute(
@@ -2753,7 +2113,7 @@ async def _rename_location_references(
     )
     msg_updates: list[int] = []
     for msg_id, loc in msg_rows.all():
-        if perception.locations_match(loc or "", old_name):
+        if locations_match(loc or "", old_name):
             msg_updates.append(msg_id)
     if msg_updates:
         await db.execute(
@@ -2768,7 +2128,7 @@ async def _rename_location_references(
     if scene is not None and scene.character_locations:
         raw = json.loads(scene.character_locations) if scene.character_locations else {}
         updated = {
-            k: (new_name if perception.locations_match(str(v), old_name) else v)
+            k: (new_name if locations_match(str(v), old_name) else v)
             for k, v in raw.items()
         }
         if updated != raw:
@@ -2783,17 +2143,17 @@ async def _rename_location_references(
         )
     )
     for loc_id, adjacent_json in loc_rows.all():
-        neighbors = perception._parse_adjacency_list(adjacent_json)
+        neighbors = _parse_adjacency_list(adjacent_json)
         replaced = False
         for i, neighbor in enumerate(neighbors):
-            if perception.locations_match(neighbor, old_name):
+            if locations_match(neighbor, old_name):
                 neighbors[i] = new_name
                 replaced = True
         if replaced:
             await db.execute(
                 update(models.Location)
                 .where(models.Location.id == loc_id)
-                .values(adjacent_to=perception.serialize_adjacency(neighbors))
+                .values(adjacent_to=serialize_adjacency(neighbors))
             )
             changed = True
 
@@ -2808,7 +2168,7 @@ async def get_characters_referencing_location(
     characters = await get_characters_by_chat(db, location.chat_id, include_player=True)
     return [
         c for c in characters
-        if c.location and perception.locations_match(c.location, location.name)
+        if c.location and locations_match(c.location, location.name)
     ]
 
 
@@ -3319,6 +2679,17 @@ async def _find_belief(
     return result.scalar_one_or_none()
 
 
+def merge_confidence(current: float, new: float) -> float:
+    """Слияние уверенности при повторном наблюдении (детерминированное).
+
+    Sprint 1 (§7.1): перенесено из ``belief_service`` — crud не импортирует
+    сервисный слой. Повторное наблюдение усиливает (идём к новому значению),
+    но не выходит за 0..1; слабый новый источник не обнуляет сильное
+    существующее убеждение.
+    """
+    return min(1.0, max(float(current), float(new)))
+
+
 async def upsert_belief(
     db: AsyncSession,
     chat_id: int,
@@ -3335,9 +2706,9 @@ async def upsert_belief(
     """Создать/обновить belief персонажа (Sprint 5).
 
     Ключ — (character_id, subject, predicate, object): повторное наблюдение
-    повышает confidence (детерминированное слияние в belief_service), источник
-    обновляется только на более сильный. Невалидные значения обрезаются
-    (confidence → 0..1, source/type → известные значения).
+    повышает confidence (детерминированное слияние ``merge_confidence``),
+    источник обновляется только на более сильный. Невалидные значения
+    обрезаются (confidence → 0..1, source/type → известные значения).
     """
     if source not in ("direct_observation", "heard", "told_by", "inference", "rumor", "memory"):
         source = "memory"
@@ -3351,8 +2722,6 @@ async def upsert_belief(
 
     belief = await _find_belief(db, character_id, subject, predicate, object)
     if belief is not None:
-        from .belief_service import merge_confidence
-
         belief.confidence = merge_confidence(belief.confidence, confidence)
         belief.updated_at = datetime.utcnow()
         if world_truth_ref is not None:

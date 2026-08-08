@@ -4,8 +4,6 @@ import asyncio
 import json
 import logging
 import re
-from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -24,6 +22,22 @@ from . import task_queue
 from . import witness_model
 from .config import settings
 from .database import AsyncSessionLocal, get_async_session_factory
+from .memory.retrieval import (
+    SimpleBM25,
+    RerankContext,
+    RerankSignals,
+    rerank_memories,
+    rerank_weights,
+    select_relevant_memories,
+    build_rerank_signals,
+    get_relevant_memories_for_characters,
+    get_hybrid_memories_for_characters,
+    _name_in_text,
+    _tokenize_for_overlap,
+    _story_relevance,
+    _relationship_relevance,
+    _emotional_relevance,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -176,308 +190,6 @@ _FALSE_ME_PATIENT_PATTERNS = (
 )
 
 
-class SimpleBM25:
-    """Lightweight BM25 scorer for relevant memory selection (P1). No external deps."""
-
-    def __init__(self, corpus: list[str], k1: float = 1.5, b: float = 0.75):
-        self.k1 = k1
-        self.b = b
-        self.corpus = [self._tokenize(doc) for doc in corpus]
-        self.doc_lengths = [len(doc) for doc in self.corpus]
-        self.avg_doc_len = (
-            sum(self.doc_lengths) / len(self.corpus) if self.corpus else 1.0
-        )
-        self.doc_freq = self._compute_doc_freq()
-
-    def _tokenize(self, text: str) -> list[str]:
-        text = text.lower()
-        return re.findall(r"\b\w+\b", text)
-
-    def _compute_doc_freq(self) -> dict[str, int]:
-        df = Counter()
-        for doc in self.corpus:
-            unique_terms = set(doc)
-            for term in unique_terms:
-                df[term] += 1
-        return df
-
-    def score(self, query: str, doc_idx: int) -> float:
-        if not self.corpus or doc_idx >= len(self.corpus):
-            return 0.0
-        query_terms = self._tokenize(query)
-        score = 0.0
-        doc = self.corpus[doc_idx]
-        doc_len = self.doc_lengths[doc_idx]
-        for term in query_terms:
-            if term not in self.doc_freq or self.doc_freq[term] == 0:
-                continue
-            tf = doc.count(term)
-            idf = len(self.corpus) / self.doc_freq[term]
-            numerator = tf * (self.k1 + 1)
-            denominator = tf + self.k1 * (
-                1 - self.b + self.b * (doc_len / self.avg_doc_len)
-            )
-            score += idf * (numerator / denominator)
-        return score
-
-
-def select_relevant_memories(
-    memories: list[models.Memory], context_text: str, top_k: int = 5
-) -> list[models.Memory]:
-    """Select top-K memories by BM25 relevance to current context."""
-    if not memories or not context_text or not context_text.strip():
-        return memories[:top_k]
-
-    if not settings.enable_relevant_memory_selection:
-        return memories[:top_k]
-
-    contents = [getattr(m, "content", "") for m in memories]
-    bm25 = SimpleBM25(contents, k1=settings.bm25_k1, b=settings.bm25_b)
-
-    scored = []
-    for i, mem in enumerate(memories):
-        score_val = bm25.score(context_text, i)
-        if score_val >= settings.bm25_min_score_threshold:
-            scored.append((score_val, mem))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    selected = [mem for _, mem in scored[:top_k]]
-
-    if not selected and memories:
-        logger.debug("No memories above BM25 threshold; falling back to recent")
-        return memories[:top_k]
-
-    logger.debug(
-        "Selected %d relevant memories (top scores: %s)",
-        len(selected),
-        [round(s, 2) for s, _ in scored[:3]],
-    )
-    return selected
-
-
-# ---------------------------------------------------------------------------
-# Hybrid Retrieval v2 (Plans/update20.md §14, Sprint 6)
-# ---------------------------------------------------------------------------
-# Детерминированный rerank memories ПОСЛЕ существующего RRF-слияния (crud) и ДО
-# witness-boost. НЕ удаляет BM25: lexical-ось остаётся, semantic-ось отпадает
-# только при отсутствии embeddings (веса перенормируются). LLM-вызовов нет.
-
-
-@dataclass
-class RerankSignals:
-    """Входные сигналы текущего контекста для rerank (§14), собираемые в crud.
-
-    ``relationship_target_names`` — имена персонажей, к которым у наблюдателя
-        есть направленные отношения (relationship-ось);
-    ``active_threads`` — названия активных ``story_threads`` (story-ось).
-    """
-
-    relationship_target_names: tuple[str, ...] = ()
-    active_threads: tuple[str, ...] = ()
-
-
-@dataclass
-class RerankContext(RerankSignals):
-    """Полный контекст rerank: сигналы + текст/эмбеддинг запроса.
-
-    ``query_text`` — текст запроса (lexical-ось, BM25);
-    ``query_embedding`` — эмбеддинг запроса (semantic-ось; None → ось
-        отбрасывается, веса нормируются — fallback без embeddings, §14).
-    """
-
-    query_text: str = ""
-    query_embedding: list[float] | None = None
-
-
-def rerank_weights() -> dict[str, float]:
-    """Веса осей rerank из config, нормированные на 1.0."""
-    w = {
-        "lexical": settings.hybrid_rerank_weight_lexical,
-        "semantic": settings.hybrid_rerank_weight_semantic,
-        "emotional": settings.hybrid_rerank_weight_emotional,
-        "story": settings.hybrid_rerank_weight_story,
-        "relationship": settings.hybrid_rerank_weight_relationship,
-        "recency": settings.hybrid_rerank_weight_recency,
-        "salience": settings.hybrid_rerank_weight_salience,
-    }
-    total = sum(w.values()) or 1.0
-    return {k: v / total for k, v in w.items()}
-
-
-def _memory_kind(mem) -> str:
-    """Ось памяти: story | social | semantic.
-
-    Приоритет — ``memory_type`` (Sprint 2); fallback по ``category``, чтобы
-    relationship/story-оси работали и без включённых типов памяти.
-    """
-    mt = str(getattr(mem, "memory_type", "") or "").lower()
-    if mt == "story":
-        return "story"
-    if mt == "social":
-        return "social"
-    category = str(getattr(mem, "category", "") or "").lower()
-    if category == "отношения":
-        return "social"
-    return "semantic"
-
-
-def _clamp01(x: float) -> float:
-    return max(0.0, min(1.0, float(x)))
-
-
-def _story_relevance(mem, active_threads: tuple[str, ...]) -> float:
-    """Сюжетная релевантность: story-память выше при активном thread (§14).
-
-    - ``story``-память без активных потоков (write-path ``story_threads`` —
-      Sprint 8) → мягкий базовый буст 0.3;
-    - совпадение токенов содержания с названием активного потока → 1.0;
-    - story-память при активных потоках без совпадения → 0.5;
-    - не story → 0.0.
-    """
-    if _memory_kind(mem) != "story":
-        return 0.0
-    if not active_threads:
-        return 0.3
-    text_tokens = _tokenize_for_overlap(mem.content or "")
-    if not text_tokens:
-        return 0.3
-    for thread in active_threads:
-        thread_tokens = _tokenize_for_overlap(thread)
-        if thread_tokens and text_tokens & thread_tokens:
-            return 1.0
-    return 0.5
-
-
-def _relationship_relevance(mem, target_names: tuple[str, ...]) -> float:
-    """Relationship-релевантность: social-память об участнике отношений (§14).
-
-    Социальная память, в которой упоминается имя персонажа, к которому у
-    наблюдателя есть направленное отношение, → 1.0; иначе 0.0.
-    """
-    if _memory_kind(mem) != "social":
-        return 0.0
-    if not target_names:
-        return 0.0
-    text = mem.content or ""
-    for name in target_names:
-        if name and _name_in_text(text, name):
-            return 1.0
-    return 0.0
-
-
-def _emotional_relevance(mem) -> float:
-    """Эмоциональная релевантность из ``valence``/``intensity`` (§14)."""
-    intensity = getattr(mem, "intensity", None)
-    valence = getattr(mem, "valence", None)
-    if intensity is None and valence is None:
-        return 0.0
-    return _clamp01((intensity or 0.0) + 0.5 * abs(valence or 0.0))
-
-
-def _recency_score(mem, now=None) -> float:
-    if now is None:
-        now = datetime.utcnow()
-    created = getattr(mem, "created_at", None)
-    if not created:
-        return 0.0
-    age_days = max(0.0, (now - created).total_seconds() / 86400.0)
-    return 1.0 / (1.0 + age_days)
-
-
-def _salience_score(mem) -> float:
-    importance = getattr(mem, "importance", None)
-    if importance is None:
-        return 0.5
-    return _clamp01(float(importance))
-
-
-def rerank_memories(
-    candidates: list[models.Memory],
-    context: RerankContext | None = None,
-    *,
-    weights: dict[str, float] | None = None,
-) -> list[models.Memory]:
-    """Детерминированный rerank memories (§14) после RRF, до witness-boost.
-
-    ``score_final = w_lex×lex + w_sem×sem + w_emotion×emotion + w_story×story
-    + w_rel×rel + w_recency×recency + w_salience×salience``
-
-    - lexical: BM25 содержимого по ``query_text``, нормализованный по максимуму;
-    - semantic: cosine similarity ``query_embedding`` × ``mem.embedding``
-      (без embeddings ось отбрасывается, веса перенормируются — fallback BM25);
-    - emotional: ``intensity`` + 0.5·|``valence``| (эмоциональные якоря);
-    - story: ``_story_relevance`` (активные ``story_threads``);
-    - relationship: ``_relationship_relevance`` (target-имена отношений);
-    - recency: ``1/(1+возраст_в_днях)``;
-    - salience: ``importance``.
-
-    Сортировка стабильная: при равном score сохраняется исходный порядок
-    (top-K от RRF), поэтому вызов на уже-отсортированном списке идемпотентен.
-    """
-    if not candidates or len(candidates) < 2:
-        return list(candidates)
-
-    context = context or RerankContext()
-    weights = dict(weights or rerank_weights())
-
-    query_text = (context.query_text or "").strip()
-    has_semantic = bool(context.query_embedding)
-
-    available = {k: w for k, w in weights.items()}
-    if not query_text:
-        available.pop("lexical", None)
-    if not has_semantic:
-        available.pop("semantic", None)
-    total_w = sum(available.values()) or 1.0
-    w = {k: v / total_w for k, v in available.items()}
-
-    contents = [getattr(m, "content", "") or "" for m in candidates]
-    bm25 = SimpleBM25(contents, k1=settings.bm25_k1, b=settings.bm25_b)
-    lex_scores = (
-        [bm25.score(query_text, i) for i in range(len(candidates))]
-        if query_text
-        else [0.0] * len(candidates)
-    )
-    max_lex = max(lex_scores) if lex_scores else 0.0
-
-    sem_scores = [0.0] * len(candidates)
-    if has_semantic:
-        query_emb = context.query_embedding
-        for i, mem in enumerate(candidates):
-            raw = getattr(mem, "embedding", None)
-            if raw:
-                mem_emb = embedding_service.EmbeddingService.unpack_embedding(raw)
-                if mem_emb:
-                    sem_scores[i] = _clamp01(
-                        embedding_service.EmbeddingService.cosine_similarity(
-                            query_emb, mem_emb
-                        )
-                    )
-
-    scored: list[tuple[float, int, models.Memory]] = []
-    for i, mem in enumerate(candidates):
-        lex = lex_scores[i] / max_lex if max_lex > 0 else 0.0
-        score = (
-            w.get("lexical", 0.0) * lex
-            + w.get("semantic", 0.0) * sem_scores[i]
-            + w.get("emotional", 0.0) * _emotional_relevance(mem)
-            + w.get("story", 0.0)
-            * _story_relevance(mem, context.active_threads)
-            + w.get("relationship", 0.0)
-            * _relationship_relevance(mem, context.relationship_target_names)
-            + w.get("recency", 0.0) * _recency_score(mem)
-            + w.get("salience", 0.0) * _salience_score(mem)
-        )
-        scored.append((score, i, mem))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [mem for _, _, mem in scored]
-
-
-def _tokenize_for_overlap(text: str) -> set[str]:
-    return set(re.findall(r"\b\w+\b", (text or "").lower()))
-
-
 def _content_tokens(text: str) -> set[str]:
     """Tokens useful for grounding (stopwords removed)."""
     return {
@@ -509,13 +221,6 @@ def fact_grounding_overlap(fact_text: str, context_text: str) -> float:
     if not context_tokens:
         return 0.0
     return len(fact_tokens & context_tokens) / len(fact_tokens)
-
-
-def _name_in_text(text: str, name: str) -> bool:
-    if not name or not text:
-        return False
-    pattern = rf"(?<!\w){re.escape(name)}(?!\w)"
-    return bool(re.search(pattern, text, flags=re.IGNORECASE))
 
 
 def _looks_like_false_me_patient(
@@ -2189,3 +1894,14 @@ async def enqueue_backfill_embeddings_job(
         chat_id=chat_id,
         payload=payload,
     )
+
+
+# ---------------------------------------------------------------------------
+# Handler-registry (Sprint 1, §7.1 decomposition.md)
+# ---------------------------------------------------------------------------
+# Обработчики регистрируются в task_queue при импорте: диспетчер джобов не
+# знает о memory_service напрямую (цикл ``task_queue ↔ memory_service`` разорван).
+task_queue.register_handler("post_round", _process_post_round_job)
+task_queue.register_handler("consolidation", _process_consolidation_job)
+task_queue.register_handler("embed_memory", _process_embed_memory_job)
+task_queue.register_handler("backfill_embeddings", _process_backfill_embeddings_job)

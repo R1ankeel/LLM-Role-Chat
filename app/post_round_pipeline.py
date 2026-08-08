@@ -5,7 +5,7 @@
 одной НЕ ломает раунд (graceful degradation).
 
 Стадии (порядок из §15, Sprint 3 добавил character_state после relationships):
-1. presence round pass   — ``crud.compute_and_save_presence_for_round``;
+1. presence round pass   — ``compute_and_save_presence_for_round`` (locally);
 2. event extraction      — ``event_service`` (LLM/Sensors) → ``crud.save_round_events``;
 3. memory extraction     — ``memory_service.process_post_round`` (background);
 4. relationships         — ``relationship_analyzer`` (background, если включён);
@@ -29,10 +29,379 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from . import crud
+from . import perception
+from . import schemas
+from . import witness_model
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Presence/attention computation (Sprint 1, §7.1).
+# Перенесено из ``crud.py``: присутствие/внимание пересчитываются сервисом
+# поверх чистого ``crud`` (однонаправленно сервис → crud). crud больше не
+# импортирует ``perception``/``witness_model``/``attention``/``sensors_service``.
+# ---------------------------------------------------------------------------
+
+def _attention_score_for(
+    *,
+    message,
+    character_id: int,
+    presence: str,
+    character_names: dict[int, str],
+    rel_targets: set[int],
+    anchor_authors: set[int],
+    sensors_significance: float | None = None,
+) -> float:
+    """Детерминированный attention score пары (персонаж, событие) (§11).
+
+    Sensors ``significance`` (если передан) применяется как подсказка в рамках
+    caps — Sensors не решает доступность информации (presence) и не принимает
+    решение о внимании.
+    """
+    from . import attention
+
+    author_id = getattr(message, "character_id", None)
+    anchor_active = False
+    if author_id is not None:
+        try:
+            anchor_active = int(author_id) in anchor_authors
+        except (TypeError, ValueError):
+            pass
+    score = attention.compute_attention_score(
+        presence=presence,
+        event=perception.event_from_message(message),
+        observer={
+            "character_id": character_id,
+            "name": character_names.get(character_id, ""),
+        },
+        character_names=character_names,
+        relationship_target_ids=rel_targets,
+        anchor_active=anchor_active,
+    )
+    if sensors_significance is not None:
+        score = attention.apply_sensors_significance(score, sensors_significance)
+    return score
+
+
+def _round_text_snippet(round_messages: list, max_len: int = 1500) -> str:
+    """Короткий текст раунда для sensor-задачи (минимальный контекст §5.1.7)."""
+    parts: list[str] = []
+    for message in round_messages:
+        role = getattr(message, "role", None)
+        content = str(getattr(message, "content", "") or "")
+        if not content:
+            continue
+        if role == "user":
+            parts.append(f"Игрок: {content}")
+        elif role == "system":
+            parts.append(f"Система: {content}")
+        else:
+            name = getattr(getattr(message, "character", None), "name", None) or ""
+            parts.append(f"{name}: {content}")
+    snippet = "\n".join(parts)
+    return snippet[:max_len]
+
+
+def _build_perception_world_state(
+    locations: list,
+    thread_deliveries: set[int] | frozenset[int] | None = None,
+) -> perception.PerceptionWorldState | None:
+    """Build the pure world snapshot for the two-channel cutover (Фаза 4).
+
+    ``thread_deliveries`` (Фаза 6) — id персонажей, которым событие доставлено
+    через тред/удалённый канал; источник ``remote_status=delivered`` (§4).
+    """
+    return perception.PerceptionWorldState(
+        adjacency=perception.build_permeability_index(locations or []),
+        thread_deliveries=frozenset(thread_deliveries or ()),
+    )
+
+
+async def _chat_world_state_for_characters(
+    db: AsyncSession, characters: list
+) -> perception.PerceptionWorldState | None:
+    """World snapshot from the chat of ``characters`` (None if flag off / no chat)."""
+    if not settings.world_engine_perception_enabled:
+        return None
+    chat_id = None
+    for character in characters:
+        chat_id = getattr(character, "chat_id", None)
+        if chat_id is not None:
+            break
+    if chat_id is None:
+        return None
+    locations = await crud.get_chat_locations(db, chat_id)
+    return _build_perception_world_state(locations)
+
+
+async def _chat_world_state_for_message(
+    db: AsyncSession, message, characters: list
+) -> perception.PerceptionWorldState | None:
+    """World snapshot scoped to one event (Фаза 6): включает доставки тредов.
+
+    ``thread_deliveries`` события вычисляются из ``ThreadParticipantState``
+    (см. ``thread_delivery_ids_for_message``), чтобы `perceive()` мог отдать
+    ``remote_status=delivered`` адресату независимо от локации (Golden #6).
+    """
+    if not settings.world_engine_perception_enabled:
+        return None
+    chat_id = getattr(message, "chat_id", None)
+    if chat_id is None:
+        for character in characters:
+            chat_id = getattr(character, "chat_id", None)
+            if chat_id is not None:
+                break
+    if chat_id is None:
+        return None
+    locations = await crud.get_chat_locations(db, chat_id)
+    deliveries = await crud.thread_delivery_ids_for_message(db, message)
+    return _build_perception_world_state(locations, thread_deliveries=deliveries)
+
+
+async def compute_and_save_presence_for_message(
+    db: AsyncSession,
+    message,
+    characters: list,
+    character_names: dict[int, str] | None = None,
+) -> dict[int, str]:
+    """Compute and persist presence for one event for all characters.
+
+    Returns {character_id: presence} for the given message.
+
+    Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
+    presence пишется через двухканальный ``perceive()`` (Renderer
+    ``witness_model.perceive_presence_for_character``), а не через legacy
+    ``can_character_perceive_event``. Откат — выключить флаг.
+
+    Фаза 6: world-state строится по событию (включая ``thread_deliveries``),
+    а при ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED`` голосовая атрибуция
+    ``voice_known`` берётся из отношений наблюдателя (WPE.md §4).
+    """
+    names = character_names or {c.id: c.name for c in characters}
+    locations = {c.id: getattr(c, "location", "") or "" for c in characters}
+    message_id = getattr(message, "id", None)
+    if message_id is None:
+        return {}
+
+    world_state = await _chat_world_state_for_message(db, message, characters)
+    known_voices = None
+    if settings.world_engine_partial_perception_enabled:
+        chat_id = getattr(message, "chat_id", None)
+        if chat_id is not None:
+            known_voices = await crud._known_voices_for_chat(db, chat_id)
+
+    # Sprint 4 (§11): attention score считается детерминированно вместе с
+    # presence (только для включённого флага). Sensors perception-proposal не
+    # вызывается на синхронном пути — только в пост-раунд presence pass.
+    attention_ctx: dict[int, dict[str, set[int]]] = {}
+    if settings.attention_enabled:
+        chat_id = getattr(message, "chat_id", None)
+        if chat_id is None:
+            for character in characters:
+                chat_id = getattr(character, "chat_id", None)
+                if chat_id is not None:
+                    break
+        if chat_id is not None:
+            attention_ctx = await crud._attention_context_for_chat(
+                db, chat_id, [c.id for c in characters]
+            )
+
+    records: list[schemas.MessagePresenceCreate] = []
+    result: dict[int, str] = {}
+    for character in characters:
+        if world_state is not None:
+            presence = witness_model.perceive_presence_for_character(
+                message,
+                character,
+                world_state,
+                voice_known=witness_model.voice_familiarity(
+                    character.id,
+                    getattr(message, "character_id", None),
+                    known_voices,
+                ),
+            )
+        else:
+            presence = witness_model.compute_mvp_presence(
+                message,
+                character.id,
+                names,
+                viewer_location=locations.get(character.id, ""),
+                viewer_location_id=getattr(character, "location_id", None),
+                character_locations=locations,
+            )
+        result[character.id] = presence
+        attention = None
+        if attention_ctx:
+            ctx = attention_ctx.get(character.id, {})
+            attention = _attention_score_for(
+                message=message,
+                character_id=character.id,
+                presence=presence,
+                character_names=names,
+                rel_targets=ctx.get("rel_targets", set()),
+                anchor_authors=ctx.get("anchor_authors", set()),
+            )
+        records.append(
+            schemas.MessagePresenceCreate(
+                message_id=message_id,
+                character_id=character.id,
+                presence=presence,
+                attention=attention,
+            )
+        )
+    await crud.upsert_message_presence_batch(db, records)
+    return result
+
+
+async def compute_and_save_presence_for_round(
+    db: AsyncSession,
+    round_messages: list,
+    character_ids: list[int],
+    character_names: dict[int, str],
+    *,
+    characters: list | None = None,
+    character_locations: dict[int, str] | None = None,
+    client: Any = None,
+) -> None:
+    """Persist perception-based presence for all messages in a completed round.
+
+    Cutover (WPE 3.0 Фаза 4): при ``WORLD_ENGINE_PERCEPTION_ENABLED``
+    presence пишется через ``perceive()`` (см. Фаза 4 / Golden #14).
+
+    Фаза 6: для событий удалённых каналов доставки тредов подставляются
+    по-событийно, voice familiarity — из отношений при включённом
+    ``WORLD_ENGINE_PARTIAL_PERCEPTION_ENABLED``.
+
+    Sprint 4 (§11): вместе с presence детерминированно пишется attention score.
+    Sensors perception-proposal (§5.1.3) вызывается только здесь (пост-раунд,
+    один вызов на раунд при ``sensors_perception_enabled``): предложенная
+    ``significance`` применяется как подсказка к attention в рамках
+    ``SENSORS_PERCEPTION_SIGNIFICANCE_CAP``; доступность информации (presence)
+    Sensors не определяет. Недоступен Sensors → детерминированный путь.
+    """
+    if characters is None:
+        characters = []
+        for cid in character_ids:
+            char = await crud.get_character(db, cid)
+            if char is not None:
+                characters.append(char)
+
+    locations = character_locations or {
+        c.id: getattr(c, "location", "") or "" for c in characters
+    }
+    if not locations and character_ids:
+        locations = {cid: "" for cid in character_ids}
+
+    world_state = await _chat_world_state_for_characters(db, characters)
+    known_voices = None
+    chat_id = None
+    if settings.world_engine_partial_perception_enabled and characters:
+        chat_id = getattr(characters[0], "chat_id", None)
+        if chat_id is not None:
+            known_voices = await crud._known_voices_for_chat(db, chat_id)
+    if chat_id is None and characters:
+        chat_id = getattr(characters[0], "chat_id", None)
+
+    # Sprint 4 (§11): attention-контекст персонажей + Sensors perception-подсказка
+    # (significance раунда, один вызов, только пост-раунд).
+    attention_ctx: dict[int, dict[str, set[int]]] = {}
+    sensors_significance: float | None = None
+    if settings.attention_enabled:
+        attention_ctx = await crud._attention_context_for_chat(db, chat_id, character_ids)
+        if chat_id is not None and client is not None:
+            try:
+                from .sensors_service import sensors_service
+
+                if sensors_service.is_enabled("perception"):
+                    minimal_context = _round_text_snippet(round_messages)
+                    if minimal_context:
+                        sensors_result = await sensors_service.run(
+                            client, task="perception", minimal_context=minimal_context
+                        )
+                        if sensors_result is not None:
+                            sensors_significance = sensors_result.get("significance")
+            except Exception:  # noqa: BLE001 — Sensors не должен ронять раунд
+                logger.warning(
+                    "[chat_id=%s] Sensors perception proposal failed; "
+                    "deterministic attention only",
+                    chat_id,
+                )
+
+    records: list[schemas.MessagePresenceCreate] = []
+    for message in round_messages:
+        message_id = getattr(message, "id", None)
+        if message_id is None:
+            continue
+        deliveries = frozenset()
+        if world_state is not None and settings.world_engine_threads_enabled:
+            deliveries = await crud.thread_delivery_ids_for_message(db, message)
+        for character_id in character_ids:
+            if world_state is not None:
+                character = next(
+                    (c for c in characters if c.id == character_id), None
+                )
+                if character is None:
+                    continue
+                message_world_state = (
+                    perception.PerceptionWorldState(
+                        adjacency=world_state.adjacency,
+                        thread_deliveries=deliveries,
+                    )
+                    if deliveries
+                    else world_state
+                )
+                presence = witness_model.perceive_presence_for_character(
+                    message,
+                    character,
+                    message_world_state,
+                    voice_known=witness_model.voice_familiarity(
+                        character.id,
+                        getattr(message, "character_id", None),
+                        known_voices,
+                    ),
+                )
+            else:
+                character = next(
+                    (c for c in characters if c.id == character_id), None
+                )
+                presence = witness_model.compute_mvp_presence(
+                    message,
+                    character_id,
+                    character_names,
+                    viewer_location=locations.get(character_id, ""),
+                    viewer_location_id=(
+                        getattr(character, "location_id", None)
+                        if character is not None
+                        else None
+                    ),
+                    character_locations=locations,
+                )
+            attention = None
+            if attention_ctx:
+                ctx = attention_ctx.get(character_id, {})
+                attention = _attention_score_for(
+                    message=message,
+                    character_id=character_id,
+                    presence=presence,
+                    character_names=character_names,
+                    rel_targets=ctx.get("rel_targets", set()),
+                    anchor_authors=ctx.get("anchor_authors", set()),
+                    sensors_significance=sensors_significance,
+                )
+            records.append(
+                schemas.MessagePresenceCreate(
+                    message_id=message_id,
+                    character_id=character_id,
+                    presence=presence,
+                    attention=attention,
+                )
+            )
+    await crud.upsert_message_presence_batch(db, records)
 
 
 async def _stage_presence(
@@ -52,7 +421,7 @@ async def _stage_presence(
     раунд) только при ``attention_enabled`` — движок сам решает доступность.
     """
     try:
-        await crud.compute_and_save_presence_for_round(
+        await compute_and_save_presence_for_round(
             db,
             round_messages,
             character_ids,

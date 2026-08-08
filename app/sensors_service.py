@@ -27,6 +27,7 @@ import time
 from typing import Any
 
 from .config import settings
+from .llm.generation import invoke_json
 from .sensors.schemas import get_schema, validate_sensor_result
 
 logger = logging.getLogger(__name__)
@@ -153,13 +154,11 @@ class SensorsService:
         current_state: str = "",
         temperature: float = 0.3,
     ) -> str | None:
-        """Вызов Sensors-модели через существующий Ollama-клиент (§5.1.1).
+        """Вызов Sensors-модели через публичный фасад ``llm.generation.invoke_json`` (§5.1.1).
 
         Использует ``SENSORS_MODEL`` (не основную модель генерации). При
         недоступности/timeout/ошибке возвращает None — цикл не падает.
         """
-        from . import ollama_client  # локальный импорт: избегаем циклической связи
-
         if not self.model:
             return None
         schema = get_schema(task)
@@ -169,49 +168,18 @@ class SensorsService:
 
         messages = self.build_prompt(task, minimal_context, current_state)
         runtime = self._task_runtime_options(task) or {}
-        num_ctx = runtime.get("num_ctx")
-        num_predict = runtime.get("num_predict")
         try:
-            if settings.use_chat_api:
-                payload = ollama_client._build_chat_payload(
-                    self.model,
-                    messages,
-                    temperature,
-                    [],
-                    stream=False,
-                    enable_thinking=False,
-                    num_ctx=num_ctx,
-                    num_predict=num_predict,
-                    format_schema=schema,
-                )
-                async with ollama_client.llm_request(self.model, "/api/chat"):
-                    response = await asyncio.wait_for(
-                        client.post("/api/chat", json=payload),
-                        timeout=settings.sensors_timeout,
-                    )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("message", {}).get("content", "") or None
-            prompt = "\n\n".join(m["content"] for m in messages if m.get("content"))
-            payload = ollama_client._build_generate_payload(
+            return await invoke_json(
+                client,
                 self.model,
-                prompt,
-                temperature,
-                [],
-                stream=False,
-                enable_thinking=False,
-                num_ctx=num_ctx,
-                num_predict=num_predict,
+                messages,
+                temperature=temperature,
                 format_schema=schema,
+                timeout=settings.sensors_timeout,
+                enable_thinking=False,
+                num_ctx=runtime.get("num_ctx"),
+                num_predict=runtime.get("num_predict"),
             )
-            async with ollama_client.llm_request(self.model, "/api/generate"):
-                response = await asyncio.wait_for(
-                    client.post("/api/generate", json=payload),
-                    timeout=settings.sensors_timeout,
-                )
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "") or None
         except asyncio.TimeoutError:
             logger.warning("Sensors: timeout задачи %r (model=%s)", task, self.model)
             return None

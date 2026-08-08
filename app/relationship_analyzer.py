@@ -7,7 +7,7 @@ import re
 import httpx
 
 from .config import settings
-from .ollama_client import _invoke_llm, _extract_json_payload
+from .llm.generation import extract_json_payload, invoke_json
 from .schemas import IssueDelta, RelationshipDelta
 
 logger = logging.getLogger(__name__)
@@ -241,7 +241,7 @@ def _parse_analysis_response(
     source_character_id: int,
     target_character_id: int,
 ) -> list[RelationshipDelta]:
-    payload = _extract_json_payload(raw)
+    payload = extract_json_payload(raw)
     if payload is None:
         logger.warning("Failed to extract JSON from relationship analysis: %s", raw[:200])
         return []
@@ -353,7 +353,7 @@ async def analyze_relationships(
     ]
 
     try:
-        raw = await _invoke_llm(
+        raw = await invoke_json(
             client, analyzer_model, messages, temperature=ANALYSIS_TEMP,
         )
     except RuntimeError:
@@ -544,7 +544,7 @@ def _parse_batch_response(
     Returns ``(deltas, orphan_issues)``. Raises ``BatchAnalysisError`` when the
     response contains no parseable JSON.
     """
-    payload = _extract_json_payload(raw)
+    payload = extract_json_payload(raw)
     if payload is None:
         raise BatchAnalysisError("Failed to extract JSON from batch response")
 
@@ -638,7 +638,7 @@ async def analyze_batch_relationships(
     ]
 
     try:
-        raw = await _invoke_llm(
+        raw = await invoke_json(
             client, analyzer_model, messages, temperature=ANALYSIS_TEMP,
         )
     except RuntimeError as exc:

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import crud
 from . import memory_service
 from . import perception
+from . import post_round_pipeline
 from . import schemas
 from .config import settings
 from .context_budget import build_budget
@@ -184,7 +185,7 @@ class ContextBuilder:
             and settings.world_engine_partial_perception_enabled
         )
         world_state = (
-            await crud._chat_world_state_for_characters(db, [character])
+            await post_round_pipeline._chat_world_state_for_characters(db, [character])
             if channel_render
             else None
         )

@@ -33,6 +33,7 @@ from app import chat_engine
 from app import crud
 from app import models
 from app import perception
+from app import post_round_pipeline
 from app import schemas
 from app import witness_model
 from app.config import settings
@@ -248,7 +249,7 @@ async def test_perceive_remote_delivery_independent_of_location(db_session, chat
         targets=(b.id,),
         channel="messenger",
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b, c], _names(three_characters)
     )
     # адресат доставлен → present, хотя в другой локации
@@ -324,7 +325,7 @@ async def test_perceive_glass_edge(db_session, chat, three_characters, monkeypat
         content="секрет за стеклом",
         location="Комната Б",
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b], _names(three_characters)
     )
     # стекло: действия видны → present
@@ -369,7 +370,7 @@ async def test_perceive_scream_through_wall(db_session, chat, three_characters, 
         location="Комната Б",
         stimuli=[{"type": "loud_sound", "audibility": "high"}],
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b], _names(three_characters)
     )
     # без отношений (known_voices не построен — флаг partial off) голос знаком
@@ -411,7 +412,7 @@ async def test_perceive_invisible_same_location(db_session, chat, three_characte
         location="Кухня",
         stimuli=[{"type": "invisible"}],
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b], _names(three_characters)
     )
     # слышно (audio full), но не видно → не present
@@ -438,7 +439,7 @@ async def test_perceive_invisible_flag_off_full(db_session, chat, three_characte
         location="Кухня",
         stimuli=[{"type": "invisible"}],
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b], _names(three_characters)
     )
     assert result[b.id] == "present"
@@ -507,7 +508,7 @@ async def test_presence_voice_familiarity_from_relationships(db_session, chat, t
         location="Комната Б",
         stimuli=[{"type": "loud_sound", "audibility": "high"}],
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b, c], _names(three_characters)
     )
     # знакомый голос → mentioned; незнакомый → audible

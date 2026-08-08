@@ -33,6 +33,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import crud
 from .config import settings
+# Sprint 1 (§7.1): merge_confidence перенесён в crud (crud не импортирует
+# сервисы); belief_service импортирует его оттуда (направление сервис → crud).
+from .crud import merge_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +122,6 @@ def belief_type(source: str, confidence: float, *, confirmed: bool = False) -> s
     if confidence >= _BELIEF_CONFIDENCE:
         return "belief"
     return "suspicion"
-
-
-def merge_confidence(current: float, new: float) -> float:
-    """Слияние уверенности при повторном наблюдении (детерминированное).
-
-    Повторное наблюдение усиливает (идём к новому значению), но не выходит за
-    0..1; слабый новый источник не обнуляет сильное существующее убеждение.
-    """
-    return min(1.0, max(float(current), float(new)))
 
 
 def triplet_from_event(event: dict[str, Any], character_names: dict[int, str]) -> tuple[str, str, str]:

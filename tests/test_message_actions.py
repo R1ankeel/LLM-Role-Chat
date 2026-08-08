@@ -9,6 +9,7 @@ import pytest
 
 from app import chat_engine
 from app import crud
+from app import post_round_pipeline
 from app import schemas
 from tests.conftest import create_characters
 
@@ -76,7 +77,7 @@ async def test_delete_message_removes_presence(db_session, chat):
     msg = replies[0]
     char_names = {c.id: c.name for c in characters}
 
-    await crud.compute_and_save_presence_for_message(
+    await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, characters, char_names
     )
     before = await crud.get_presence_map(db_session, [msg.id], characters[0].id)

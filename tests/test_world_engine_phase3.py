@@ -74,7 +74,9 @@ async def _create_message(
     visibility="local",
     channel="direct",
 ):
-    return await crud.create_message(
+    # Shadow-триггер перенесён из crud в сервисный слой (Sprint 1, §7.1):
+    # тест повторяет контракт `chat_engine._create_message_with_shadow`.
+    message = await crud.create_message(
         db,
         schemas.MessageCreate(
             chat_id=chat_id,
@@ -89,6 +91,8 @@ async def _create_message(
         ),
         round_id=round_id,
     )
+    await wpe_shadow.maybe_run_shadow_perception(db, message)
+    return message
 
 
 async def _world_events(db, message_id: int):
@@ -339,15 +343,12 @@ async def test_shadow_runner_flag_off_noop(db_session, chat, three_characters, m
     author = three_characters[0]
     author.location = "Кухня"
     await db_session.commit()
-    await crud.create_message(
+    await _create_message(
         db_session,
-        schemas.MessageCreate(
-            chat_id=chat.id,
-            character_id=author.id,
-            role="character",
-            content="тихо",
-            location="Кухня",
-        ),
+        chat.id,
+        character_id=author.id,
+        content="тихо",
+        location="Кухня",
     )
     assert wpe_shadow.wpe_shadow_stats_snapshot()["events"] == 0
 

@@ -23,6 +23,7 @@ import app.ollama_client as ollama_client
 from app import chat_engine
 from app import crud
 from app import perception
+from app import post_round_pipeline
 from app import schemas
 from app import witness_model
 from app.config import settings
@@ -248,7 +249,7 @@ async def test_cutover_presence_same_location_present(
         content="пошли на кухню",
         location="Кухня",
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b, c], _names(three_characters)
     )
     # одна локация (по id после backfill) → present
@@ -276,7 +277,7 @@ async def test_cutover_presence_distant_absent(
         content="секрет",
         location="Кухня",
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b, c], _names(three_characters)
     )
     assert result[a.id] == "present"
@@ -303,7 +304,7 @@ async def test_cutover_flag_off_legacy_unchanged(
         content="пошли",
         location="Кухня",
     )
-    result = await crud.compute_and_save_presence_for_message(
+    result = await post_round_pipeline.compute_and_save_presence_for_message(
         db_session, msg, [a, b, c], _names(three_characters)
     )
     # флаг off → legacy `can_character_perceive_event`: без adjacency_index

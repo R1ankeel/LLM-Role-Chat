@@ -180,7 +180,7 @@ class TestAnalyzeBatchRelationships:
             )
 
         monkeypatch.setattr(
-            "app.relationship_analyzer._invoke_llm", fake_invoke
+            "app.relationship_analyzer.invoke_json", fake_invoke
         )
         deltas, orphan = await analyze_batch_relationships(
             client=object(),
@@ -201,7 +201,7 @@ class TestAnalyzeBatchRelationships:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "app.relationship_analyzer._invoke_llm", fake_invoke
+            "app.relationship_analyzer.invoke_json", fake_invoke
         )
         with pytest.raises(BatchAnalysisError):
             await analyze_batch_relationships(
