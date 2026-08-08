@@ -71,7 +71,10 @@ function onBackdrop(e: MouseEvent) {
 <style scoped>
 .modal-backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 100dvh;
   z-index: 100;
   display: flex;
   align-items: center;
@@ -86,6 +89,7 @@ function onBackdrop(e: MouseEvent) {
   min-width: 0;
   max-width: 100%;
   max-height: min(80vh, 640px);
+  max-height: min(80dvh, 640px);
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
@@ -141,6 +145,7 @@ function onBackdrop(e: MouseEvent) {
     width: 100%;
     max-width: 100%;
     max-height: 90vh;
+    max-height: 90dvh;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 }

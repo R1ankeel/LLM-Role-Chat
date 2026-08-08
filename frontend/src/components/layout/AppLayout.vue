@@ -155,12 +155,15 @@ onBeforeUnmount(() => {
 .app-layout {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg-primary);
 }
 
 .app-layout__sidebar {
+  grid-row: 2;
   grid-column: 1;
   width: var(--sidebar-width);
   transition: width var(--transition-base);
@@ -174,6 +177,7 @@ onBeforeUnmount(() => {
 }
 
 .app-layout__main {
+  grid-row: 2;
   grid-column: 2;
   min-width: 0;
   min-height: 0;
@@ -184,6 +188,7 @@ onBeforeUnmount(() => {
 }
 
 .app-layout__right {
+  grid-row: 2;
   grid-column: 3;
   width: var(--right-panel-width);
   background: var(--bg-secondary);
@@ -200,7 +205,10 @@ onBeforeUnmount(() => {
 /* Drawers + backdrop (tablet/mobile) */
 .app-layout__backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 100dvh;
   z-index: var(--z-drawer);
   background: rgba(8, 10, 16, 0.6);
   backdrop-filter: blur(2px);
@@ -209,7 +217,7 @@ onBeforeUnmount(() => {
 .app-layout__drawer {
   position: fixed;
   top: 0;
-  bottom: 0;
+  height: 100dvh;
   z-index: var(--z-drawer);
   width: min(88vw, var(--sidebar-width));
   background: var(--bg-secondary);
@@ -254,6 +262,7 @@ onBeforeUnmount(() => {
 
 /* Offline banner */
 .app-layout__offline {
+  grid-row: 1;
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
