@@ -115,6 +115,49 @@ async def _sync_chat_player_location(
     db_chat.player_location = db_character.location
 
 
+async def resolve_player_location(
+    db: AsyncSession, chat_id: int
+) -> models.Location | None:
+    """Resolve the player's canonical location and reconcile representations.
+
+    Canonical identity is the ``Location`` row (by ``location_id``, else by
+    name). When the canonical location is determined and the legacy strings
+    (``chats.player_location`` / player character ``location``) drift from it,
+    they are healed to the canonical name — restoring consistency rather than
+    picking a "winner" between two strings. Returns the canonical ``Location``
+    or ``None`` when none is resolvable (shared scene / unknown name).
+    """
+    player = await get_player_character(db, chat_id)
+    chat = await get_chat(db, chat_id)
+    if player is None or chat is None:
+        return None
+
+    canonical: models.Location | None = None
+    if player.location_id is not None:
+        canonical = await get_location(db, player.location_id)
+    if canonical is None:
+        locations = await get_chat_locations(db, chat_id)
+        canonical = resolve_location_name(locations, chat.player_location) or (
+            resolve_location_name(locations, player.location)
+        )
+    if canonical is None:
+        return None
+
+    changed = False
+    if (chat.player_location or "") != canonical.name:
+        chat.player_location = canonical.name
+        changed = True
+    if (player.location or "") != canonical.name:
+        player.location = canonical.name
+        changed = True
+    if player.location_id != canonical.id:
+        player.location_id = canonical.id
+        changed = True
+    if changed:
+        await db.commit()
+    return canonical
+
+
 async def delete_chat(db: AsyncSession, chat_id: int) -> bool:
     db_chat = await get_chat(db, chat_id)
     if db_chat is None:
@@ -1731,6 +1774,7 @@ async def compute_and_save_presence_for_message(
                 character.id,
                 names,
                 viewer_location=locations.get(character.id, ""),
+                viewer_location_id=getattr(character, "location_id", None),
                 character_locations=locations,
             )
         result[character.id] = presence
@@ -1865,11 +1909,19 @@ async def compute_and_save_presence_for_round(
                     ),
                 )
             else:
+                character = next(
+                    (c for c in characters if c.id == character_id), None
+                )
                 presence = witness_model.compute_mvp_presence(
                     message,
                     character_id,
                     character_names,
                     viewer_location=locations.get(character_id, ""),
+                    viewer_location_id=(
+                        getattr(character, "location_id", None)
+                        if character is not None
+                        else None
+                    ),
                     character_locations=locations,
                 )
             attention = None

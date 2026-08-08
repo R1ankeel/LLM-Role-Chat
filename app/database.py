@@ -418,6 +418,24 @@ def ensure_schema(db_engine) -> None:
             )
             logger.info("Added stimuli column to messages")
 
+        # WPE 3.0: canonical location FK for messages (nullable — legacy rows
+        # keep NULL and use the string fallback in perception). `location`
+        # remains the legacy string snapshot; `location_id` is the identity.
+        if "location_id" not in message_columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE messages ADD COLUMN location_id "
+                    "INTEGER REFERENCES locations(id) ON DELETE SET NULL"
+                )
+            )
+            logger.info("Added location_id column to messages")
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_messages_location_id "
+                    "ON messages (location_id)"
+                )
+            )
+
         # ----- Locations table (Локации 2.0) -----
         # Источник истины для CRUD и описаний локаций; `chats.locations`
         # остаётся кэшем названий для движка.

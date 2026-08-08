@@ -77,6 +77,7 @@ def compute_mvp_presence(
     *,
     same_round_ids: set[int] | None = None,
     viewer_location: str | None = None,
+    viewer_location_id: Any = None,
     character_locations: dict[int, str] | None = None,
     adjacency_index: dict[str, set[str]] | None = None,
     world_state: PerceptionWorldState | None = None,
@@ -124,6 +125,7 @@ def compute_mvp_presence(
         event=event,
         viewer_name=viewer_name,
         adjacency_index=adjacency_index,
+        viewer_location_id=viewer_location_id,
     )
 
     log_perception_decision(

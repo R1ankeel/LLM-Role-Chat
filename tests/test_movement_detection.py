@@ -15,7 +15,7 @@ import pytest
 from app import chat_engine
 from app import crud
 from app import schemas
-from app.movement import detect_character_movement
+from app.movement import detect_character_movement, movement_signal
 
 
 def _run_in_current_thread(func, /, *args, **kwargs):
@@ -80,6 +80,152 @@ class TestDetectCharacterMovement:
     def test_empty_destination_scene_not_triggered(self):
         clocs_empty = {1: "", 2: "Кухня"}
         assert detect_character_movement("Я зашёл в коридор", "Анна", KNOWN, clocs_empty, CNAMES) == "Коридор"
+
+    # ---- Sprint 4 §18 additions: imperfective present forms ----
+
+    def test_imperfect_verb_movement(self):
+        # «выхожу … и иду в общий зал» — imperfective present movement
+        assert movement_signal("Я выхожу из комнаты и иду в общий зал.") is True
+        assert detect_character_movement(
+            "Я выхожу из комнаты и иду в общий зал.",
+            "Елизавета",
+            ["Общий зал", "Комната Елизаветы"],
+            CLOCS,
+            CNAMES,
+        ) == "Общий зал"
+
+    def test_imperfect_departure_signal(self):
+        assert movement_signal("Я выхожу из комнаты.") is True
+
+    def test_thinking_clause_does_not_suppress(self):
+        # «думаю» in a following clause must NOT suppress the departure movement
+        assert detect_character_movement(
+            "Я выхожу из комнаты. Думаю, сегодня будет хороший день.",
+            "Елизавета",
+            ["Общий зал"],
+            CLOCS,
+            CNAMES,
+        ) == "Общий зал"
+
+    def test_thinking_clause_signal(self):
+        assert movement_signal("Я выхожу из комнаты. Думаю, сегодня будет хороший день.") is True
+
+    def test_hypothetical_not_movement(self):
+        assert detect_character_movement("Я бы пошёл в лес.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) is None
+
+    def test_thought_not_movement(self):
+        assert detect_character_movement("Я думаю о лесе.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) is None
+
+    def test_negation_not_movement(self):
+        assert movement_signal("Я не иду в лес.") is False
+        assert detect_character_movement("Я не иду в лес.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) is None
+
+    def test_intent_not_movement(self):
+        assert movement_signal("Я собираюсь пойти в лес.") is False
+
+    def test_spatial_anchor_only_for_actual_movement(self):
+        # «выходит победителем из спора» — нет пространственного якоря у глагола
+        assert movement_signal("Она выходит победителем из спора.") is False
+        assert detect_character_movement(
+            "Она выходит победителем из спора.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES
+        ) is None
+
+    def test_follow_not_destination(self):
+        # «идёт следом за» — не движение к локации
+        assert detect_character_movement(
+            "Кирк идёт следом за Елизаветой.",
+            "Кирк",
+            ["Комната Кирка", "Общий зал"],
+            CLOCS,
+            CNAMES,
+        ) is None
+
+    def test_movement_without_destination(self):
+        # «идёт по коридору» — движение без цели: сигнал есть, локации нет
+        assert movement_signal("Кирк идёт по коридору.") is True
+        assert detect_character_movement(
+            "Кирк идёт по коридору.", "Кирк", ["Коридор", "Общий зал"], CLOCS, CNAMES
+        ) is None
+
+    def test_ambiguous_room_none(self):
+        # «Я иду в комнату» — три «Комната …» → невозможно надёжно определить
+        rooms = ["Комната Кирка", "Комната Елизаветы", "Комната Антона и Анастасии"]
+        assert detect_character_movement("Я иду в комнату.", "Кирк", rooms, CLOCS, CNAMES) is None
+
+    def test_explicit_room_resolves(self):
+        rooms = ["Комната Кирка", "Комната Елизаветы"]
+        assert detect_character_movement("Я иду в комнату Кирка.", "Кирк", rooms, CLOCS, CNAMES) == "Комната Кирка"
+
+    def test_remain_not_movement(self):
+        assert movement_signal("Я остаюсь на кухне.") is False
+        assert detect_character_movement(
+            "Я остаюсь на кухне.", "Кирк", ["Кухня", "Общий зал"], CLOCS, CNAMES
+        ) is None
+
+    def test_cross_sentence_no_false_positive(self):
+        # «в сторону кухни» (не цель) + статичная сцена → не «Лес у таверны»
+        assert detect_character_movement(
+            "Я иду в сторону кухни. В таверне было тихо.",
+            "Кирк",
+            ["Лес у таверны", "Общий зал"],
+            CLOCS,
+            CNAMES,
+        ) != "Лес у таверны"
+
+    def test_substring_compound_location_rejected(self):
+        # «в таверну» — не «Лес у таверны» (матчится только ведущее слово «лес»)
+        assert detect_character_movement("В таверне было тихо.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) is None
+        assert detect_character_movement("Я вошёл в таверну.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) is None
+
+    def test_leading_word_compound_location(self):
+        assert detect_character_movement("Я иду в лес.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) == "Лес у таверны"
+
+    def test_verbose_same(self):
+        assert detect_character_movement("Кирк идёт в лес.", "Кирк", ["Лес у таверны"], CLOCS, CNAMES) == "Лес у таверны"
+
+    def test_arrival_to_character_same(self):
+        # «иду к Кирку» → его локация (единственная известная)
+        assert detect_character_movement(
+            "Я иду к Кирку.", "Анна", ["Комната Кирка"], CLOCS, CNAMES
+        ) == "Комната Кирка"
+
+    def test_arrival_to_character_different(self):
+        # тот же текст, но говорящий сам Кирк → движение к себе не засчитывается
+        assert detect_character_movement(
+            "Я иду к Кирку.", "Кирк", ["Комната Кирка"], CLOCS, CNAMES
+        ) is None
+
+
+class TestMovementSignal:
+    """Boolean movement evidence (Isolation FIS, §10-§11)."""
+
+    def test_thought_signal_false(self):
+        assert movement_signal("Я думаю о лесной дороге.") is False
+
+    def test_static_scene_signal_false(self):
+        assert movement_signal("В лесу было тихо.") is False
+
+    def test_negation_signal_false(self):
+        assert movement_signal("Я не иду в лес.") is False
+
+    def test_intent_signal_false(self):
+        assert movement_signal("Я собираюсь пойти в лес.") is False
+
+    def test_spatial_anchor_only_for_actual_movement(self):
+        assert movement_signal("Она выходит победителем из спора.") is False
+
+    def test_movement_without_destination_signal(self):
+        assert movement_signal("Кирк идёт по коридору.") is True
+
+    def test_remain_not_movement(self):
+        assert movement_signal("Я остаюсь на кухне.") is False
+
+    def test_verbose_signal(self):
+        assert movement_signal("Кирк идёт в лес.") is True
+
+    def test_speaker_isolation_kirk(self):
+        # char_text для Кирка — только его реплика: «Я остаюсь на кухне.»
+        assert movement_signal("Я остаюсь на кухне.") is False
 
 
 @pytest.fixture

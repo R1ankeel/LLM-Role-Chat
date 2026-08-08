@@ -329,6 +329,7 @@ class MessageCreate(MessageBase):
     character_id: Optional[int] = None
     visibility: EventVisibility = settings.default_event_visibility  # type: ignore[assignment]
     location: str = ""
+    location_id: Optional[int] = None
     target_character_ids: list[int] = Field(default_factory=list)
     channel: CommunicationChannel = "direct"
     stimuli: list[dict] = Field(default_factory=list)
@@ -364,6 +365,7 @@ class MessageRead(MessageBase):
     character_id: Optional[int] = None
     visibility: str = settings.default_event_visibility
     location: str = ""
+    location_id: Optional[int] = None
     target_character_ids: list[int] = Field(default_factory=list)
     channel: str = "direct"
     stimuli: list[dict] = Field(default_factory=list)
@@ -383,6 +385,7 @@ class MessageRead(MessageBase):
                 "content": getattr(data, "content", None),
                 "visibility": getattr(data, "visibility", settings.default_event_visibility),
                 "location": getattr(data, "location", "") or "",
+                "location_id": getattr(data, "location_id", None),
                 "target_character_ids": getattr(data, "target_character_ids", "[]"),
                 "channel": getattr(data, "channel", "direct") or "direct",
                 "stimuli": getattr(data, "stimuli", "[]"),

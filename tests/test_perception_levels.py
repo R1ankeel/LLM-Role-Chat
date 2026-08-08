@@ -326,3 +326,109 @@ async def test_rename_updates_adjacency_references(db_session, chat):
     index = await crud.get_adjacency_index(db_session, chat.id)
     assert "кухня-2" in index
     assert "гостиная" in index["кухня-2"]
+
+
+# --------- WPE 3.0 canonical location_id (isolation-fix, location-ids) ---------
+def test_same_location_id_visible_even_when_strings_differ():
+    """Одинаковый canonical id → visible даже при синонимичных строках локаций."""
+    level, reason = perception.get_perception_level(
+        viewer_location="living room",
+        event_location="гостиная",
+        event_location_id=7,
+        viewer_location_id=7,
+    )
+    assert level == "visible"
+    assert reason == "SAME_LOCATION"
+
+
+def test_different_location_id_absent_even_when_strings_match():
+    """Разные canonical ids → НЕ co-located даже при совпадении строк (isolation)."""
+    level, reason = perception.get_perception_level(
+        viewer_location="Гостиная",
+        event_location="Гостиная",
+        event_location_id=3,
+        viewer_location_id=9,
+    )
+    assert level == "absent"
+    assert reason == "DIFFERENT_LOCATION"
+
+
+def test_location_id_bridge_no_ids_falls_back_to_strings():
+    """Без id (legacy-строки) — строковое сравнение как раньше."""
+    level, reason = perception.get_perception_level(
+        viewer_location="Гостиная",
+        event_location="Гостиная",
+        event_location_id=None,
+        viewer_location_id=None,
+    )
+    assert level == "visible"
+    assert reason == "SAME_LOCATION"
+
+
+def test_different_ids_address_still_absent():
+    """Address по имени из другой канонической локации → absent (isolation §1.4)."""
+    level, reason = perception.get_perception_level(
+        viewer_location="Гостиная",
+        event_location="Гостиная",
+        event_location_id=3,
+        viewer_location_id=9,
+        adjacency_index=_ADJ,
+        stimuli=[Stimulus(type="address", target_character="Борис")],
+        viewer_name="Борис",
+    )
+    assert level == "absent"
+
+
+def test_same_id_beats_stimuli_visible():
+    """Co-location (same id) → visible вне зависимости от стимулов (§1.4)."""
+    level, reason = perception.get_perception_level(
+        viewer_location="kitchen",
+        event_location="кухня",
+        event_location_id=5,
+        viewer_location_id=5,
+        adjacency_index=_ADJ,
+        stimuli=[Stimulus(type="knock", audibility="high")],
+    )
+    assert level == "visible"
+    assert reason == "SAME_LOCATION"
+
+
+def _remote_event(*, location_id: int | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=1,
+        role="character",
+        character_id=2,
+        content="Звоню по делу.",
+        location="Гостиная",
+        location_id=location_id,
+        visibility="local",
+        channel="phone",
+        target_character_ids="[1]",
+        stimuli=[],
+    )
+
+
+def test_remote_channel_bridge_uses_canonical_ids():
+    """Удалённый канал мостит локации только при разных canonical ids."""
+    present, reason = perception.can_character_perceive_event(
+        viewer_character_id=1,
+        viewer_location="Гостиная",
+        event=_remote_event(location_id=3),
+        viewer_name="Борис",
+        viewer_location_id=9,
+    )
+    assert present == "present"
+    assert reason.startswith("REMOTE_CHANNEL_")
+
+
+def test_remote_channel_same_id_falls_through_to_local():
+    """Тот же canonical id → НЕ удалённый мост, а локальное восприятие."""
+    present, reason = perception.can_character_perceive_event(
+        viewer_character_id=1,
+        viewer_location="Гостиная",
+        event=_remote_event(location_id=3),
+        viewer_name="Борис",
+        viewer_location_id=3,
+    )
+    assert present == "present"
+    assert reason == "SAME_LOCATION"

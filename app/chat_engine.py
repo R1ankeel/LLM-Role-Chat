@@ -172,6 +172,7 @@ def _message_snapshot(m) -> dict:
         "character_id": getattr(m, "character_id", None),
         "content": getattr(m, "content", "") or "",
         "location": getattr(m, "location", "") or "",
+        "location_id": getattr(m, "location_id", None),
         "visibility": (
             getattr(m, "visibility", None)
             or settings.default_event_visibility
@@ -220,6 +221,7 @@ def _effective_prior_replies(
     viewer_name: str,
     character_names: dict[int, str],
     adjacency_index: dict[str, set[str]] | None = None,
+    viewer_location_id: Any = None,
 ) -> list[tuple[str, str]]:
     """Per-viewer filter of this round's prior replies (§10).
 
@@ -247,6 +249,7 @@ def _effective_prior_replies(
             event=event,
             viewer_name=viewer_name,
             adjacency_index=adjacency_index,
+            viewer_location_id=viewer_location_id,
         )
         author_name = character_names.get(author_id, "")
         if presence in ("present", "told"):
@@ -461,6 +464,55 @@ def _is_location_allowed(location: str, allowed: set[str]) -> bool:
         return True  # if no locations defined, everything is allowed
     return location.strip().casefold() in allowed
 
+
+def _build_character_round_text(round_messages: list, character_id: int) -> str:
+    """Join a single character's own lines from the current round.
+
+    Speaker isolation for the scene-state movement gate: a character is only
+    confirmed by THEIR OWN speech, never by the combined round history
+    (Елизавета's «иду в общий зал» must not move Кирка). The user message and
+    system remarks (no ``character``) are excluded.
+    """
+    return "\n".join(
+        m.content
+        for m in round_messages
+        if m.character is not None
+        and m.character.id == character_id
+        and m.content
+    )
+
+
+def _scene_gate_confirms(
+    round_messages: list,
+    character_id: int,
+    character_name: str,
+    proposed_location: str,
+    known_locations: list[str],
+    character_locations: dict[int, str],
+    character_names: dict[int, str],
+) -> bool:
+    """Scene-state gate: confirm an LLM-proposed location for one character.
+
+    The LLM scene extraction proposes ``character_locations``, but a move is
+    only applied when the character's OWN round speech corroborates it — the
+    combined history is never used (speaker isolation). ``None`` from the
+    detector means "no corroboration" (and is not a crash).
+    """
+    if not proposed_location or not proposed_location.strip():
+        return False
+    char_text = _build_character_round_text(round_messages, character_id)
+    detected = detect_character_movement(
+        char_text,
+        character_name,
+        known_locations,
+        character_locations,
+        character_names,
+    )
+    if detected is None:
+        return False
+    return detected.strip().casefold() == proposed_location.strip().casefold()
+
+
 # Remote communication channel keywords (Russian)
 _CHANNEL_PATTERNS: list[tuple[str, list[str]]] = [
     ("magic", ["маги", "заклинани", "телепати", "магическ", "ментальн", "телекин", "мистическ", "закляти"]),
@@ -584,7 +636,16 @@ async def process_user_message_streaming(
 
     history_limit = getattr(chat, "max_history_length", settings.default_history_length)
     enable_thinking = bool(getattr(chat, "thinking_mode", settings.enable_thinking))
-    player_location = getattr(chat, "player_location", "") or ""
+    # WPE 3.0: canonical player location (Location id as identity). Resolving
+    # here also heals any legacy string drift (chats.player_location vs player
+    # character location) toward the canonical Location — defence-in-depth, no
+    # second source of truth.
+    canonical_location = await crud.resolve_player_location(db, chat_id)
+    player_location = (
+        canonical_location.name if canonical_location is not None
+        else (getattr(chat, "player_location", "") or "")
+    )
+    player_location_id = canonical_location.id if canonical_location is not None else None
     chat_locations = getattr(chat, "locations", "") or "[]"
     location_descriptions = await _load_location_descriptions(db, chat_id)
 
@@ -612,6 +673,7 @@ async def process_user_message_streaming(
             content=user_text,
             visibility=event_visibility,
             location=player_location,
+            location_id=player_location_id,
             target_character_ids=event_targets,
             stimuli=[
                 s.to_dict()
@@ -644,6 +706,9 @@ async def process_user_message_streaming(
     character_locations = {
         c.id: getattr(c, "location", "") or "" for c in characters
     }
+    character_location_ids = {
+        c.id: getattr(c, "location_id", None) for c in characters
+    }
     player_id = next(
         (c.id for c in all_characters if getattr(c, "is_player", False)),
         None,
@@ -654,6 +719,29 @@ async def process_user_message_streaming(
         )
         if player_obj is not None:
             character_locations[player_id] = getattr(player_obj, "location", "") or ""
+            character_location_ids[player_id] = getattr(
+                player_obj, "location_id", None
+            )
+
+    # Canonical name -> Location id lookup for the round (WPE 3.0). Used to
+    # stamp messages with the canonical `location_id` even after in-round
+    # movement (the in-memory character object's location_id may be stale).
+    loc_id_by_name: dict[str, int] = {}
+    try:
+        _chat_locations_orm = await crud.get_chat_locations(db, chat_id)
+        loc_id_by_name = {
+            crud.perception.normalize_location(loc.name): loc.id
+            for loc in _chat_locations_orm
+        }
+    except Exception as exc:  # noqa: BLE001 — локации не роняют раунд
+        logger.warning("[chat_id=%d] Failed to load location ids: %s", chat_id, exc)
+
+    def _resolve_loc_id(loc_name: str | None, fallback: int | None = None) -> int | None:
+        if loc_name:
+            found = loc_id_by_name.get(crud.perception.normalize_location(loc_name))
+            if found is not None:
+                return found
+        return fallback
 
     # Known location names for deterministic movement detection (Sprint 4, §9-§11).
     known_locations = _parse_known_locations(
@@ -887,6 +975,7 @@ async def process_user_message_streaming(
             current_character.name,
             character_names,
             adjacency_index=adjacency_index,
+            viewer_location_id=getattr(current_character, "location_id", None),
         )
 
         # MVP epistemic mask (Sprint 2 item 10, docs/relations.md §10): a
@@ -1317,6 +1406,9 @@ async def process_user_message_streaming(
                 content=response_text,
                 visibility=msg_visibility,
                 location=char_location,
+                location_id=_resolve_loc_id(
+                    char_location, character_location_ids.get(current_character.id)
+                ),
                 target_character_ids=msg_targets,
                 channel=msg_channel,
                 stimuli=[
@@ -1421,14 +1513,15 @@ async def process_user_message_streaming(
                                 chat_id, new_loc, cname,
                             )
                         elif (
-                            detect_character_movement(
-                                round_history_text,
+                            _scene_gate_confirms(
+                                round_messages,
+                                cid,
                                 cname,
+                                new_loc,
                                 known_locations,
                                 character_locations,
                                 character_names,
-                            ).strip().casefold()
-                            == new_loc.casefold()
+                            )
                         ):
                             loc_updates[cid] = new_loc
                             confirmed_locs[cname] = new_loc
@@ -2300,6 +2393,7 @@ def _build_pair_relationship_context(
                 viewer_location=source_location,
                 event=snap,
                 viewer_name=source_name,
+                viewer_location_id=getattr(source, "location_id", None),
             )[0]
             if explicit_address or (co_present and mentions_source) or only_two_present:
                 direct_interaction = True
@@ -2322,6 +2416,7 @@ def _build_pair_relationship_context(
                 viewer_location=source_location,
                 event=snap,
                 viewer_name=source_name,
+                viewer_location_id=getattr(source, "location_id", None),
             )[0]
             if presence == "absent":
                 continue
@@ -2881,6 +2976,7 @@ async def regenerate_message_streaming(
             viewer_location=character_locations.get(character.id, "") or "",
             event=prior,
             viewer_name=character.name,
+            viewer_location_id=getattr(character, "location_id", None),
         )
         if presence in ("present", "told"):
             prior_replies.append((prior_char.name, prior.content))
@@ -3087,6 +3183,11 @@ async def regenerate_message_streaming(
 
     # Persist the new reply, then drop the old one
     char_location = character_locations.get(character.id, "") or ""
+    _char_location_obj = await crud.resolve_location_string(db, chat_id, char_location)
+    char_location_id = (
+        _char_location_obj.id if _char_location_obj is not None
+        else getattr(character, "location_id", None)
+    )
     msg_channel, msg_targets = _detect_communication_channel(
         response_text, character.name, character_names
     )
@@ -3102,6 +3203,7 @@ async def regenerate_message_streaming(
             content=response_text,
             visibility=msg_visibility,
             location=char_location,
+            location_id=char_location_id,
             target_character_ids=msg_targets,
             channel=msg_channel,
             stimuli=[

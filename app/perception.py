@@ -63,6 +63,28 @@ def locations_match(a: str | None, b: str | None) -> bool:
     return normalize_location(a) == normalize_location(b)
 
 
+def same_location_identity(
+    *,
+    viewer_location: str | None,
+    event_location: str | None,
+    viewer_location_id: Any = None,
+    event_location_id: Any = None,
+) -> bool:
+    """Canonical co-location (WPE 3.0): location_id identity when both sides
+    have it, else legacy string comparison (``locations_match``).
+
+    Two distinct canonical locations that share the same label (e.g. renamed
+    "Кухня" vs stale "Кухня" row) are NOT co-located — the id is the source of
+    truth; the string is only a legacy-bridge fallback for rows without ids.
+    """
+    if viewer_location_id is not None and event_location_id is not None:
+        try:
+            return int(viewer_location_id) == int(event_location_id)
+        except (TypeError, ValueError):
+            pass
+    return locations_match(viewer_location, event_location)
+
+
 def compute_is_isolated(
     char_loc: str | None,
     other_char_locs: list[str | None],
@@ -188,18 +210,31 @@ def get_perception_level(
     targets: list[int] | None = None,
     viewer_character_id: int | None = None,
     channel: str = "direct",
+    event_location_id: Any = None,
+    viewer_location_id: Any = None,
 ) -> tuple[PerceptionLevel, str]:
     """Decide how well a character perceives a spatially-scoped (LOCAL) event.
 
     Rules (ТЗ §6-§8, §14; Plans/isolation-fix.md §1.4):
-    - Same location → ``visible`` regardless of stimuli.
+    - Same location → ``visible`` regardless of stimuli. Co-location is decided
+      by canonical ``location_id`` (WPE 3.0) when both sides have it; the
+      string comparison is only a fallback for legacy rows without ids.
     - ``address``/``call`` aimed at the viewer from an adjacent location →
       ``mentioned`` (only physically reachable addressing).
     - Loud stimulus (knock/shout/loud_sound/call) from an adjacent location →
       ``audible``.
     - Far unrelated location → ``absent`` even when addressed by name.
     """
-    if locations_match(viewer_location, event_location):
+    ids_known = event_location_id is not None and viewer_location_id is not None
+    same_id = False
+    if ids_known:
+        try:
+            same_id = int(event_location_id) == int(viewer_location_id)
+        except (TypeError, ValueError):
+            ids_known = False
+    if same_id:
+        return "visible", "SAME_LOCATION"
+    if not ids_known and locations_match(viewer_location, event_location):
         return "visible", "SAME_LOCATION"
 
     stimulus_list = parse_stimuli(stimuli)
@@ -295,6 +330,7 @@ def event_from_message(message: Any) -> dict[str, Any]:
         "character_id": _get_attr(message, "character_id"),
         "content": _get_attr(message, "content") or "",
         "location": _get_attr(message, "location") or "",
+        "location_id": _get_attr(message, "location_id"),
         "visibility": normalize_visibility(_get_attr(message, "visibility")),
         "channel": (_get_attr(message, "channel") or "direct").strip().lower(),
         "target_character_ids": parse_target_ids(
@@ -313,12 +349,15 @@ def can_character_perceive_event(
     event: dict[str, Any] | Any,
     viewer_name: str = "",
     adjacency_index: Mapping[str, set[str]] | None = None,
+    viewer_location_id: Any = None,
 ) -> tuple[Presence, str]:
     """Decide if a character may receive an event in their LLM context.
 
     Returns (presence, reason_code).
     Supports remote channels (magic/phone/radio/messenger) that bridge locations.
     ``adjacency_index`` enables AUDIBLE / MENTIONED levels for adjacent locations.
+    ``viewer_location_id`` (WPE 3.0 canonical identity, optional) is preferred
+    over string comparison when both the viewer and the event have ids.
     """
     if not isinstance(event, dict):
         event = event_from_message(event)
@@ -326,6 +365,7 @@ def can_character_perceive_event(
     role = (event.get("role") or "").strip().lower()
     visibility = normalize_visibility(event.get("visibility"))
     event_location = event.get("location") or ""
+    event_location_id = event.get("location_id")
     author_id = event.get("character_id")
     targets = parse_target_ids(event.get("target_character_ids"))
     content = event.get("content") or ""
@@ -360,8 +400,11 @@ def can_character_perceive_event(
     # hears the speech in person, so the channel label attached by the model or
     # the keyword detector must not hide it nor upgrade it to a remote delivery —
     # fall through to the local spatial path below (isolation hardening).
-    if channel in REMOTE_CHANNELS and not locations_match(
-        viewer_location, event_location
+    if channel in REMOTE_CHANNELS and not same_location_identity(
+        viewer_location=viewer_location,
+        event_location=event_location,
+        viewer_location_id=viewer_location_id,
+        event_location_id=event_location_id,
     ):
         if viewer_character_id in targets:
             return "present", f"REMOTE_CHANNEL_{channel.upper()}"
@@ -381,6 +424,8 @@ def can_character_perceive_event(
         targets=targets,
         viewer_character_id=viewer_character_id,
         channel=channel,
+        event_location_id=event_location_id,
+        viewer_location_id=viewer_location_id,
     )
     return _LEVEL_TO_PRESENCE[level], reason
 

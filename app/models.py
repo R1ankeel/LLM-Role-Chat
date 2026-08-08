@@ -320,6 +320,12 @@ class Message(Base):
         String(20), default=settings.default_event_visibility, nullable=False
     )
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    # WPE 3.0: canonical identity of the event's location (nullable — legacy
+    # rows keep NULL and use the string fallback in perception). `location`
+    # stays the string snapshot of the same canonical Location's name.
+    location_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # JSON list of character ids for private/targeted events
     target_character_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     # Communication channel: direct | magic | phone | radio | messenger
