@@ -11,7 +11,6 @@ from sqlalchemy import delete, select
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from . import crud
-from . import embedding_service
 from . import models
 from .config import settings
 from .database import AsyncSessionLocal
