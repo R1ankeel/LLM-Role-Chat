@@ -1,7 +1,9 @@
 # План декомпозиции по спринтам
 
-> Статус: **в работе** — спринты 1–3 выполнены (коммиты `9ee9bba`, `2416bff`,
-> `7438b12`, `d6832f8`), следующий — спринт 4 (`crud/`) (ревизия 2026-08-09)
+> Статус: **в работе** — спринты 1–4 выполнены (коммиты `9ee9bba`, `2416bff`,
+> `7438b12`, `d6832f8`; спринт 4 — ревизия 2026-08-09, коммит не создан —
+> `app/crud/` в рабочем дереве), следующий — спринт 5 (`llm/` + `pipeline/`)
+> (ревизия 2026-08-09)
 > Дата: 2026-08-09
 > Исходник: [Plans/decomposition.md](decomposition.md) — §9 (поэтапный план) и §10 (риски)
 > Правило: код в рамках этой работы не меняется по логике — только перенос,
@@ -142,6 +144,56 @@
 `schemas-classes-before.txt`, `schemas-api-after.txt`, `schemas-classes-after.txt`;
 `docs/deps-after-sprint3.md`; `docs/database.md` (обновлён — раздел про пакет `db/`);
 `docs/schemas.md`.
+
+### Спринт 4 — выполнено (ревизия 2026-08-09; коммит не создан — `app/crud/` в рабочем дереве)
+
+**Что сделано (все шаги §5, под-этапы A–C):**
+
+1. **`crud.py` → пакет `crud/`.** Монолит 4313 строк (157 определений) разбит на
+   16 доменных модулей + реэкспортный `__init__.py` (фасад): `chats.py` (11),
+   `characters.py` (17, вкл. player/location sync и `apply_character_actions`),
+   `messages.py` (8), `memories.py` (23, вкл. witness-фильтр, rerank-буст,
+   anchors, consolidation state), `summaries.py` (4), `presence.py` (6),
+   `locations.py` (18, вкл. backfill-отчёты и adjacency), `threads.py` (8),
+   `scene.py` (4), `rounds.py` (6), `events.py` (7), `story.py` (16),
+   `state.py` (11, character state + beliefs), `intents.py` (4), `plans.py` (4),
+   `lora.py` (10).
+2. **Циклы модулей.** Взаимные зависимости `chats ↔ characters ↔ locations`
+   разорваны function-level импортами (помечены `# против цикла модулей
+   (Sprint 4)`): `get_chat` (из `chats`), `get_characters_by_chat` (из
+   `characters`, в `locations.py`) и `get_scene_state` (из `scene`) подтягиваются
+   внутри функций-потребителей. Верхнеуровневый граф пакета — ациклический
+   (проверено статически; `python -c "import app.main"` OK).
+3. **Перенос 1:1.** Тела функций/классов перенесены без правок; менялись только
+   импорты. Восстановлены потерянные при переносе декораторы `@dataclass`
+   (`ApplyActionsResult`, `LocationBackfillReport`, `PlotBackfillReport`,
+   `EventLocationBackfillReport`) + импорт `dataclass` (без них TypeError
+   «takes no arguments»).
+4. **`__init__.py` — фасад.** Реэкспорт всего прежнего API (157 символов
+   монолита — все присутствуют) + `settings` (из `app.config`) + временный
+   фасад `memory.retrieval`. Снятие — спринт 10 (этап 19).
+
+**Верификация (gate):**
+
+- **Публичный API `crud/`:** все 157 символов монолита доступны из пакета
+  (`Plans/artifacts/crud-api-before.txt` → `crud-api-after.txt`, пересечение
+  100%); регрессий нет.
+- **Ацикличность:** статический обход импортов — верхнеуровневых циклов в
+  пакете нет; `python -c "import app.main"` OK; `python -m compileall app` OK.
+- **`pytest -q`:** 41 failed / 1301 passed — набор упавших **идентичен**
+  монолитному baseline'у (41 пред-существующий LLM/env-зависимый фейл).
+  Покрытие crud-логики (backfill*, `apply_character_actions`, presence, scene,
+  threads) полностью зелёное. 2 флаки `test_world_engine_phase7.py::
+  test_streaming_call_wakes_npc_out_of_order` / `test_streaming_repeated_addressing_ignored`
+  (порядок wake-up при `world_engine_event_bus_enabled=True`) падают и на
+  монолите `HEAD:app/crud.py` — вне спринта 4.
+- Сервер стартует; `GET /api/health` → `{"status":"ok"}`; ручной раунд чата
+  (SSE) OK.
+
+**Артефакты:** `Plans/artifacts/` (gitignored): `crud-api-before.txt`,
+`crud-api-after.txt`; `docs/crud.md` (состав пакета, циклы, реэкспорт);
+`docs/deps-after-sprint4.md`; `docs/README.md` и `docs/architecture.md`
+(структура репозитория и слой данных обновлены под пакет `crud/`).
 
 ---
 

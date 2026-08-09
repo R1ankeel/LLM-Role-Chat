@@ -6,7 +6,7 @@
 
 1. **API-слой** — роутеры (`app/routers/`): приём запросов, валидация, SSE-стриминг.
 2. **Доменный слой** — движок чата (`app/chat_engine.py`), сервисы памяти (`app/memory_service.py`), отношений (`app/relationship_*.py`), контекста (`app/context_builder.py`).
-3. **Слой данных** — `app/crud.py` (async-операции), `app/models.py` (ORM), `app/database.py` (движки + миграции).
+3. **Слой данных** — `app/crud/` (пакет, Sprint 4; async-операции), `app/models.py` (ORM), `app/database.py` (движки + миграции).
 
 Всё состояние живёт в SQLite (`ai_chat.db`). LLM-вызовы идут в локальный Ollama.
 Фронтендов два, оба общаются с одним API (fetch + SSE):
@@ -38,7 +38,7 @@
                ├───────────────┼────────────────────────┐
                │               │                        │
 ┌──────▼───────────────▼─────┐  ┌───────────────▼──────────┐
-│  crud.py / models.py       │  │  Ollama (localhost:11434)│
+│  crud/ / models.py         │  │  Ollama (localhost:11434)│
 │  database.py (SQLite)      │  │  generate/chat/embed     │
 └────────────────────────────┘  └──────────────────────────┘
 ```

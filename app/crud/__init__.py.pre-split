@@ -13,11 +13,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import models
-from . import schemas
+from .. import models
+from .. import schemas
 # Sprint 1 (§7.1): crud не импортирует perception (WPE-слой) — только чистые
 # хелперы локаций/адресатов из perception_utils (см. deps-before §2.1).
-from .perception_utils import (
+from ..perception_utils import (
     REMOTE_CHANNELS,
     _parse_adjacency_list,
     build_adjacency_index,
@@ -28,9 +28,9 @@ from .perception_utils import (
     serialize_adjacency,
     serialize_target_ids,
 )
-from .config import settings
-from .database import memory_content_hash
-from .lora_validation import (
+from ..config import settings
+from ..database import memory_content_hash
+from ..lora_validation import (
     LoRAInUseError,
     LoRAValidationError,
     validate_adapter_path,
@@ -38,7 +38,7 @@ from .lora_validation import (
 # Фасад (Sprint 1, §7.1): гибридный retrieval перенесён в memory/retrieval.py.
 # Временный реэкспорт — существующие потребители (chat_engine) продолжают
 # работать через crud.*; удаляется на этапе чисточных работ (этап 19).
-from .memory.retrieval import (
+from ..memory.retrieval import (
     RerankContext,
     RerankSignals,
     build_rerank_signals,
