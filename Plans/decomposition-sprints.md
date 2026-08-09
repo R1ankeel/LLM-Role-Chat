@@ -284,7 +284,7 @@
 | 3 | `db/` и `schemas/` | 4–5 | `db/schema.py`, `db/engine.py`, `schemas/` |
 | 4 | `crud/` (самый крупный) | 6 | `crud/*.py` — 16 доменных модулей |
 | 5 | `llm/` (5A) и `pipeline/` (5B) | 7–8 | 5A — выполнено: `llm/*` (7 модулей); 5B — выполнено: `pipeline/{streaming,regeneration,session,story,lora}.py`, фасад `chat_engine.py` |
-| 6 | Отношения и память (6A/6B/6C) | 9–11 | 6A: `pipeline/relations.py`; 6B: `relationships/*`; 6C: `memory/*` |
+| 6 | Отношения и память (6A/6B/6C) | 9–11 | 6A — выполнено: `pipeline/relations.py`; 6B — выполнено: `relationships/*`; 6C — выполнено: `memory/*` |
 | 7 | Детекторы и контекст | 12–14 | `repetition/*`, `context/*`, `prompt/*`, `perception/*` |
 | 8 | Сюжет и роутеры | 15–16 | `plot/consolidation/*`, `plot/crisis/*`, тонкие роутеры |
 | 9 | Frontend Vue и legacy | 17–18 | декомпозиция 5 компонентов; вывод `app/static/app.js` |
@@ -544,6 +544,19 @@ SSE-пайплайн поведенчески идентичен; **gate 5A и 5
 **dependency graph:** анализ отношений больше не живёт в `chat_engine`/`pipeline`
 streaming-пути; ручной раунд чата.
 
+**Выполнено (ревизия 2026-08-09, коммит `ad16356`):**
+- `_analyze_and_update_relationships`, `_run_sensors_relationship_proposal`,
+  `_run_per_pair_analysis` и все хелперы анализа (evidence/constrain/mentions/
+  scene-summary/belief/hearsay: `_text_mentions_name` … `_compute_hearsay_effective_cap`)
+  перенесены в `app/pipeline/relations.py` (999 строк; тела 1:1 из канонического
+  `chat_engine.py`, менялись только импорты).
+- `app/chat_engine.py` стал фасадом (74 строки): docstring + реэкспорт API из
+  `pipeline/{relations,streaming,session,story,lora,regeneration}.py`.
+  `pipeline/story.py`/`pipeline/streaming.py` подтягивают блок отношений через
+  `pipeline/relations` (ленивые импорты против циклов сохранены).
+- **Gate 6A:** `pytest -q` — набор упавших идентичен baseline'у, новых регрессий
+  нет; `import app.main` OK; ручной раунд чата (SSE) OK.
+
 ### Milestone 6B — `relationship_service.py` → `relationships/` (этап 10)
 
 **Шаги:** разбить по §4.4: `crud.py` (CRUD 107–267), `validation.py` (267–388),
@@ -556,6 +569,24 @@ streaming-пути; ручной раунд чата.
 `test_relationship_issues*.py`, `test_relationship_service.py`,
 `test_relationship_context.py`; **публичный API `relationships/` зафиксирован**;
 **dependency graph:** направление relationships → crud только однонаправленное.
+
+**Выполнено (ревизия 2026-08-09, коммит `ad16356`):**
+- `app/relationship_service.py` (1861 строка) разрезан на пакет
+  `app/relationships/` по §4.4: `crud.py` (184), `validation.py` (72),
+  `deltas.py` (276), `blocks.py` (348), `issues.py` (548), `decay.py` (239),
+  `memory_feed.py` (229), `trajectory.py` (80) + `__init__.py` (135) с
+  зафиксированным публичным API (`__all__`, включая private-символы для
+  patch-контрактов тестов).
+- `app/relationship_service.py` стал тонким фасадом (114 строк): реэкспорт
+  полного публичного API из `relationships/` (удаление — спринт 10).
+- Направление зависимостей одностороннее: `relationships/*` → `app.crud`
+  (а также models/schemas/config/prompt_builder/relationship_interpreter/
+  `memory.create` для memory_feed); обратных ссылок из `crud` на
+  `relationships` нет. Локальные импорты `crud` внутри функций устранены.
+- **Gate 6B:** полный прогон `test_relationship_*`,
+  `test_relationship_issues*.py`, `test_relationship_service.py`,
+  `test_relationship_context.py` — зелёные; `pytest -q` — новых регрессий нет;
+  `import app.main` OK.
 
 ### Milestone 6C — `memory_service.py` → `memory/` (этап 11)
 
@@ -573,6 +604,33 @@ streaming-пути; ручной раунд чата.
 `test_adaptive_consolidation.py`, `test_task_queue.py`, `test_hybrid_rerank.py`,
 `test_memory_types.py`; golden-тесты по памяти (`tests/golden/`); **публичный API
 `memory/` зафиксирован**; ручной раунд чата.
+
+**Выполнено (ревизия 2026-08-10):**
+- `app/memory_service.py` (2191 строка) разрезан на пакет `app/memory/` по §4.5:
+  `validation.py` (387), `witness.py` (189), `extraction.py` (208),
+  `summaries.py` (123), `consolidation.py` (231), `adaptive.py` (588),
+  `jobs.py` (279); плюс существовавшие со Sprint 1 `retrieval.py` (618) и
+  `create.py` (25). Тела перенесены 1:1, менялись только импорты.
+- `app/memory_service.py` стал фасадом (100 строк): реэкспорт публичного API
+  из `memory/*`.
+- `memory/__init__.py` намеренно пуст (только docstring): реэкспорт через
+  `__init__` ломает sprint-1 цикл `crud ↔ memory.retrieval` (`jobs.py` на
+  верхнем уровне регистрирует handler'ы в `task_queue` → partial-init).
+  Публичный API `memory/` зафиксирован контрактом фасада `memory_service.py`;
+  снятие фасада — спринт 10 (этап 21).
+- Тесты: patch-таргеты переведены с фасада на модули пакета
+  (`app.memory_service.{SessionLocal,AsyncSessionLocal}` →
+  `app.memory.{extraction,summaries}.AsyncSessionLocal`;
+  `app.memory_service.{enqueue_consolidation_job,consolidate_memories_job}` →
+  `app.memory.jobs.*`) в `test_chat_engine.py`, `test_witness_filter.py`,
+  `test_memory_perception.py`, `test_memory_service.py`, `test_consolidation.py`,
+  `test_adaptive_consolidation.py`.
+- **Gate 6C:** прогон памяти (`test_memory_*`, `test_consolidation`,
+  `test_adaptive_consolidation`, `test_task_queue`, `test_hybrid_rerank`,
+  `test_witness_filter`, `test_memory_service`, `test_chat_engine`) — 16 failed /
+  90 passed, набор упавших **идентичен** baseline'у до переноса
+  (пред-существующие LLM/env-фейлы); новых регрессий нет. `import app.main` OK,
+  `python -m compileall app` OK.
 
 **Риски:** BM25/rerank перенос меняет численные результаты — перенос без
 изменения кода, golden-тесты по памяти (`tests/golden/`); relationship-service

@@ -59,7 +59,7 @@ async def test_summary_not_triggered_below_threshold(
     with patch(
         "app.memory_service.ollama_client.summarize_for_character",
         side_effect=fake_summarize,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory.summaries.AsyncSessionLocal", test_session_factory):
         await memory_service._maybe_update_summaries(
             mock_client,
             chat.id,
@@ -89,7 +89,7 @@ async def test_summary_triggered_at_threshold(
     with patch(
         "app.memory_service.ollama_client.summarize_for_character",
         side_effect=fake_summarize,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory.summaries.AsyncSessionLocal", test_session_factory):
         await memory_service._maybe_update_summaries(
             mock_client,
             chat.id,
@@ -127,7 +127,7 @@ async def test_summary_watermark_advances(
     with patch(
         "app.memory_service.ollama_client.summarize_for_character",
         side_effect=fake_summarize,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory.summaries.AsyncSessionLocal", test_session_factory):
         await memory_service._maybe_update_summaries(
             mock_client,
             chat.id,
@@ -142,7 +142,7 @@ async def test_summary_watermark_advances(
     with patch(
         "app.memory_service.ollama_client.summarize_for_character",
         side_effect=fake_summarize,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory.summaries.AsyncSessionLocal", test_session_factory):
         await memory_service._maybe_update_summaries(
             mock_client,
             chat.id,
@@ -398,7 +398,7 @@ async def test_extract_and_save_stores_importance_category(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.SessionLocal", test_session_factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", test_session_factory):
         await memory_service._extract_and_save_memories(
             mock_client,
             chat.id,

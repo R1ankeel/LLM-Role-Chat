@@ -215,7 +215,7 @@ async def test_per_character_memory_extraction_called(
     ), patch.object(settings, "task_queue_enabled", False), patch(
         "app.pipeline.relations.AsyncSessionLocal", test_session_factory
     ), patch(
-        "app.memory_service.AsyncSessionLocal", test_session_factory
+        "app.memory.extraction.AsyncSessionLocal", test_session_factory
     ):
         async for _ in chat_engine.process_user_message_streaming(
             mock_client, db_session, chat.id, "Test message"
@@ -269,7 +269,7 @@ async def test_memory_extraction_with_snapshots_after_session_closed(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract_for_character,
-    ), patch("app.memory_service.AsyncSessionLocal", test_session_factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", test_session_factory):
         await memory_service._extract_and_save_memories(
             mock_client,
             chat_id,

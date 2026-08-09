@@ -257,7 +257,7 @@ async def test_process_consolidation_job(mock_client):
     """Test the job handler for consolidation."""
     
     # Mock the consolidate_memories_job
-    with patch("app.memory_service.consolidate_memories_job", new_callable=AsyncMock) as mock_consolidate:
+    with patch("app.memory.jobs.consolidate_memories_job", new_callable=AsyncMock) as mock_consolidate:
         mock_consolidate.return_value = {"status": "completed", "chars_processed": 5, "merged": 3, "deleted": 2}
         
         payload = {"model_name": "test-model"}

@@ -286,7 +286,7 @@ async def test_cross_location_memory_extraction_skip(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.SessionLocal", test_factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", test_factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,
@@ -387,7 +387,7 @@ async def test_first_person_pronoun_no_leak_to_remote(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.SessionLocal", test_factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", test_factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,
@@ -453,7 +453,7 @@ async def test_information_transfer_after_telling(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=extract_r1,
-    ), patch("app.memory_service.SessionLocal", factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,
@@ -516,7 +516,7 @@ async def test_information_transfer_after_telling(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=extract_r2,
-    ), patch("app.memory_service.SessionLocal", factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,
@@ -638,7 +638,7 @@ async def test_bad_llm_fact_for_non_witness_grounding(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.SessionLocal", factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,
@@ -729,7 +729,7 @@ async def test_memory_attribution_speaker_preserved_same_room(
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.AsyncSessionLocal", test_factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", test_factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,

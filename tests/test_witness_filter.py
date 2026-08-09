@@ -268,7 +268,7 @@ async def test_memory_service_uses_filtered_text(db_session, chat, db_engine):
     with patch(
         "app.memory_service.ollama_client.extract_memories_for_character",
         side_effect=fake_extract,
-    ), patch("app.memory_service.AsyncSessionLocal", test_session_factory):
+    ), patch("app.memory.extraction.AsyncSessionLocal", test_session_factory):
         await memory_service._extract_and_save_memories(
             httpx.AsyncClient(base_url="http://test"),
             chat.id,

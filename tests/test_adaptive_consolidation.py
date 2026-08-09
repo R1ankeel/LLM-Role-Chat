@@ -191,7 +191,7 @@ async def test_schedule_flag_off(db_session: AsyncSession):
     chat = await crud.create_chat(db_session, schemas.ChatCreate(name="Off"))
     await _add_messages(db_session, chat.id, 100)
     with patch(
-        "app.memory_service.enqueue_consolidation_job", new_callable=AsyncMock
+        "app.memory.jobs.enqueue_consolidation_job", new_callable=AsyncMock
     ) as mock_enqueue:
         decision = await memory_service.schedule_adaptive_consolidation(
             db_session, chat_id=chat.id
@@ -206,7 +206,7 @@ async def test_schedule_idle_skips_without_job(db_session: AsyncSession):
     try:
         chat = await crud.create_chat(db_session, schemas.ChatCreate(name="Idle2"))
         with patch(
-            "app.memory_service.enqueue_consolidation_job", new_callable=AsyncMock
+            "app.memory.jobs.enqueue_consolidation_job", new_callable=AsyncMock
         ) as mock_enqueue:
             decision = await memory_service.schedule_adaptive_consolidation(
                 db_session, chat_id=chat.id
@@ -224,7 +224,7 @@ async def test_schedule_soft_triggers_then_dedups(db_session: AsyncSession):
         chat = await crud.create_chat(db_session, schemas.ChatCreate(name="Soft2"))
         await _add_messages(db_session, chat.id, 30)
         with patch(
-            "app.memory_service.enqueue_consolidation_job", new_callable=AsyncMock
+            "app.memory.jobs.enqueue_consolidation_job", new_callable=AsyncMock
         ) as mock_enqueue:
             mock_enqueue.return_value = MagicMock(id=7)
             first = await memory_service.schedule_adaptive_consolidation(
@@ -251,7 +251,7 @@ async def test_schedule_critical_enqueues_hard(db_session: AsyncSession):
         chat = await crud.create_chat(db_session, schemas.ChatCreate(name="Crit2"))
         await _add_world_event(db_session, chat.id, importance=9.5, round_id="R9")
         with patch(
-            "app.memory_service.enqueue_consolidation_job", new_callable=AsyncMock
+            "app.memory.jobs.enqueue_consolidation_job", new_callable=AsyncMock
         ) as mock_enqueue:
             mock_enqueue.return_value = MagicMock(id=9)
             decision = await memory_service.schedule_adaptive_consolidation(
@@ -278,7 +278,7 @@ async def test_schedule_critical_dedup_within_round(db_session: AsyncSession):
         chat = await crud.create_chat(db_session, schemas.ChatCreate(name="Crit3"))
         await _add_world_event(db_session, chat.id, importance=9.5, round_id="R3")
         with patch(
-            "app.memory_service.enqueue_consolidation_job", new_callable=AsyncMock
+            "app.memory.jobs.enqueue_consolidation_job", new_callable=AsyncMock
         ) as mock_enqueue:
             mock_enqueue.return_value = MagicMock(id=3)
             first = await memory_service.schedule_adaptive_consolidation(

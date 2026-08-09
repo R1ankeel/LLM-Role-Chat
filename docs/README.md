@@ -31,8 +31,12 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [deps-after-sprint2.md](deps-after-sprint2.md) | Dependency graph «после спринта 2»: разбиение `config.py` и `models.py` на пакеты |
 | [deps-after-sprint3.md](deps-after-sprint3.md) | Dependency graph «после спринта 3»: DDL из `database.py` → `db/`, `schemas.py` → пакет `schemas/` |
 | [deps-after-sprint4.md](deps-after-sprint4.md) | Dependency graph «после спринта 4»: `crud.py` → пакет `crud/` (16 модулей, function-level разрыв циклов) |
+| [deps-after-sprint5.md](deps-after-sprint5.md) | Dependency graph «после спринта 5»: `ollama_client.py` → пакет `llm/` (7 модулей, ацикличность, сверка API до/после) |
+| [deps-after-sprint6.md](deps-after-sprint6.md) | Dependency graph «после спринта 6»: `pipeline/relations.py`, пакеты `relationships/` и `memory/` |
 | [schemas.md](schemas.md) | Pydantic-схемы (пакет `app/schemas/`): состав модулей, реэкспорт, ацикличность импортов |
 | [crud.md](crud.md) | CRUD-слой (пакет `app/crud/`, Sprint 4): состав модулей, циклы и function-level импорты, реэкспорт-фасад |
+| [llm.md](llm.md) | LLM-слой (пакет `app/llm/`, Sprint 5A): 7 модулей клиента Ollama, ацикличность, сверка публичного API до/после |
+| [memory.md](memory.md) | Слой памяти (пакет `app/memory/`, Sprint 6C): состав модулей, зависимости, почему `__init__.py` пуст (Sprint 1 цикл), gate 6C |
 
 ## Краткий обзор
 
@@ -73,13 +77,16 @@ ai-roleplay-chat/
 │   ├── prompt_builder.py    # сборка system-промптов из шаблонов ru.json
 │   ├── ollama_client.py     # тонкий фасад (Sprint 5A); реализация — в llm/
 │   ├── llm/                 # ПАКЕТ (Sprint 5A): 7 модулей клиента Ollama — lock/transport/prompting/generation/tasks/wpe/models (invoke_json — Sprint 1)
-│   ├── memory/              # ПАКЕТ (Sprint 1): retrieval.py (BM25/rerank), create.py (интерфейс памяти)
-│   ├── chat_engine.py       # движок раунда: генерация, presence, сцена, отношения
-│   ├── memory_service.py    # извлечение фактов, саммари, консолидация, embed-задачи
+│   ├── memory/              # ПАКЕТ (Sprint 1 + 6C): 9 модулей — retrieval/create/validation/witness/extraction/summaries/consolidation/adaptive/jobs (__init__ пуст — Sprint 1 цикл)
+│   ├── chat_engine.py       # тонкий фасад (Sprint 5B); реализация — в pipeline/
+│   ├── pipeline/            # ПАКЕТ (Sprint 5B + 6A): streaming/session/regeneration/story/lora/relations
+│   ├── memory_service.py    # тонкий фасад (Sprint 6C); реализация — в memory/
 │   ├── context_builder.py   # токено-ориентированная сборка контекста
 │   ├── context_budget.py    # распределение токенов по компонентам
 │   ├── context_state.py     # динамический num_ctx на чат
 │   ├── relationship_*.py     # сервис/анализатор/интерпретатор отношений
+│   ├── relationship_service.py # тонкий фасад (Sprint 6B); реализация — в relationships/
+│   ├── relationships/       # ПАКЕТ (Sprint 6B): crud/validation/deltas/blocks/issues/decay/memory_feed/trajectory
 │   ├── role_isolation.py    # изоляция роли, validation ответа
 │   ├── repetition_detector.py # детекция повторов и стагнации сцены
 │   ├── task_queue.py        # очередь задач памяти (persistence, retry)
