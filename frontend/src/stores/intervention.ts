@@ -19,13 +19,17 @@ export const useInterventionStore = defineStore('intervention', () => {
     }
   }
 
-  async function set(chatId: number, text: string) {
+  async function set(chatId: number, text: string, recipientCharacterIds?: number[]) {
     const trimmed = text.trim()
     if (!trimmed) return
     busy.value = true
     error.value = null
     try {
-      instruction.value = await api.setIntervention(chatId, trimmed)
+      instruction.value = await api.setIntervention(
+        chatId,
+        trimmed,
+        recipientCharacterIds,
+      )
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Не удалось сохранить вмешательство.'
     } finally {

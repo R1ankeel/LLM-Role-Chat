@@ -143,10 +143,11 @@ async def process_user_message_streaming(
     # per turn, fixed once to the user-message id. utcnow() is never used for it.
     round_id = f"r{chat_id}-m{user_message.id}"
 
-    # One-time user intervention ("Вмешательство") — read once as a snapshot
-    # and consumed only after a fully successful round.
-    round_intervention = pending_intervention.get_intervention(chat_id)
-    directive = round_intervention.instruction if round_intervention else None
+    # One-time user interventions ("Вмешательство") — read once as a snapshot
+    # and consumed only after a fully successful round. Each intervention has a
+    # frozen recipient set; the per-NPC directive text is computed below, before
+    # any prompt is formed (docs/intervention.md).
+    round_interventions = await pending_intervention.list_interventions(db, chat_id)
     round_generation_ok = True
 
     round_messages: list = [user_message]
@@ -160,6 +161,12 @@ async def process_user_message_streaming(
         return
 
     character_ids = [c.id for c in characters]  # NPCs only
+    # Per-NPC directive text for this round: only the frozen recipients of each
+    # pending intervention hear its instruction (filtering by character_id on
+    # the backend, before the prompt is formed).
+    directives_by_character = pending_intervention.build_directives_map(
+        round_interventions, character_ids
+    )
     character_locations = {
         c.id: getattr(c, "location", "") or "" for c in characters
     }
@@ -646,7 +653,7 @@ async def process_user_message_streaming(
                 ),
                 built_context=built_context,
                 epistemic_mask_block=epistemic_mask_block,
-                directive=directive,
+                directive=directives_by_character.get(current_character.id),
                 story_block=story_block,
                 active_goal_block=active_goal_block,
                 active_plan_block=active_plan_block,
@@ -1142,26 +1149,22 @@ async def process_user_message_streaming(
             "[chat_id=%d] Post-round pipeline failed: %s", chat_id, exc
         )
 
-    # Consume the one-time intervention after a fully successful round. If a
+    # Consume the one-time interventions after a fully successful round. If a
     # character fell back to the "молчит" placeholder, the round is considered
-    # failed and the instruction is preserved for a retry (docs/intervention.md).
-    if directive is not None and round_generation_ok:
-        try:
-            await pending_intervention.record_intervention_outcome(
-                db,
-                chat_id,
-                characters,
-                directive,
-                character_id=(
-                    round_intervention.character_id
-                    if round_intervention is not None
-                    else None
-                ),
-            )
-        except Exception:
-            logger.warning(
-                "[chat_id=%d] Failed to persist intervention outcome", chat_id
-            )
-        pending_intervention.consume_intervention(
-            chat_id, expected=round_intervention
-        )
+    # failed and the instructions are preserved for a retry (docs/intervention.md).
+    # Each intervention is consumed by id from the round snapshot, so an
+    # intervention set while the round was generating survives.
+    if round_interventions and round_generation_ok:
+        for _ri in round_interventions:
+            try:
+                await pending_intervention.record_intervention_outcome(
+                    db,
+                    chat_id,
+                    _ri.instruction,
+                    _ri.recipient_ids,
+                )
+            except Exception:
+                logger.warning(
+                    "[chat_id=%d] Failed to persist intervention outcome", chat_id
+                )
+            await pending_intervention.consume_intervention(db, _ri.id)

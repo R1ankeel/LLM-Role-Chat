@@ -547,12 +547,17 @@ export const mockApi: Api = {
     return delay(clone(mockInterventions[chatId] ?? null))
   },
 
-  setIntervention(chatId: number, instruction: string): Promise<InterventionRead> {
+  setIntervention(
+    chatId: number,
+    instruction: string,
+    recipientCharacterIds: number[] = [],
+  ): Promise<InterventionRead> {
     const entry: InterventionRead = {
       chat_id: chatId,
       character_id: null,
       instruction,
       created_at: nowIso(),
+      recipient_character_ids: recipientCharacterIds,
     }
     mockInterventions[chatId] = entry
     return delay(clone(entry))

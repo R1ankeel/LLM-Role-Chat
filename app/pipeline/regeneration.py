@@ -372,10 +372,13 @@ async def regenerate_message_streaming(
     other_names = get_other_character_names(characters, character.id)
     enable_thinking = bool(getattr(chat, "thinking_mode", settings.enable_thinking))
 
-    # One-time user intervention applies to regeneration too, but is NOT
-    # consumed here — it survives until a full round is generated.
-    pending = pending_intervention.get_intervention(chat_id, character.id)
-    directive = pending.instruction if pending else None
+    # One-time user interventions apply to regeneration too, but are NOT
+    # consumed here — they survive until a full round is generated. Only the
+    # character's frozen recipient set decides whether the instruction applies.
+    _round_interventions = await pending_intervention.list_interventions(db, chat_id)
+    directive = pending_intervention.build_directive_for_character(
+        _round_interventions, character.id
+    )
 
     response_text = ""
     turn_output = None

@@ -148,10 +148,17 @@ async def put_chat_intervention(
 ):
     """Set (or replace) a one-time intervention for the next generation.
 
-    The instruction is stored in memory only and is consumed automatically
-    after a fully successful round. The user may delete it manually.
+    Recipients are frozen at creation time and never recomputed: an NPC that
+    joins the scene later does not hear an old intervention.
+
+    - ``recipient_character_ids`` — explicit NPCs (must belong to this chat);
+    - empty/missing list — computed deterministically from the player's current
+      location: every NPC co-located with the player becomes a recipient
+      (docs/intervention.md). Filtering by ID happens on the backend before the
+      prompt is formed; no LLM is involved.
     """
-    if await crud.get_chat(db, chat_id) is None:
+    chat = await crud.get_chat(db, chat_id)
+    if chat is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Чат не найден",
@@ -162,12 +169,37 @@ async def put_chat_intervention(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Вмешательство не может быть пустым",
         )
-    entry = pending_intervention.set_intervention(chat_id, instruction)
+    recipient_ids = payload.recipient_character_ids or []
+    if not recipient_ids:
+        canonical = await crud.resolve_player_location(db, chat_id)
+        player_location = (
+            canonical.name
+            if canonical is not None
+            else (getattr(chat, "player_location", "") or "")
+        )
+        player_location_id = canonical.id if canonical is not None else None
+        recipient_ids = pending_intervention.compute_default_recipients(
+            await crud.get_characters_by_chat(db, chat_id),
+            player_location,
+            player_location_id,
+        )
+    if recipient_ids:
+        npc_ids = {c.id for c in await crud.get_characters_by_chat(db, chat_id)}
+        invalid = [cid for cid in recipient_ids if cid not in npc_ids]
+        if invalid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Неизвестные получатели (не NPC этого чата): {invalid}",
+            )
+    entry = await pending_intervention.set_intervention(
+        db, chat_id, instruction, recipient_ids=recipient_ids
+    )
     return schemas.InterventionRead(
         chat_id=entry.chat_id,
         character_id=entry.character_id,
         instruction=entry.instruction,
         created_at=entry.created_at,
+        recipient_character_ids=sorted(entry.recipient_ids),
     )
 
 
@@ -186,7 +218,7 @@ async def get_chat_intervention(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Чат не найден",
         )
-    entry = pending_intervention.get_intervention(chat_id)
+    entry = await pending_intervention.get_chat_wide_intervention(db, chat_id)
     if entry is None:
         return None
     return schemas.InterventionRead(
@@ -194,6 +226,7 @@ async def get_chat_intervention(
         character_id=entry.character_id,
         instruction=entry.instruction,
         created_at=entry.created_at,
+        recipient_character_ids=sorted(entry.recipient_ids),
     )
 
 
@@ -211,7 +244,7 @@ async def delete_chat_intervention(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Чат не найден",
         )
-    pending_intervention.remove_intervention(chat_id)
+    await pending_intervention.remove_chat_wide_intervention(db, chat_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

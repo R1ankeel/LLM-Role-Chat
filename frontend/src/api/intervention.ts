@@ -5,10 +5,14 @@ export function getIntervention(chatId: number): Promise<InterventionRead | null
   return request<InterventionRead | null>(`/chats/${chatId}/intervention`)
 }
 
-export function setIntervention(chatId: number, instruction: string): Promise<InterventionRead> {
+export function setIntervention(
+  chatId: number,
+  instruction: string,
+  recipientCharacterIds: number[] = [],
+): Promise<InterventionRead> {
   return request<InterventionRead>(`/chats/${chatId}/intervention`, {
     method: 'PUT',
-    body: { instruction },
+    body: { instruction, recipient_character_ids: recipientCharacterIds },
   })
 }
 

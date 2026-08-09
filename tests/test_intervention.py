@@ -1,8 +1,9 @@
 """Tests for the one-time user intervention ("Вмешательство").
 
-Covers the in-memory store, the HTTP endpoints, the prompt block builder,
+Covers the DB-backed store, the HTTP endpoints, the prompt block builder,
 and the chat-engine lifecycle (consumed after a successful round, preserved
-on failures, applied-but-not-consumed on regeneration, never persisted).
+on failures, applied-but-not-consumed on regeneration, never persisted to
+message history). Recipient filtering is covered in test_intervention_recipients.py.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,11 +26,11 @@ from app.routers.chat_engine import router as chat_router
 from tests.conftest import create_characters
 
 
-@pytest.fixture(autouse=True)
-def _clean_interventions():
-    pending_intervention.clear_all()
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_interventions(db_session):
+    await pending_intervention.clear_all(db_session)
     yield
-    pending_intervention.clear_all()
+    await pending_intervention.clear_all(db_session)
 
 
 async def _run_in_current_thread(func, /, *args, **kwargs):
@@ -36,49 +38,50 @@ async def _run_in_current_thread(func, /, *args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# In-memory store
+# DB-backed store
 # ---------------------------------------------------------------------------
 
 
 class TestPendingInterventionStore:
-    def test_set_get_remove_consume(self):
-        entry = pending_intervention.set_intervention(1, "Смените тему")
-        assert pending_intervention.get_intervention(1) is entry
+    async def test_set_get_remove_consume(self, db_session, chat):
+        entry = await pending_intervention.set_intervention(db_session, chat.id, "Смените тему")
+        assert entry.id is not None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) == entry
 
-        assert pending_intervention.remove_intervention(1) is True
-        assert pending_intervention.get_intervention(1) is None
-        assert pending_intervention.remove_intervention(1) is False
+        assert await pending_intervention.remove_chat_wide_intervention(db_session, chat.id) is True
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is None
+        assert await pending_intervention.remove_chat_wide_intervention(db_session, chat.id) is False
 
-        pending_intervention.set_intervention(1, "Опиши закат")
-        assert pending_intervention.consume_intervention(1) is True
-        assert pending_intervention.get_intervention(1) is None
+        entry = await pending_intervention.set_intervention(db_session, chat.id, "Опиши закат")
+        assert await pending_intervention.consume_intervention(db_session, entry.id) is True
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is None
 
-    def test_set_replaces_existing(self):
-        pending_intervention.set_intervention(1, "Первая")
-        pending_intervention.set_intervention(1, "Вторая")
-        assert pending_intervention.get_intervention(1).instruction == "Вторая"
+    async def test_set_replaces_existing(self, db_session, chat):
+        await pending_intervention.set_intervention(db_session, chat.id, "Первая")
+        await pending_intervention.set_intervention(db_session, chat.id, "Вторая")
+        current = await pending_intervention.get_chat_wide_intervention(db_session, chat.id)
+        assert current is not None
+        assert current.instruction == "Вторая"
 
-    def test_consume_guarded_by_identity(self):
-        first = pending_intervention.set_intervention(1, "Первая")
-        second = pending_intervention.set_intervention(1, "Вторая")
+    async def test_consume_guarded_by_identity(self, db_session, chat):
+        first = await pending_intervention.set_intervention(db_session, chat.id, "Первая")
+        second = await pending_intervention.set_intervention(db_session, chat.id, "Вторая")
 
-        assert pending_intervention.consume_intervention(1, expected=first) is False
-        assert pending_intervention.get_intervention(1) is second
+        # Replacing deletes the old row, so the old id can no longer be consumed.
+        assert await pending_intervention.consume_intervention(db_session, first.id) is False
+        assert (await pending_intervention.get_chat_wide_intervention(db_session, chat.id)) == second
 
-        assert pending_intervention.consume_intervention(1, expected=second) is True
-        assert pending_intervention.get_intervention(1) is None
+        assert await pending_intervention.consume_intervention(db_session, second.id) is True
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is None
 
-    def test_get_falls_back_to_chat_wide(self):
-        pending_intervention.set_intervention(1, "chat-wide")
-        assert (
-            pending_intervention.get_intervention(1, 42).instruction == "chat-wide"
+    async def test_list_interventions(self, db_session, chat):
+        (character,) = await create_characters(db_session, chat.id, 1)
+        first = await pending_intervention.set_intervention(db_session, chat.id, "Первая")
+        second = await pending_intervention.set_intervention(
+            db_session, chat.id, "Вторая", character_id=character.id
         )
-
-        pending_intervention.set_intervention(1, "per-char", character_id=42)
-        assert (
-            pending_intervention.get_intervention(1, 42).instruction == "per-char"
-        )
-        assert pending_intervention.get_intervention(1).instruction == "chat-wide"
+        listed = await pending_intervention.list_interventions(db_session, chat.id)
+        assert {inv.id for inv in listed} == {first.id, second.id}
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +115,7 @@ class TestInterventionEndpoints:
             assert data["chat_id"] == chat.id
             assert data["character_id"] is None
             assert data["instruction"] == "Смените тему"
+            assert data["recipient_character_ids"] == []
 
             resp = await client.get(f"/chats/{chat.id}/intervention")
             assert resp.status_code == 200
@@ -203,8 +207,11 @@ class TestInterventionLifecycle:
     async def test_directive_passed_and_consumed_after_success(
         self, db_session, chat, mock_client
     ):
-        await create_characters(db_session, chat.id, 1)
-        pending_intervention.set_intervention(chat.id, "Пусть герои уйдут на кухню")
+        (character,) = await create_characters(db_session, chat.id, 1)
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "Пусть герои уйдут на кухню",
+            recipient_ids=[character.id],
+        )
         call_log: list[dict] = []
 
         async def fake_generate(**kwargs):
@@ -227,14 +234,17 @@ class TestInterventionLifecycle:
         assert call_log and all(
             entry["directive"] == "Пусть герои уйдут на кухню" for entry in call_log
         )
-        assert pending_intervention.get_intervention(chat.id) is None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is None
 
     @pytest.mark.asyncio
     async def test_directive_persisted_as_discreet_memory_after_success(
         self, db_session, chat, mock_client
     ):
         (character,) = await create_characters(db_session, chat.id, 1)
-        pending_intervention.set_intervention(chat.id, "Пусть герои уйдут на кухню")
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "Пусть герои уйдут на кухню",
+            recipient_ids=[character.id],
+        )
 
         async def fake_generate(**kwargs):
             yield {
@@ -256,14 +266,16 @@ class TestInterventionLifecycle:
         facts = [m.content for m in memories]
         assert "Игрок попросил: Пусть герои уйдут на кухню" in facts
         assert not any("вмешательство" in (f or "").lower() for f in facts)
-        assert pending_intervention.get_intervention(chat.id) is None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is None
 
     @pytest.mark.asyncio
     async def test_directive_not_persisted_when_round_fails(
         self, db_session, chat, mock_client
     ):
         (character,) = await create_characters(db_session, chat.id, 1)
-        pending_intervention.set_intervention(chat.id, "Смените тему")
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "Смените тему", recipient_ids=[character.id],
+        )
 
         async def fake_generate(**kwargs):
             raise RuntimeError("ollama down")
@@ -281,12 +293,15 @@ class TestInterventionLifecycle:
 
         memories = await crud.get_memories_by_character(db_session, character.id)
         assert not any("Игрок попросил" in (m.content or "") for m in memories)
-        assert pending_intervention.get_intervention(chat.id) is not None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is not None
 
     @pytest.mark.asyncio
     async def test_directive_not_leaked_to_history(self, db_session, chat, mock_client):
-        await create_characters(db_session, chat.id, 1)
-        pending_intervention.set_intervention(chat.id, "СЕКРЕТ_ВМЕШАТЕЛЬСТВА_123")
+        (character,) = await create_characters(db_session, chat.id, 1)
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "СЕКРЕТ_ВМЕШАТЕЛЬСТВА_123",
+            recipient_ids=[character.id],
+        )
 
         async def fake_generate(**kwargs):
             yield {
@@ -311,8 +326,10 @@ class TestInterventionLifecycle:
     async def test_directive_preserved_on_generation_runtime_error(
         self, db_session, chat, mock_client
     ):
-        await create_characters(db_session, chat.id, 1)
-        pending_intervention.set_intervention(chat.id, "Смените тему")
+        (character,) = await create_characters(db_session, chat.id, 1)
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "Смените тему", recipient_ids=[character.id],
+        )
 
         async def fake_generate(**kwargs):
             raise RuntimeError("ollama down")
@@ -329,14 +346,16 @@ class TestInterventionLifecycle:
                 pass
 
         # A per-character fallback means the round failed: keep the directive.
-        assert pending_intervention.get_intervention(chat.id) is not None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is not None
 
     @pytest.mark.asyncio
     async def test_directive_preserved_when_round_aborts(
         self, db_session, chat, mock_client
     ):
-        await create_characters(db_session, chat.id, 1)
-        pending_intervention.set_intervention(chat.id, "Смените тему")
+        (character,) = await create_characters(db_session, chat.id, 1)
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "Смените тему", recipient_ids=[character.id],
+        )
 
         async def fake_generate(**kwargs):
             raise ValueError("network exploded")
@@ -352,7 +371,7 @@ class TestInterventionLifecycle:
             ):
                 pass
 
-        assert pending_intervention.get_intervention(chat.id) is not None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is not None
 
     @pytest.mark.asyncio
     async def test_regenerate_applies_but_does_not_consume(
@@ -372,7 +391,9 @@ class TestInterventionLifecycle:
                 content="Old reply text.",
             ),
         )
-        pending_intervention.set_intervention(chat.id, "Опиши закат")
+        await pending_intervention.set_intervention(
+            db_session, chat.id, "Опиши закат", recipient_ids=[character.id],
+        )
         call_log: list[dict] = []
 
         async def fake_generate(**kwargs):
@@ -393,4 +414,4 @@ class TestInterventionLifecycle:
                 pass
 
         assert call_log and call_log[0]["directive"] == "Опиши закат"
-        assert pending_intervention.get_intervention(chat.id) is not None
+        assert await pending_intervention.get_chat_wide_intervention(db_session, chat.id) is not None

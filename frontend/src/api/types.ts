@@ -142,6 +142,8 @@ export interface InterventionRead {
   character_id: number | null
   instruction: string
   created_at: string
+  /** Зафиксированные при создании получатели (NPC); пусто — никто не слышит. */
+  recipient_character_ids: number[]
 }
 
 export interface Api {
@@ -183,7 +185,11 @@ export interface Api {
   deleteMessage(chatId: number, messageId: number): Promise<void>
   clearMessages(chatId: number, scope?: ClearScope): Promise<void>
   getIntervention(chatId: number): Promise<InterventionRead | null>
-  setIntervention(chatId: number, instruction: string): Promise<InterventionRead>
+  setIntervention(
+    chatId: number,
+    instruction: string,
+    recipientCharacterIds?: number[],
+  ): Promise<InterventionRead>
   deleteIntervention(chatId: number): Promise<void>
   fetchRelationshipGraph(chatId: number): Promise<RelationshipGraph>
   fetchRelationshipIssues(

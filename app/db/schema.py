@@ -327,6 +327,57 @@ def ensure_schema(db_engine) -> None:
             )
             logger.info("Added attention column to message_presence")
 
+        # ----- Addressable intervention (docs/intervention.md) -----
+        # Получатели фиксируются в `intervention_recipients` при создании (PUT)
+        # и не пересчитываются на генерации. `character_id` — legacy-маркер
+        # области действия (NULL = chat-wide); источник истины — таблица
+        # получателей. Один chat-wide на чат обеспечивает partial unique index.
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS interventions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                    character_id INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+                    instruction TEXT NOT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_intervention_chat_character UNIQUE (chat_id, character_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_interventions_chat_id "
+                "ON interventions (chat_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_intervention_chat_wide "
+                "ON interventions (chat_id) WHERE character_id IS NULL"
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS intervention_recipients (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    intervention_id INTEGER NOT NULL REFERENCES interventions(id) ON DELETE CASCADE,
+                    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    CONSTRAINT uq_intervention_recipient UNIQUE (intervention_id, character_id)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_intervention_recipients_character_id "
+                "ON intervention_recipients (character_id)"
+            )
+        )
+
         # Create scene_states table if not exists (P3 Scene Tracking) - BEFORE indexes
         conn.execute(
             text(

@@ -61,8 +61,11 @@ async def chat(db_session):
     )
 
 
-async def create_characters(db_session, chat_id: int, count: int) -> list:
-    """Create `count` characters named Character A, Character B, ..."""
+async def create_characters(
+    db_session, chat_id: int, count: int, start_index: int = 1
+) -> list:
+    """Create `count` characters named Character A, Character B, ...
+    starting at ``order_index=start_index`` (default 1)."""
     characters = []
     for index in range(count):
         label = chr(ord("A") + index)
@@ -74,7 +77,7 @@ async def create_characters(db_session, chat_id: int, count: int) -> list:
                     name=f"Character {label}",
                     personality=f"Personality of {label}",
                     traits=f"Traits of {label}",
-                    order_index=index + 1,
+                    order_index=start_index + index,
                 ),
             )
         )

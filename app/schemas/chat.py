@@ -87,9 +87,15 @@ class UserMessage(BaseModel):
 
 
 class InterventionCreate(BaseModel):
-    """Body for PUT /api/chats/{chat_id}/intervention."""
+    """Body for PUT /api/chats/{chat_id}/intervention.
+
+    ``recipient_character_ids`` — детерминированный список NPC-получателей,
+    фиксируется при создании и не пересчитывается при генерации. Пустой список
+    означает, что инструкцию в этом раунде не слышит никто.
+    """
 
     instruction: str = Field(min_length=1, max_length=2000)
+    recipient_character_ids: list[int] = Field(default_factory=list)
 
     @field_validator("instruction", mode="before")
     @classmethod
@@ -97,6 +103,25 @@ class InterventionCreate(BaseModel):
         if isinstance(value, str):
             return value.strip()
         return value
+
+    @field_validator("recipient_character_ids", mode="before")
+    @classmethod
+    def _unique_recipients(cls, value: object) -> object:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        seen: set[int] = set()
+        result: list[int] = []
+        for item in value:
+            try:
+                cid = int(item)
+            except (TypeError, ValueError):
+                continue
+            if cid not in seen:
+                seen.add(cid)
+                result.append(cid)
+        return result
 
 
 class InterventionRead(BaseModel):
@@ -106,3 +131,4 @@ class InterventionRead(BaseModel):
     character_id: Optional[int] = None
     instruction: str
     created_at: datetime
+    recipient_character_ids: list[int] = Field(default_factory=list)

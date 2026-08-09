@@ -17,6 +17,7 @@ from ..database import Base
 from .character import Character, CharacterSummary
 from .chat import Chat
 from .intent import Intent, NpcPlan
+from .intervention import Intervention, InterventionRecipient
 from .lora import ChatLoRAAdapter, LoRAAdapter
 from .memory import Memory, MemoryAnchor, MemoryJob
 from .message import Message
@@ -61,6 +62,8 @@ __all__ = [
     "Index",
     "Integer",
     "Intent",
+    "Intervention",
+    "InterventionRecipient",
     "LargeBinary",
     "LoRAAdapter",
     "Location",
