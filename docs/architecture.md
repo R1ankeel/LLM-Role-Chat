@@ -8,6 +8,11 @@
 2. **Доменный слой** — движок чата (`app/chat_engine.py`), сервисы памяти (`app/memory_service.py`), отношений (`app/relationship_*.py`), контекста (`app/context_builder.py`).
 3. **Слой данных** — `app/crud/` (пакет, Sprint 4; async-операции), `app/models.py` (ORM), `app/database.py` (движки + миграции).
 
+LLM-интерфейсы — `app/llm/` (пакет, Sprint 5A): 7 модулей клиента Ollama
+(`lock`, `transport`, `prompting`, `generation`, `tasks`, `wpe`, `models`);
+`app/ollama_client.py` — тонкий фасад-реэкспорт для обратной совместимости
+(снимается в спринте 10). Состав и API — см. [llm.md](llm.md).
+
 Всё состояние живёт в SQLite (`ai_chat.db`). LLM-вызовы идут в локальный Ollama.
 Фронтендов два, оба общаются с одним API (fetch + SSE):
 
@@ -32,7 +37,7 @@
 │  chat_engine   │ │  task_queue      │
 │  memory_service│ │  memory jobs     │
 │  relationships │ │  (embed/backfill │
-│  ollama_client │ │   /consolidation)│
+│  llm/ (5A)      │ │   /consolidation)│
 └──────┬─────────┘ └───┬──────────────┘
                │               │
                ├───────────────┼────────────────────────┐
@@ -137,9 +142,10 @@
 9. Расчёт presence для этой реплики (следующие NPC видят её только если могут воспринять).
 10. Накопление `prior_replies` и `round_messages`.
 
-### 4. Внутри `ollama_client.generate` (валидация и retry)
+### 4. Внутри `generate` (валидация и retry)
 
-`generate` — асинхронный генератор, который:
+`generate` — асинхронный генератор (реализация — `app/llm/generation.py`,
+доступен через фасад `ollama_client.generate`), который:
 
 1. Собирает stop-последовательности, температуру (с пер-персонажной jitter-регулировкой), witness-фильтрованную историю.
 2. Выполняет до `max_role_isolation_retries + max_repetition_retries + 1` LLM-вызовов:
@@ -162,7 +168,7 @@
 - **Generate-путь**: `/api/generate` с `format: <JSON-Schema>`
   (`build_take_actions_json_schema`); выходной JSON парсится в `TurnOutput`.
 - **Shadow**: действия извлекаются, логируются (`[WPE-P2] shadow …`), метрики
-  копятся в `ollama_client.WPE_TOOLS_STATS` (`wpe_tools_stats_snapshot()`);
+  копятся в `app/llm/wpe.py::WPE_TOOLS_STATS` (`wpe_tools_stats_snapshot()`);
   **не применяются** — текст реплики остаётся прежним.
 - **Фоллбэк** строго нативный (И14): tools → `format` (JSON-Schema); text-only
   фоллбэк **удалён в Фазе 8** — при недоступных tools/format генерация падает
@@ -306,7 +312,7 @@ partial → бинарный full/none по каналам.
   резолвят каноническую `Location` и пишут также `location_id` одной
   транзакцией.
 - **Text-only путь генерации удалён (И14).** `_tool_mode_chain`/
-  `_next_tool_mode` (`app/ollama_client.py`) больше не дают фоллбэк
+  `_next_tool_mode` (`app/llm/wpe.py`) больше не дают фоллбэк
   tools → format → text: при недоступных tools/format генерация падает с
   `RuntimeError`. Текст-only остаётся только для нетools-генерации
   (`preferred="text"`).

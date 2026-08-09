@@ -71,8 +71,8 @@ ai-roleplay-chat/
 │   ├── perception_utils.py  # чистые хелперы локаций/адресатов (Sprint 1)
 │   ├── witness_model.py     # фильтрация истории и памяти по presence
 │   ├── prompt_builder.py    # сборка system-промптов из шаблонов ru.json
-│   ├── ollama_client.py     # клиент Ollama (генерация, извлечение, retry, streaming)
-│   ├── llm/                 # ПАКЕТ (Sprint 1): фасад generation.py (invoke_json)
+│   ├── ollama_client.py     # тонкий фасад (Sprint 5A); реализация — в llm/
+│   ├── llm/                 # ПАКЕТ (Sprint 5A): 7 модулей клиента Ollama — lock/transport/prompting/generation/tasks/wpe/models (invoke_json — Sprint 1)
 │   ├── memory/              # ПАКЕТ (Sprint 1): retrieval.py (BM25/rerank), create.py (интерфейс памяти)
 │   ├── chat_engine.py       # движок раунда: генерация, presence, сцена, отношения
 │   ├── memory_service.py    # извлечение фактов, саммари, консолидация, embed-задачи

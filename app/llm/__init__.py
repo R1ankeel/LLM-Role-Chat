@@ -1,10 +1,221 @@
-"""Пакет LLM-интерфейсов (Sprint 1, §7.2 decomposition.md).
+"""Пакет LLM-интерфейсов (Sprint 5A, decomposition.md §7.2).
 
-Заглушка-фасад: пока проксирует внутренности ``ollama_client``, чтобы
-потребители (relationship_analyzer, sensors_service) не пересекали границу
-модулей приватными символами. Полная резка ``llm/*`` — спринт 5A.
+``app/ollama_client.py`` разрезан на модули ``llm/*`` (перенос 1:1, оригинал —
+``Plans/artifacts/pre-split/ollama_client.py``):
+
+- ``lock`` — глобальная сериализация Ollama-запросов (event loop-bound lock);
+- ``transport`` — HTTP-транспорт: ``_call_*``, ``_stream_*``, ``llm_request``,
+  ``_ConfigProxy`` и legacy-константы;
+- ``prompting`` — форматирование истории, payload-билдеры, ``_build_*_messages``;
+- ``generation`` — ``_invoke_llm``, ``_generate_once``, ``generate``, vocabulary
+  borrowing, публичный JSON-фасад ``invoke_json``/``extract_json_payload``;
+- ``tasks`` — извлечение памяти, суммаризация, scene-state, event extraction;
+- ``wpe`` — tool-calling, tool-mode chain, shadow-метрики Фазы 2;
+- ``models`` — ``list_models``/``create_model``/``delete_model``/``upload_adapter_file``/
+  ``check_capabilities``.
+
+Здесь — единый фасад: ``from . import ollama_client`` продолжает давать доступ
+ко всем символам исходного модуля.
 """
 
-from .generation import extract_json_payload, invoke_json
+import random
 
-__all__ = ["invoke_json", "extract_json_payload"]
+from ..config import settings
+from .lock import _llm_locks, _llm_lock_for
+from .transport import (
+    OLLAMA_BASE_URL,
+    DEFAULT_TEMPERATURE,
+    MAX_RETRIES,
+    RETRY_DELAY,
+    USE_CHAT_API,
+    ENABLE_THINKING,
+    ENABLE_WITNESS_FILTER,
+    ENABLE_POST_HISTORY_REINFORCEMENT,
+    FALLBACK_ON_ISOLATION_FAILURE,
+    MAX_ROLE_ISOLATION_RETRIES,
+    MAX_REPETITION_RETRIES,
+    REPETITION_DETECTION_ENABLED,
+    MIN_CHARACTER_RESPONSE_LENGTH,
+    GENERATE_TIMEOUT,
+    ENABLE_ANTI_MIMICRY,
+    ENABLE_RELEVANT_MEMORY_SELECTION,
+    MEMORY_RELEVANCE_TOP_K,
+    MEMORY_MAX_FACTS_PER_ROUND,
+    SUMMARY_MAX_PARAGRAPHS,
+    DEFAULT_EVENT_VISIBILITY,
+    _ConfigProxy,
+    _config,
+    llm_request,
+    _call_ollama,
+    _call_ollama_chat,
+    _read_ollama_error,
+    _stream_ollama_generate,
+    _stream_ollama_generate_unlocked,
+    _stream_ollama_chat,
+    _stream_ollama_chat_unlocked,
+)
+from .prompting import (
+    ChatMessage,
+    _resolve_thinking,
+    _character_temperature,
+    _character_name,
+    _format_history,
+    format_history_for_character,
+    filter_history_for_character_messages,
+    _messages_to_prompt,
+    _count_prompt_tokens,
+    _count_history_tokens,
+    _build_generate_payload,
+    _build_chat_payload,
+    _build_generation_messages,
+)
+from .generation import (
+    _invoke_llm,
+    _log_repetition,
+    _generate_once,
+    _INFLECTION_SUFFIXES,
+    _vocab_key,
+    _VOCAB_STOP_ROOTS,
+    _VOCAB_STOP_KEYS,
+    _content_words,
+    _check_vocabulary_borrowing,
+    generate,
+    invoke_json,
+    extract_json_payload,
+)
+from .wpe import (
+    _MODEL_TOOL_MODE_CACHE,
+    WPE_TOOLS_STATS,
+    _tool_mode_chain,
+    _next_tool_mode,
+    _tools_unsupported_error,
+    _format_unsupported_error,
+    wpe_tools_stats_snapshot,
+    _record_shadow_turn,
+    _parse_tool_calls,
+    _parse_turn_output_json,
+)
+from .tasks import (
+    MEMORY_EXTRACTION_TEMP,
+    SUMMARY_TEMP,
+    SCENE_STATE_JSON_SCHEMA,
+    EVENT_EXTRACTION_JSON_SCHEMA,
+    _extract_json_payload,
+    _coerce_extracted_fact,
+    parse_extracted_facts,
+    _parse_json_array,
+    _parse_json_object,
+    build_extraction_messages,
+    build_summary_messages,
+    build_unified_extraction_messages,
+    extract_memories_for_character,
+    summarize_for_character,
+    extract_memories_unified,
+    _build_scene_state_messages,
+    extract_scene_state,
+    _build_event_extraction_messages,
+    extract_round_events,
+)
+from .models import (
+    list_models,
+    upload_adapter_file,
+    create_model,
+    delete_model,
+    check_capabilities,
+)
+
+__all__ = [
+    "settings",
+    "random",
+    "_llm_locks",
+    "_llm_lock_for",
+    "OLLAMA_BASE_URL",
+    "DEFAULT_TEMPERATURE",
+    "MEMORY_EXTRACTION_TEMP",
+    "SUMMARY_TEMP",
+    "MAX_RETRIES",
+    "RETRY_DELAY",
+    "USE_CHAT_API",
+    "ENABLE_THINKING",
+    "ENABLE_WITNESS_FILTER",
+    "ENABLE_POST_HISTORY_REINFORCEMENT",
+    "FALLBACK_ON_ISOLATION_FAILURE",
+    "MAX_ROLE_ISOLATION_RETRIES",
+    "MAX_REPETITION_RETRIES",
+    "REPETITION_DETECTION_ENABLED",
+    "MIN_CHARACTER_RESPONSE_LENGTH",
+    "GENERATE_TIMEOUT",
+    "ENABLE_ANTI_MIMICRY",
+    "ENABLE_RELEVANT_MEMORY_SELECTION",
+    "MEMORY_RELEVANCE_TOP_K",
+    "MEMORY_MAX_FACTS_PER_ROUND",
+    "SUMMARY_MAX_PARAGRAPHS",
+    "DEFAULT_EVENT_VISIBILITY",
+    "ChatMessage",
+    "SCENE_STATE_JSON_SCHEMA",
+    "EVENT_EXTRACTION_JSON_SCHEMA",
+    "_ConfigProxy",
+    "_config",
+    "_MODEL_TOOL_MODE_CACHE",
+    "WPE_TOOLS_STATS",
+    "llm_request",
+    "_tool_mode_chain",
+    "_next_tool_mode",
+    "_tools_unsupported_error",
+    "_format_unsupported_error",
+    "wpe_tools_stats_snapshot",
+    "_record_shadow_turn",
+    "_parse_tool_calls",
+    "_parse_turn_output_json",
+    "_resolve_thinking",
+    "_character_temperature",
+    "_character_name",
+    "_format_history",
+    "format_history_for_character",
+    "filter_history_for_character_messages",
+    "_messages_to_prompt",
+    "_count_prompt_tokens",
+    "_count_history_tokens",
+    "_build_generate_payload",
+    "_build_chat_payload",
+    "_call_ollama",
+    "_call_ollama_chat",
+    "_read_ollama_error",
+    "_stream_ollama_generate",
+    "_stream_ollama_generate_unlocked",
+    "_stream_ollama_chat",
+    "_stream_ollama_chat_unlocked",
+    "_invoke_llm",
+    "_build_generation_messages",
+    "_log_repetition",
+    "_generate_once",
+    "_INFLECTION_SUFFIXES",
+    "_vocab_key",
+    "_VOCAB_STOP_ROOTS",
+    "_VOCAB_STOP_KEYS",
+    "_content_words",
+    "_check_vocabulary_borrowing",
+    "generate",
+    "_extract_json_payload",
+    "_coerce_extracted_fact",
+    "parse_extracted_facts",
+    "_parse_json_array",
+    "_parse_json_object",
+    "build_extraction_messages",
+    "build_summary_messages",
+    "build_unified_extraction_messages",
+    "extract_memories_for_character",
+    "summarize_for_character",
+    "extract_memories_unified",
+    "_build_scene_state_messages",
+    "extract_scene_state",
+    "_build_event_extraction_messages",
+    "extract_round_events",
+    "list_models",
+    "upload_adapter_file",
+    "create_model",
+    "delete_model",
+    "check_capabilities",
+    "invoke_json",
+    "extract_json_payload",
+]

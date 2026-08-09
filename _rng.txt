@@ -1,0 +1,71 @@
+--- lines 1105-1125 ---
+ 1105: 
+ 1106: async def _invoke_llm(
+ 1107:     client: httpx.AsyncClient,
+ 1108:     model_name: str,
+ 1109:     messages: list[ChatMessage],
+ 1110:     *,
+ 1111:     temperature: float = DEFAULT_TEMPERATURE,
+ 1112:     stop: list[str] | None = None,
+ 1113: ) -> str:
+ 1114:     """Route a non-streaming LLM call to Chat or Generate API."""
+ 1115:     if settings.use_chat_api:
+ 1116:         return await _call_ollama_chat(
+ 1117:             client, model_name, messages, temperature=temperature, stop=stop
+ 1118:         )
+ 1119:     prompt = _messages_to_prompt(messages)
+ 1120:     return await _call_ollama(
+ 1121:         client, model_name, prompt, temperature=temperature, stop=stop
+ 1122:     )
+ 1123: 
+ 1124: 
+ 1125: def _build_generation_messages(
+--- lines 1200-1230 ---
+ 1200: 
+ 1201: 
+ 1202: def _log_repetition(
+ 1203:     chat_id: int,
+ 1204:     character_name: str,
+ 1205:     analysis: RepetitionAnalysis,
+ 1206:     retry_number: int,
+ 1207: ) -> None:
+ 1208:     logger.info(
+ 1209:         "[REPETITION] chat_id=%d character=%s score=%.2f progression=%.2f "
+ 1210:         "stagnation=%s actions=%s interaction=%s retry=%d reason=%s",
+ 1211:         chat_id,
+ 1212:         character_name,
+ 1213:         analysis.score,
+ 1214:         analysis.progression_score,
+ 1215:         analysis.stagnation,
+ 1216:         analysis.repeated_actions,
+ 1217:         analysis.interaction_pattern or "-",
+ 1218:         retry_number,
+ 1219:         analysis.reason,
+ 1220:     )
+ 1221: 
+ 1222: 
+ 1223: async def _generate_once(
+ 1224:     client: httpx.AsyncClient,
+ 1225:     *,
+ 1226:     chat_id: int,
+ 1227:     character,
+ 1228:     messages_history: list,
+ 1229:     general_prompt: str,
+ 1230:     memories: list,
+--- lines 1915-1930 ---
+ 1915: 
+ 1916: 
+ 1917: async def generate(
+ 1918:     client: httpx.AsyncClient,
+ 1919:     chat_id: int,
+ 1920:     character,
+ 1921:     messages_history: list,
+ 1922:     general_prompt: str,
+ 1923:     memories: list,
+ 1924:     other_character_names: list[str],
+ 1925:     max_history_length: int = 30,
+ 1926:     model_name: str = "default",
+ 1927:     character_names: dict[int, str] | None = None,
+ 1928:     summary: str | None = None,
+ 1929:     viewer_character_id: int | None = None,
+ 1930:     presence_map: dict[int, Presence] | None = None,

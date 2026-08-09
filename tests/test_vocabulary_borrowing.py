@@ -123,7 +123,7 @@ class TestBorrowingRetryBudget:
             "app.ollama_client.settings.repetition_detection_enabled", False
         ), patch("app.ollama_client.settings.enable_thinking", False), patch(
             "app.ollama_client.settings.max_borrowing_retries", 2
-        ), patch("app.ollama_client._generate_once", fake_once):
+        ), patch("app.llm.generation._generate_once", fake_once):
             events = []
             async for ev in ollama_client.generate(
                 client,

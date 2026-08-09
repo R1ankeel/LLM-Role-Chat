@@ -25,6 +25,7 @@ from app import ollama_client
 from app import schemas
 from app.config import settings
 from app.context_state import ctx_state
+from app.llm import wpe
 from app.prompt_builder import (
     build_system_prompt,
     build_take_actions_instruction,
@@ -55,7 +56,7 @@ def _make_character(name: str = "Alice") -> SimpleNamespace:
 
 @pytest.fixture(autouse=True)
 def _reset_wpe_state():
-    ollama_client.WPE_TOOLS_STATS = {
+    wpe.WPE_TOOLS_STATS = {
         "calls": 0,
         "by_mode": {},
         "schema_valid": 0,

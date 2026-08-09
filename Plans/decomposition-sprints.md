@@ -2,8 +2,9 @@
 
 > Статус: **в работе** — спринты 1–4 выполнены (коммиты `9ee9bba`, `2416bff`,
 > `7438b12`, `d6832f8`; спринт 4 — ревизия 2026-08-09, коммит не создан —
-> `app/crud/` в рабочем дереве), следующий — спринт 5 (`llm/` + `pipeline/`)
-> (ревизия 2026-08-09)
+> `app/crud/` в рабочем дереве); спринт 5, **milestone 5A выполнен** (ревизия
+> 2026-08-09, коммит не создан — `app/llm/` в рабочем дереве), следующий —
+> milestone 5B (`pipeline/`) (ревизия 2026-08-09)
 > Дата: 2026-08-09
 > Исходник: [Plans/decomposition.md](decomposition.md) — §9 (поэтапный план) и §10 (риски)
 > Правило: код в рамках этой работы не меняется по логике — только перенос,
@@ -195,6 +196,52 @@
 `docs/deps-after-sprint4.md`; `docs/README.md` и `docs/architecture.md`
 (структура репозитория и слой данных обновлены под пакет `crud/`).
 
+### Спринт 5 (Milestone 5A) — выполнено (ревизия 2026-08-09; коммит не создан — `app/llm/` в рабочем дереве)
+
+**Что сделано (шаги §6.5A):**
+
+1. **`ollama_client.py` → пакет `llm/`.** Монолит 3032 строки разрезан на 7
+   доменных модулей + реэкспортный `__init__.py` (фасад): `lock.py` (28,
+   глобальная сериализация), `transport.py` (548, `_call_*`/`_stream_*`/
+   `llm_request`/`_ConfigProxy`/legacy-константы), `prompting.py` (364,
+   payload-билдеры и форматирование истории), `generation.py` (1344, `generate` +
+   vocabulary borrowing + публичный `invoke_json`/`extract_json_payload`),
+   `tasks.py` (645, извлечение памяти/саммари/scene-state/events),
+   `wpe.py` (187, tool-calling + shadow-метрики), `models.py` (160,
+   list/create/delete/upload/check_capabilities).
+2. **Ацикличность.** Между модулями `llm/*` **нет верхнеуровневых импортов друг
+   друга** — межмодульные символы идут через `__init__.py` или локальные импорты
+   (единственный локальный — `from ..lora_manager import RuntimeCapabilities` в
+   `models.py:144`, против цикла). `python -c "import app.main"` OK.
+3. **Перенос 1:1.** Тела функций перенесены без правок (оригинал —
+   `Plans/artifacts/pre-split/ollama_client.py`); менялись только импорты.
+   `app/ollama_client.py` — тонкий фасад (13 строк): `from .llm import *` +
+   явные `invoke_json`/`extract_json_payload`. `_ConfigProxy` сохранён
+   (`config.py` покрывает его лишь частично); удаление — с фасадом в спринте 10.
+
+**Верификация (gate 5A):**
+
+- **Публичный API `llm/`:** `ollama-client-api-before.txt` (144 символа) →
+  `llm-api-after.txt` (93 символа); разница — имена 7 подмодулей пакета,
+  stdlib-импорты и внутренние хелперы, переехавшие в `llm/*`. **Программная
+  проверка по `app/` (вне `app/llm`): 0 обращений к отсутствующим в фасаде
+  символам** — весь внешне используемый API покрыт; регрессий нет.
+- **Ацикличность:** верхнеуровневых импортов между `llm/*` нет; `python -c
+  "import app.main"` OK; `python -m compileall app` OK.
+- **Потребители фасада:** `test_vocabulary_borrowing.py`,
+  `test_llm_serialization.py`, `test_sensors.py`, WPE-тесты, `test_relationship_*`
+  — зелёные (выборочный прогон: 204 passed).
+- **`pytest -q`:** 41 failed / 1301 passed — набор упавших **идентичен**
+  монолитному baseline'у (41 пред-существующий LLM/env-зависимый фейл); новых
+  регрессий нет.
+- Сервер стартует; `GET /api/health` → `{"status":"ok"}`; ручной раунд чата
+  (SSE) OK; golden `tests/golden/*` не затронуты.
+
+**Артефакты:** `Plans/artifacts/` (gitignored): `ollama-client-api-before.txt`,
+`llm-api-after.txt`; `docs/llm.md` (состав пакета, зависимости, API);
+`docs/deps-after-sprint5.md`; `docs/README.md` и `docs/architecture.md`
+(структура репозитория и архитектура обновлены под пакет `llm/`).
+
 ---
 
 ## 0. Ритм и правила спринтов
@@ -235,7 +282,7 @@
 | 2 | `config/` и `models/` | 2–3 | `config/`, `models/` пакеты |
 | 3 | `db/` и `schemas/` | 4–5 | `db/schema.py`, `db/engine.py`, `schemas/` |
 | 4 | `crud/` (самый крупный) | 6 | `crud/*.py` — 16 доменных модулей |
-| 5 | `llm/` (5A) и `pipeline/` (5B) | 7–8 | 5A: `llm/*`; 5B: `pipeline/streaming.py`, `pipeline/regeneration.py` |
+| 5 | `llm/` (5A) и `pipeline/` (5B) | 7–8 | 5A — выполнено: `llm/*` (7 модулей); 5B: `pipeline/streaming.py`, `pipeline/regeneration.py` |
 | 6 | Отношения и память (6A/6B/6C) | 9–11 | 6A: `pipeline/relations.py`; 6B: `relationships/*`; 6C: `memory/*` |
 | 7 | Детекторы и контекст | 12–14 | `repetition/*`, `context/*`, `prompt/*`, `perception/*` |
 | 8 | Сюжет и роутеры | 15–16 | `plot/consolidation/*`, `plot/crisis/*`, тонкие роутеры |

@@ -540,11 +540,11 @@ async def test_invoke_llm_routes_to_chat():
     messages = ollama_client.build_extraction_messages(character, "dialogue")
 
     with patch("app.ollama_client.settings.use_chat_api", True), patch(
-        "app.ollama_client._call_ollama_chat",
+        "app.llm.generation._call_ollama_chat",
         new_callable=AsyncMock,
         return_value='["fact one"]',
     ) as chat_mock, patch(
-        "app.ollama_client._call_ollama",
+        "app.llm.generation._call_ollama",
         new_callable=AsyncMock,
     ) as generate_mock:
         result = await ollama_client._invoke_llm(
@@ -565,10 +565,10 @@ async def test_invoke_llm_routes_to_generate_when_flag_off():
     messages = ollama_client.build_extraction_messages(character, "dialogue")
 
     with patch("app.ollama_client.settings.use_chat_api", False), patch(
-        "app.ollama_client._call_ollama_chat",
+        "app.llm.generation._call_ollama_chat",
         new_callable=AsyncMock,
     ) as chat_mock, patch(
-        "app.ollama_client._call_ollama",
+        "app.llm.generation._call_ollama",
         new_callable=AsyncMock,
         return_value='["fact one"]',
     ) as generate_mock:
