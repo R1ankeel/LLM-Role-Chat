@@ -88,6 +88,10 @@ class BuiltContext(BaseModel):
     # CRISIS (Sprint 11, §19): активные кризисные линии («давление в контексте»,
     # data-only). Рендер — по флагу crisis_engine_enabled.
     crisis_text: str = ""
+    # WORLD STATE (Sprint 14): глобальный блок с доступными локациями и
+    # расположением всех персонажей (вкл. игрока). Общий для всех NPC,
+    # data-only; рендер — по флагу world_state_enabled.
+    world_state_text: str = ""
     # Context Builder v2 (Sprint 13, §23): WORLD (сцена), WHAT YOU PERCEIVE
     # (perception-строки раунда), RELATIONSHIP (интерпретации + anchors),
     # RELEVANT MEMORY (reranked memories). Заполняются только при

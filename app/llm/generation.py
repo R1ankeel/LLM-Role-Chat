@@ -277,6 +277,7 @@ async def _generate_once(
     active_goal_block: str = "",
     active_plan_block: str = "",
     crisis_block: str = "",
+    world_state_block: str = "",
 ) -> tuple[str, str, bool, int, list[str], schemas.TurnOutput | None]:
     """One LLM call + isolation sanitize.
 
@@ -421,6 +422,12 @@ async def _generate_once(
     if not crisis_block and built_context is not None:
         crisis_block = built_context.crisis_text
 
+    # WORLD STATE block (Sprint 14) — глобальный блок (локации + расположение
+    # всех персонажей, вкл. игрока). Передан из чат-пайплайна (собран там же,
+    # где и WORLD); фолбэк на built_context для не-chat-путей.
+    if not world_state_block and built_context is not None:
+        world_state_block = built_context.world_state_text
+
     # Vocabulary fingerprinting block — prevents style contamination (Phase 5)
     vocabulary_block = build_vocabulary_block(character, prior_replies)
 
@@ -480,12 +487,15 @@ async def _generate_once(
             crisis_block=crisis_block,
             perceive_block=perceive_block,
             relationship_block=relationship_user_block,
+            world_state_block=world_state_block,
         )
         prompt_len = sum(len(msg["content"]) for msg in chat_messages)
         full_prompt = _messages_to_prompt(chat_messages)
     else:
         generation_cue = build_generation_cue(character.name)
         context_parts = [system_prompt]
+        if world_state_block:
+            context_parts.append(world_state_block)
         if summary_block:
             context_parts.append(summary_block)
         if memories_block:
@@ -964,6 +974,7 @@ async def generate(
     active_goal_block: str = "",
     active_plan_block: str = "",
     crisis_block: str = "",
+    world_state_block: str = "",
 ) -> AsyncIterator[dict]:
     """Send a request to Ollama and yield the sanitized response.
 
@@ -1081,6 +1092,7 @@ async def generate(
             active_goal_block=active_goal_block,
             active_plan_block=active_plan_block,
             crisis_block=crisis_block,
+            world_state_block=world_state_block,
         )
 
         if not isolation_ok:

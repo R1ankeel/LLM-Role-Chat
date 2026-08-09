@@ -53,6 +53,12 @@ class ContextSettings():
     context_v2_memory_budget: int = Field(
         default=4000, alias="CONTEXT_V2_MEMORY_BUDGET"
     )
+    # WORLD STATE (Sprint 14): глобальный data-only блок (доступные локации +
+    # расположение всех персонажей, вкл. игрока) в context-промпт каждого NPC.
+    # Флаг-канарейка: при off блок не строится и не рендерится.
+    world_state_enabled: bool = Field(
+        default=True, alias="WORLD_STATE_ENABLED"
+    )
     token_count_mode: str = Field(default="estimated", alias="TOKEN_COUNT_MODE")
     tokenizer_encoding: str = Field(default="", alias="TOKENIZER_ENCODING")
     context_history_load_cap: int = Field(default=2000, alias="CONTEXT_HISTORY_LOAD_CAP")

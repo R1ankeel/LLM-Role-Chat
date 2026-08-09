@@ -1052,3 +1052,59 @@ def build_what_you_know_block(beliefs: list) -> str:
         "(это то, что ты знаешь или подозреваешь о мире, а не объективная истина)\n"
         "</what_you_know>"
     )
+
+
+def build_world_state_block(
+    available_locations: list[str],
+    character_locations: dict[int, str],
+    character_names: dict[int, str],
+    *,
+    unknown_label: str = "unknown",
+) -> str:
+    """Build the ``WORLD STATE`` block for the generation prompt (Sprint 14).
+
+    Общий (глобальный) data-only блок: список доступных локаций (из таблицы
+    locations) + текущее расположение каждого персонажа (включая игрока) из
+    живой in-memory карты раунда (никакой отдельной копии и никаких
+    per-character запросов к БД). Это мировая истина для ориентации NPC,
+    а не то, что персонаж видит вокруг себя (это WORLD/WHAT YOU PERCEIVE).
+
+    Детерминированный порядок: локации сортируются по алфавиту (без учёта
+    регистра, без дубликатов), персонажи — по id. Пустая локация → unknown.
+    Пустой список локаций и пустой список персонажей → пустой блок.
+    """
+    seen: set[str] = set()
+    unique_locations: list[str] = []
+    for raw in available_locations or []:
+        name = (str(raw) or "").strip()
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        unique_locations.append(name)
+    unique_locations.sort(key=str.casefold)
+
+    character_lines: list[str] = []
+    for cid in sorted(character_names or {}):
+        name = (character_names.get(cid) or "").strip()
+        if not name:
+            continue
+        raw_location = (character_locations or {}).get(cid)
+        location = (str(raw_location or "").strip()) or unknown_label
+        character_lines.append(f"- {name}: {location}")
+
+    if not unique_locations and not character_lines:
+        return ""
+
+    parts = ["WORLD STATE"]
+    if unique_locations:
+        loc_lines = "\n".join(f"- {name}" for name in unique_locations)
+        parts.append(f"Доступные локации:\n{loc_lines}")
+    if character_lines:
+        char_lines = "\n".join(character_lines)
+        parts.append(f"Расположение персонажей:\n{char_lines}")
+    return (
+        "<world_state>\n"
+        f"{chr(10).join(parts)}\n"
+        "(это объективное состояние мира, а не инструкция для тебя)\n"
+        "</world_state>"
+    )

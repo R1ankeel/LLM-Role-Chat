@@ -25,6 +25,7 @@ from ..context_builder import ContextBuilder
 from ..lora_manager import LoRAManager
 from ..movement import detect_character_movement
 from ..post_round_pipeline import compute_and_save_presence_for_message
+from ..prompt_builder import build_world_state_block
 from ..role_isolation import get_other_character_names
 from ..stimuli import extract_stimuli
 
@@ -146,6 +147,24 @@ async def regenerate_message_streaming(
     known_locations = _parse_known_locations(
         chat_locations, character_locations, player_location
     )
+
+    # WORLD STATE block (Sprint 14): глобальный data-only блок с доступными
+    # локациями (одна выборка locations) и расположением всех персонажей
+    # (вкл. игрока) из живой карты раунда. Собирается прямо перед генерацией.
+    world_state_block = ""
+    if settings.world_state_enabled:
+        try:
+            _locations_orm = await crud.get_chat_locations(db, chat_id)
+            world_state_block = build_world_state_block(
+                [loc.name for loc in _locations_orm],
+                character_locations,
+                character_names,
+            )
+        except Exception as exc:  # noqa: BLE001 — блок не роняет перегенерацию
+            logger.warning(
+                "[chat_id=%d] Failed to build world state block: %s", chat_id, exc
+            )
+            world_state_block = ""
 
     scene_state = await crud.get_scene_state_with_presence(db, chat_id)
     stagnation_rounds = 0
@@ -367,6 +386,7 @@ async def regenerate_message_streaming(
             ),
             max_tokens=max_tokens,
             story_block=story_block,
+            world_state_block=world_state_block,
         )
 
     other_names = get_other_character_names(characters, character.id)
@@ -433,6 +453,7 @@ async def regenerate_message_streaming(
                     attention_map=attention_map,
                 )
             ),
+            world_state_block=world_state_block,
         ):
             if event["type"] == "token":
                 yield {

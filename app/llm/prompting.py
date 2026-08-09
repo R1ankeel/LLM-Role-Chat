@@ -317,18 +317,22 @@ def _build_generation_messages(
     crisis_block: str = "",
     perceive_block: str = "",
     relationship_block: str = "",
+    world_state_block: str = "",
 ) -> list[ChatMessage]:
     """Build messages for /api/chat with localized blocks (P1 complete).
 
     Context Builder v2 (Sprint 13, §23): ``perceive_block`` (WHAT YOU
     PERCEIVE) и ``relationship_block`` (RELATIONSHIP) — отдельные user-блоки,
-    ``scene_block`` в v2 несёт WORLD.
+    ``scene_block`` в v2 несёт WORLD. ``world_state_block`` (WORLD STATE,
+    Sprint 14) — глобальный блок, идёт первым в user-сообщении (сразу после
+    system-промпта).
     """
     feedback_block = build_repetition_feedback_block(repetition_feedback)
     consistency_feedback_block = build_consistency_feedback_block(
         consistency_feedback
     )
     user_content = build_user_context_message(
+        world_state_block,
         summary_block,
         memories_block,
         dialogue_block,

@@ -146,6 +146,7 @@ class ContextBuilder:
         active_goal_block: str = "",
         active_plan_block: str = "",
         crisis_block: str = "",
+        world_state_block: str = "",
         rerank_signals: dict[int, memory_service.RerankSignals] | None = None,
     ) -> schemas.BuiltContext:
         counter = self._token_counter
@@ -423,6 +424,7 @@ class ContextBuilder:
         active_goal_tokens = counter.count(active_goal_block)
         active_plan_tokens = counter.count(active_plan_block)
         crisis_tokens = counter.count(crisis_block)
+        world_state_tokens = counter.count(world_state_block)
         instructions_tokens = counter.count(instructions_text)
 
         # ---- 6. summary (P2, budgeted) ---------------------------------
@@ -501,6 +503,7 @@ class ContextBuilder:
             + active_goal_tokens
             + active_plan_tokens
             + crisis_tokens
+            + world_state_tokens
             + instructions_tokens
         )
         content_available = max(
@@ -572,6 +575,8 @@ class ContextBuilder:
             + story_tokens
             + active_goal_tokens
             + active_plan_tokens
+            + crisis_tokens
+            + world_state_tokens
             + summary_tokens
             + mem_tokens
             + retrieved_tokens
@@ -615,6 +620,7 @@ class ContextBuilder:
             "active_goal": active_goal_tokens,
             "active_plan": active_plan_tokens,
             "crisis": crisis_tokens,
+            "world_state": world_state_tokens,
             "relationships": counter.count(
                 build_relationships_block(relationships_block)
             ),
@@ -640,6 +646,7 @@ class ContextBuilder:
             active_goal_text=active_goal_block,
             active_plan_text=active_plan_block,
             crisis_text=crisis_block,
+            world_state_text=world_state_block,
             world_text=world_block,
             perceive_text=perceive_block,
             relationship_text=relationship_block,

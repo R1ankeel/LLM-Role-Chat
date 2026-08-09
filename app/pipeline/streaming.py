@@ -30,6 +30,7 @@ from ..context_builder import ContextBuilder
 from ..lora_manager import LoRAManager
 from ..movement import detect_character_movement
 from ..post_round_pipeline import compute_and_save_presence_for_message
+from ..prompt_builder import build_world_state_block
 from ..repetition_detector import analyze_response
 from ..role_isolation import get_other_character_names
 from ..stimuli import extract_stimuli
@@ -191,6 +192,7 @@ async def process_user_message_streaming(
     # stamp messages with the canonical `location_id` even after in-round
     # movement (the in-memory character object's location_id may be stale).
     loc_id_by_name: dict[str, int] = {}
+    _chat_locations_orm: list = []
     try:
         _chat_locations_orm = await crud.get_chat_locations(db, chat_id)
         loc_id_by_name = {
@@ -199,6 +201,24 @@ async def process_user_message_streaming(
         }
     except Exception as exc:  # noqa: BLE001 — локации не роняют раунд
         logger.warning("[chat_id=%d] Failed to load location ids: %s", chat_id, exc)
+
+    # WORLD STATE block (Sprint 14): глобальный data-only блок с доступными
+    # локациями (одна выборка locations на раунд) и расположением всех
+    # персонажей (вкл. игрока) из живой in-memory карты раунда. Один блок на
+    # раунд-шаг — общий для всех NPC; собирается прямо перед генерацией.
+    world_state_block = ""
+    if settings.world_state_enabled:
+        try:
+            world_state_block = build_world_state_block(
+                [loc.name for loc in _chat_locations_orm],
+                character_locations,
+                character_names,
+            )
+        except Exception as exc:  # noqa: BLE001 — блок не роняет раунд
+            logger.warning(
+                "[chat_id=%d] Failed to build world state block: %s", chat_id, exc
+            )
+            world_state_block = ""
 
     def _resolve_loc_id(loc_name: str | None, fallback: int | None = None) -> int | None:
         if loc_name:
@@ -608,6 +628,7 @@ async def process_user_message_streaming(
                 active_goal_block=active_goal_block,
                 active_plan_block=active_plan_block,
                 crisis_block=crisis_block,
+                world_state_block=world_state_block,
             )
 
         response_text = ""
@@ -658,6 +679,7 @@ async def process_user_message_streaming(
                 active_goal_block=active_goal_block,
                 active_plan_block=active_plan_block,
                 crisis_block=crisis_block,
+                world_state_block=world_state_block,
                 recency_tail_block=(
                     built_context.recency_tail_text
                     if built_context is not None
