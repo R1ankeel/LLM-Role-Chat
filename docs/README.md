@@ -29,6 +29,8 @@ FastAPI + SQLAlchemy 2.0 (async/aiosqlite). Фронтенд: два незав�
 | [deps-before.md](deps-before.md) | Dependency graph «до спринта 1» (baseline): циклы `crud ↔ сервисы`, развязка которых выполнена в спринте 1 |
 | [deps-after-sprint1.md](deps-after-sprint1.md) | Dependency graph «после спринта 1»: `memory/retrieval.py`, `perception_utils.py`, handler-registry, фасад `llm.generation.invoke_json` |
 | [deps-after-sprint2.md](deps-after-sprint2.md) | Dependency graph «после спринта 2»: разбиение `config.py` и `models.py` на пакеты |
+| [deps-after-sprint3.md](deps-after-sprint3.md) | Dependency graph «после спринта 3»: DDL из `database.py` → `db/`, `schemas.py` → пакет `schemas/` |
+| [schemas.md](schemas.md) | Pydantic-схемы (пакет `app/schemas/`): состав модулей, реэкспорт, ацикличность импортов |
 
 ## Краткий обзор
 
@@ -58,9 +60,10 @@ ai-roleplay-chat/
 ├── app/
 │   ├── main.py              # FastAPI app, lifespan, фоновые воркеры, CORS
 │   ├── config/              # ПАКЕТ (Sprint 2): доменные миксины Settings + синглтон settings
-│   ├── database.py          # SQLite sync+async, индексы, миграции
+│   ├── database.py          # тонкий реэкспорт-фасад (Sprint 3); реализация — в db/
+│   ├── db/                  # ПАКЕТ (Sprint 3): engine.py (движки/сессии/init_db), schema.py (вся DDL)
 │   ├── models/              # ПАКЕТ (Sprint 2): 12 доменных модулей ORM, реэкспорт всех классов
-│   ├── schemas.py           # Pydantic-схемы, нормализация категорий/visibility
+│   ├── schemas/             # ПАКЕТ (Sprint 3): 13 доменных модулей Pydantic-схем + реэкспорт
 │   ├── crud.py              # слой доступа к данным (async)
 │   ├── perception.py        # правила восприятия событий (локация/visibility/каналы)
 │   ├── perception_utils.py  # чистые хелперы локаций/адресатов (Sprint 1)

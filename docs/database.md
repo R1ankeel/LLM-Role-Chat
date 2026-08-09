@@ -6,6 +6,21 @@ SQLite, файл `ai_chat.db` рядом с `main.py`. Два подключен
 
 При каждом старте включается `PRAGMA foreign_keys=ON` и `PRAGMA journal_mode=WAL`. Схема создаётся/мигрируется через `init_db()` → `ensure_schema(engine)`: `Base.metadata.create_all` + набор идемпотентных миграций (`ALTER TABLE ... ADD COLUMN` для новых колонок, `CREATE TABLE IF NOT EXISTS` для новых таблиц, бэкафилл-скрипты для старых данных).
 
+## Код (Sprint 3, `app/database.py` → `app/db/`)
+
+Монолит `app/database.py` разбит на пакет `app/db/` (без изменений SQL):
+
+| Файл | Содержание |
+|---|---|
+| `db/engine.py` | движки sync/async, PRAGMA-листенеры, `SessionLocal`/`AsyncSessionLocal`, `Base`, `init_db`, `get_async_db`/`get_db`/фабрики сессий |
+| `db/schema.py` | вся DDL из `ensure_schema` (~1220 строк) + `INDEXES`, `memory_content_hash`, `_backfill_memory_hashes` — идемпотентные миграции без изменений SQL |
+| `database.py` | тонкий реэкспорт-фасад (временный, удаляется на этапе 19 декомпозиции) |
+
+Зависимость однонаправленная: `db/engine.py → db/schema.py` (в `init_db`);
+`db/schema.py` БД-движков не импортирует (`ensure_schema(db_engine)` получает
+движок параметром). Все прежние импорты `from app.database import Base /
+SessionLocal / init_db / ...` продолжают работать через фасад.
+
 ## Таблицы
 
 ### `chats`

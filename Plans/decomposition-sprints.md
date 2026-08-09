@@ -1,8 +1,8 @@
 # План декомпозиции по спринтам
 
-> Статус: **в работе** — спринты 1–2 выполнены, спринт 2 подготовлен к коммиту
-> (ревизия 2026-08-08)
-> Дата: 2026-08-08
+> Статус: **в работе** — спринты 1–3 выполнены, спринт 3 подготовлен к коммиту
+> (ревизия 2026-08-09)
+> Дата: 2026-08-09
 > Исходник: [Plans/decomposition.md](decomposition.md) — §9 (поэтапный план) и §10 (риски)
 > Правило: код в рамках этой работы не меняется по логике — только перенос,
 > переименования и разбиение импортов. **Каждый спринт заканчивается зелёным
@@ -47,7 +47,7 @@
 
 **Артефакт:** `docs/deps-before.md` (baseline) + `docs/deps-after-sprint1.md`.
 
-### Спринт 2 — выполнено (не закоммичен)
+### Спринт 2 — выполнено (коммит `7438b12`)
 
 **Что сделано (все шаги §3):**
 
@@ -89,6 +89,59 @@
 
 **Артефакты:** `Plans/artifacts/` (gitignored) — снапшоты API/таблиц/настроек
 до и после; `docs/deps-after-sprint2.md`.
+
+### Спринт 3 — выполнено (не закоммичен)
+
+**Что сделано (все шаги §4):**
+
+1. **`database.py` → `db/`.** Вся DDL из `ensure_schema` (~1220 строк, диапазон
+   111–1330) перенесена в `db/schema.py` **без изменений SQL** (проверено
+   программно: 23 triple-quoted SQL-блока и 94 `text(...)`-выражения
+   байт-в-байт совпадают с `HEAD:app/database.py`; счётчики DDL: 22
+   `CREATE TABLE`, 38 `ALTER TABLE`, 48 `CREATE INDEX`, 1 `CREATE UNIQUE INDEX`
+   — идентичны). Идемпотентность сохранена. Engine, pragma, `init_db`, сессии
+   и `Base` → `db/engine.py` (зависимость `engine → schema` — циклов нет).
+   В `database.py` остался тонкий реэкспорт-фасад (импорты `Base`,
+   `SessionLocal`, `AsyncSessionLocal`, `init_db`, `get_async_db`,
+   `memory_content_hash` и т.д. у потребителей не менялись).
+2. **`schemas.py` → пакет `schemas/`.** 13 доменных модулей: `chat.py`,
+   `character.py`, `message.py`, `memory.py`, `relationship.py`, `scene.py`,
+   `context.py`, `job.py`, `story.py`, `belief.py`, `state.py`, `lora.py`,
+   `perception.py`. **Ацикличность проверена статически до резки:**
+   `schemas/perception.py → schemas/message.py → app.perception/stimuli`
+   (локальные импорты `app.perception` на `app.schemas` остаются
+   function-level), `chat.py → character.py + message.py` — циклов нет.
+   Реэкспорт через `schemas/__init__.py` (`__all__` из 97 символов).
+   Два внутренних относительных импорта обновлены на новый уровень пакета:
+   `from .config import settings` → `from ..config import settings`
+   (`schemas/relationship.py`), `from .emotion_engine import ...` →
+   `from ..emotion_engine import ...` (`schemas/state.py`).
+3. **Отклонение от §4.6:** `Location*` и `CharacterLocationUpdate`/`CharacterSummaryRead`
+   отнесены в `character.py` (отдельного `locations.py` в плане `schemas/` нет);
+   event-схемы (`ExtractedEvent`/`EventExtraction*`/`EventAction`) — в `scene.py`;
+   `UserMessage`/`Intervention*` — в `chat.py`; `MemoryJobRead` — в `job.py`.
+
+**Верификация (gate):**
+
+- **`init_db` на копии `ai_chat.db`** — OK: на копии без WAL-файлов создалась
+  схема, миграции/backfill применились (`app.db.schema` лог), повторный прогон
+  идемпотентен.
+- **Публичный API `schemas/`:** `__all__` (97 символов) совпадает до/после
+  (`Plans/artifacts/schemas-api-before.txt` vs `schemas-api-after.txt`);
+  67 классов совпадают (`schemas-classes-before.txt`/`-after.txt`). Различие
+  в `dir()` только за счёт имён 13 подмодулей пакета.
+- **`pytest -q`:** 41 failed / 1301 passed. Сверка с git worktree HEAD
+  (до резки): набор упавших в ветке — **строгое подмножество** HEAD (в HEAD
+  43; 2 лишних — флаки LLM-снапшотов `test_chat_engine.py::test_memory_extraction_*`).
+  Новых регрессий нет.
+- Сервер стартует; `GET /api/health` → `{"status": "ok"}`; `GET /api/chats` → 200;
+  **ручной раунд чата OK** (SSE): создан чат + NPC, `POST /api/chats/28/message`
+  вернул `message` → 50+ `token` → `message` (ответ NPC) → `done`.
+
+**Артефакты:** `Plans/artifacts/` (gitignored): `schemas-api-before.txt`,
+`schemas-classes-before.txt`, `schemas-api-after.txt`, `schemas-classes-after.txt`;
+`docs/deps-after-sprint3.md`; `docs/database.md` (обновлён — раздел про пакет `db/`);
+`docs/schemas.md`.
 
 ---
 
