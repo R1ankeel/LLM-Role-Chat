@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app import crud
 from app.routers.chat_engine import _run_generation
@@ -22,7 +22,7 @@ def mock_client():
 
 @pytest.fixture
 def test_session_factory(db_engine):
-    return sessionmaker(bind=db_engine)
+    return async_sessionmaker(bind=db_engine, expire_on_commit=False)
 
 
 async def _fake_generate(**kwargs):
@@ -43,13 +43,25 @@ def _enter_generation_patches(test_session_factory):
         patch("app.chat_engine.ollama_client.generate", side_effect=_fake_generate)
     )
     stack.enter_context(
+        patch(
+            "app.chat_engine.ollama_client.extract_scene_state",
+            AsyncMock(return_value=None),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "app.post_round_pipeline.run_post_round_pipeline",
+            AsyncMock(return_value=None),
+        )
+    )
+    stack.enter_context(
         patch("app.chat_engine.memory_service.process_post_round", _noop_post_round)
     )
     stack.enter_context(
         patch("app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread)
     )
     stack.enter_context(
-        patch("app.routers.chat_engine.SessionLocal", test_session_factory)
+        patch("app.routers.chat_engine.AsyncSessionLocal", test_session_factory)
     )
     return stack
 
@@ -69,7 +81,7 @@ async def test_detached_generation_persists_when_consumer_stops_early(
     assert first_event["type"] == "message"
     assert first_event["message"]["role"] == "user"
 
-    saved = crud.get_messages_by_chat(db_session, chat.id)
+    saved = await crud.get_messages_by_chat(db_session, chat.id)
     assert len(saved) == 4  # user + 3 characters
     character_messages = [m for m in saved if m.role == "character"]
     assert len(character_messages) == 3
@@ -92,6 +104,6 @@ async def test_background_generation_completes_after_partial_sse_read(
 
         await asyncio.wait_for(gen_task, timeout=5)
 
-    saved = crud.get_messages_by_chat(db_session, chat.id)
+    saved = await crud.get_messages_by_chat(db_session, chat.id)
     character_messages = [m for m in saved if m.role == "character"]
     assert len(character_messages) == 3

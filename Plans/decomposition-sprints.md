@@ -3,8 +3,9 @@
 > Статус: **в работе** — спринты 1–4 выполнены (коммиты `9ee9bba`, `2416bff`,
 > `7438b12`, `d6832f8`; спринт 4 — ревизия 2026-08-09, коммит не создан —
 > `app/crud/` в рабочем дереве); спринт 5, **milestone 5A выполнен** (ревизия
-> 2026-08-09, коммит не создан — `app/llm/` в рабочем дереве), следующий —
-> milestone 5B (`pipeline/`) (ревизия 2026-08-09)
+> 2026-08-09, коммит не создан — `app/llm/` в рабочем дереве),
+> **milestone 5B выполнен** (ревизия 2026-08-09, коммит не создан —
+> `app/pipeline/` в рабочем дереве, фасад `app/chat_engine.py` реэкспортирует API)
 > Дата: 2026-08-09
 > Исходник: [Plans/decomposition.md](decomposition.md) — §9 (поэтапный план) и §10 (риски)
 > Правило: код в рамках этой работы не меняется по логике — только перенос,
@@ -282,7 +283,7 @@
 | 2 | `config/` и `models/` | 2–3 | `config/`, `models/` пакеты |
 | 3 | `db/` и `schemas/` | 4–5 | `db/schema.py`, `db/engine.py`, `schemas/` |
 | 4 | `crud/` (самый крупный) | 6 | `crud/*.py` — 16 доменных модулей |
-| 5 | `llm/` (5A) и `pipeline/` (5B) | 7–8 | 5A — выполнено: `llm/*` (7 модулей); 5B: `pipeline/streaming.py`, `pipeline/regeneration.py` |
+| 5 | `llm/` (5A) и `pipeline/` (5B) | 7–8 | 5A — выполнено: `llm/*` (7 модулей); 5B — выполнено: `pipeline/{streaming,regeneration,session,story,lora}.py`, фасад `chat_engine.py` |
 | 6 | Отношения и память (6A/6B/6C) | 9–11 | 6A: `pipeline/relations.py`; 6B: `relationships/*`; 6C: `memory/*` |
 | 7 | Детекторы и контекст | 12–14 | `repetition/*`, `context/*`, `prompt/*`, `perception/*` |
 | 8 | Сюжет и роутеры | 15–16 | `plot/consolidation/*`, `plot/crisis/*`, тонкие роутеры |
@@ -491,6 +492,36 @@ golden-снапшоты `tests/golden/*` и eval-набор `tests/eval/`; **п�
 **DoD:** `ollama_client.py` перестал существовать как монолит (фасад-реэкспорт
 допустим временно); `pipeline/streaming.py` + `regeneration.py` выделены;
 SSE-пайплайн поведенчески идентичен; **gate 5A и 5B пройдены по отдельности**.
+
+**Выполнено (ревизия 2026-08-09):**
+- Выделены `app/pipeline/{streaming,session,regeneration,story,lora}.py`
+  (тела перенесены дословно по диапазонам из канонического оригинала
+  `Plans/artifacts/pre-split/chat_engine.py`, 3240 строк).
+- `app/chat_engine.py` стал фасадом (1058 строк): docstring + импорты +
+  logger + реэкспорт API + блок анализа отношений (12 функций,
+  `_analyze_and_update_relationships` … `_compute_hearsay_effective_cap`).
+- Отложенные (lazy) импорты из фасада в `pipeline/*`:
+  `story.py` → `_build_pair_relationship_context`, `_evidence_mode`;
+  `streaming.py` → `_analyze_and_update_relationships`, а также
+  `app.routers.debug.remember_pipeline_report`; `session.py` →
+  `pipeline.streaming.process_user_message_streaming`. В `story.py` сохранён
+  lazy `from . import crud` (ломает круговой импорт `crud ↔ chat_engine`).
+- **Проверка идентичности:** `verify_5b2_tmp.py` — все реэкспорты
+  `ce.<name> is pipeline.<name>` (streaming, regeneration, session,
+  snapshot, story, epistemic, belief, lora, warned). `import app.main` OK.
+- **Тесты:** `test_chat_engine.py` (11), `test_stream_disconnect.py` (2),
+  `test_lora_integration.py`+`test_locations_perception.py` (12),
+  фасад-блок отношений/story (87), streaming-round интеграция (15) —
+  всё зелёное. Время на файл совпадает с каноническим оригиналом
+  (среда: локальный ollama активен → unmocked LLM-вызовы замедляют полный
+  прогон; для gate использован точечный прогон затрагиваемых файлов).
+- Восстановлен устаревший тест `test_stream_disconnect.py` (router
+  переведён на `AsyncSessionLocal` 2026-08-07): патч
+  `AsyncSessionLocal` + `async_sessionmaker(expire_on_commit=False)`,
+  добавлены `await` на `crud.get_messages_by_chat`, моки
+  `ollama_client.extract_scene_state` и `post_round_pipeline`.
+- Публичный API `pipeline/` зафиксирован в `app/pipeline/__init__.py`
+  (импорты подмодулей + `__all__`).
 
 ---
 
