@@ -15,17 +15,21 @@ settings, AsyncSessionLocal, ...}``).
 - ``story._compute_epistemic_evidence`` / ``story._belief_evidenced_ids`` —
   эпистемический evidence/belief (docs/relations.md §10, Sprint 5 §9).
 
+Milestone 6A (decomposition-sprints.md §6A): ``relations.py`` — анализ отношений
+после раунда (``_analyze_and_update_relationships``, sensors-hook, per-pair
+fallback, evidence/constrain, hearsay caps). Анализ отношений больше не живёт
+в фасаде ``chat_engine`` и не входит в streaming-путь; streaming только
+планирует его через ``post_round_pipeline``.
+
 Зависимости: ``pipeline/*`` импортируют только публичные API модулей
-(``crud``, ``schemas``, ``perception`` и т.д.). Временные точечные импорты из
-фасада ``chat_engine`` (``_analyze_and_update_relationships``,
-``_build_pair_relationship_context``, ``_evidence_mode``) сделаны отложенными
-внутри функций — они закрываются в Milestone 6A (``pipeline/relations.py``).
+(``crud``, ``schemas``, ``perception`` и т.д.).
 """
 
 from . import lora
 from . import regeneration
+from . import relations
 from . import session
 from . import story
 from . import streaming
 
-__all__ = ["lora", "regeneration", "session", "story", "streaming"]
+__all__ = ["lora", "regeneration", "relations", "session", "story", "streaming"]

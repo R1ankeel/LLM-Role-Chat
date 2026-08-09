@@ -12,6 +12,8 @@ from app import chat_engine
 from app import relationship_service
 from app import schemas
 from app.models import CharacterRelationship, RelationshipEvent
+from app.pipeline import relations
+from app.relationships import deltas as relationship_deltas
 
 
 async def _no_memory(*args, **kwargs):
@@ -62,7 +64,7 @@ class TestSingleTransaction:
     ):
         """apply_delta must not persist anything before the caller commits."""
         monkeypatch.setattr(
-            relationship_service, "_maybe_create_memory_from_event", _no_memory
+            relationship_deltas, "_maybe_create_memory_from_event", _no_memory
         )
         a, b, _ = three_characters
         session_factory = async_sessionmaker(
@@ -93,7 +95,7 @@ class TestSingleTransaction:
     ):
         """If the batch never commits, nothing is persisted."""
         monkeypatch.setattr(
-            relationship_service, "_maybe_create_memory_from_event", _no_memory
+            relationship_deltas, "_maybe_create_memory_from_event", _no_memory
         )
         a, b, _ = three_characters
         session_factory = async_sessionmaker(
@@ -133,9 +135,9 @@ class TestSingleTransaction:
             db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
         )
         monkeypatch.setattr(
-            chat_engine.relationship_service, "_maybe_create_memory_from_event", _no_memory
+            relationship_deltas, "_maybe_create_memory_from_event", _no_memory
         )
-        monkeypatch.setattr(chat_engine, "AsyncSessionLocal", session_factory)
+        monkeypatch.setattr(relations, "AsyncSessionLocal", session_factory)
 
         async def fake_batch(client, model_name, scene_text, pairs, known_pairs):
             deltas = [

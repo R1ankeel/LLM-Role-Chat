@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 from app import crud
 from app.config import settings
-from app.chat_engine import _constrain_pair_delta
+from app.pipeline.relations import _constrain_pair_delta
 from app.relationship_service import compute_reciprocity_belief_multiplier
 from app.schemas import RelationshipDelta
 

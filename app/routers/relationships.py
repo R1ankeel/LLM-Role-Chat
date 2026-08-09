@@ -14,6 +14,7 @@ from .. import crud
 from .. import models
 from .. import schemas
 from ..database import get_async_db
+from ..pipeline.relations import _analyze_and_update_relationships
 from ..relationship_service import (
     apply_delta,
     get_or_create_relationship,
@@ -340,7 +341,7 @@ async def analyze_relationships_on_demand(
     ]
 
     client = request.app.state.ollama_client
-    return await chat_engine._analyze_and_update_relationships(
+    return await _analyze_and_update_relationships(
         client, chat_id, chat.model_name,
         round_snapshots, character_snapshots,
         round_id=round_id,

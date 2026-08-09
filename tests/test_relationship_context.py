@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from app.chat_engine import (
+from app.pipeline.relations import (
     _build_pair_relationship_context,
     _constrain_pair_delta,
     _evidence_mode,

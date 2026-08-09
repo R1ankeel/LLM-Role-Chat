@@ -20,12 +20,12 @@ from __future__ import annotations
 import pytest
 
 import app.ollama_client as ollama_client
-from app import chat_engine
 from app import crud
 from app import perception
 from app import post_round_pipeline
 from app import schemas
 from app import witness_model
+from app.pipeline import relations
 from app.config import settings
 from app.context_builder import ContextBuilder
 from app.prompt_builder import build_system_intervention_block
@@ -193,21 +193,21 @@ def _msg_for_render(*, role="character", content="hi"):
 # ---------------------------------------------------------------------------
 
 def test_evidence_mode_from_perception_mapping():
-    assert chat_engine.evidence_mode_from_perception(_res("full", "full")) == "direct"
-    assert chat_engine.evidence_mode_from_perception(_res("full", "none")) == "observed"
+    assert relations.evidence_mode_from_perception(_res("full", "full")) == "direct"
+    assert relations.evidence_mode_from_perception(_res("full", "none")) == "observed"
     assert (
-        chat_engine.evidence_mode_from_perception(_res("none", "full", addressed=True))
+        relations.evidence_mode_from_perception(_res("none", "full", addressed=True))
         == "direct"
     )
     assert (
-        chat_engine.evidence_mode_from_perception(_res("none", "full"))
+        relations.evidence_mode_from_perception(_res("none", "full"))
         == "hearsay"
     )
     assert (
-        chat_engine.evidence_mode_from_perception(_res("none", "muffled"))
+        relations.evidence_mode_from_perception(_res("none", "muffled"))
         == "hearsay"
     )
-    assert chat_engine.evidence_mode_from_perception(_res()) == "none"
+    assert relations.evidence_mode_from_perception(_res()) == "none"
 
 
 def test_evidence_identity_presence_and_mode_agree():
@@ -223,7 +223,7 @@ def test_evidence_identity_presence_and_mode_agree():
     ]
     for result in combos:
         presence = witness_model.perceive_to_presence(result)
-        mode = chat_engine.evidence_mode_from_perception(result)
+        mode = relations.evidence_mode_from_perception(result)
         assert (presence == "absent") == (mode == "none"), (presence, mode)
 
 

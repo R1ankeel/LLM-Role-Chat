@@ -9,7 +9,7 @@ teller->target valence is hostile (a gossip).
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.chat_engine import (
+from app.pipeline.relations import (
     _compute_hearsay_effective_cap,
     _hearsay_effective_cap,
 )

@@ -213,7 +213,7 @@ async def test_per_character_memory_extraction_called(
         "app.chat_engine.ollama_client.generate",
         side_effect=fake_generate,
     ), patch.object(settings, "task_queue_enabled", False), patch(
-        "app.chat_engine.AsyncSessionLocal", test_session_factory
+        "app.pipeline.relations.AsyncSessionLocal", test_session_factory
     ), patch(
         "app.memory_service.AsyncSessionLocal", test_session_factory
     ):
@@ -310,7 +310,7 @@ async def test_round_id_anchored_on_user_message(db_session, chat, mock_client):
         yield {"type": "response", "text": "Valid reply here."}
 
     with patch(
-        "app.chat_engine._analyze_and_update_relationships",
+        "app.pipeline.relations._analyze_and_update_relationships",
         new=MagicMock(side_effect=fake_analyze),
     ), patch("app.chat_engine.asyncio.create_task"), patch(
         "app.chat_engine.asyncio.to_thread", side_effect=_run_in_current_thread
@@ -346,7 +346,7 @@ async def test_epistemic_mask_built_and_passed_to_generate(db_session, chat, moc
         yield {"type": "response", "text": "Valid reply here."}
 
     with patch(
-        "app.chat_engine._analyze_and_update_relationships",
+        "app.pipeline.relations._analyze_and_update_relationships",
         new=MagicMock(return_value=None),
     ), patch(
         "app.chat_engine.relationship_service.build_epistemic_mask_block",
@@ -388,7 +388,7 @@ async def test_epistemic_evidence_detects_direct_interaction(db_session, chat, m
         yield {"type": "response", "text": "Valid reply here."}
 
     with patch(
-        "app.chat_engine._analyze_and_update_relationships",
+        "app.pipeline.relations._analyze_and_update_relationships",
         new=MagicMock(return_value=None),
     ), patch(
         "app.chat_engine.relationship_service.build_epistemic_mask_block",
@@ -518,7 +518,7 @@ async def test_batch_failure_falls_back_to_per_pair(db_engine, mock_client):
             )
         ]
 
-    with patch("app.chat_engine.AsyncSessionLocal", factory), patch(
+    with patch("app.pipeline.relations.AsyncSessionLocal", factory), patch(
         "app.chat_engine.relationship_analyzer.analyze_batch_relationships",
         side_effect=fake_batch,
     ), patch(

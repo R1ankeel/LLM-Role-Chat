@@ -1112,7 +1112,7 @@ async def process_user_message_streaming(
     # extraction → memory → relationships → story. Каждая стадия изолирована
     # try/except — падение одной не ломает раунд (graceful degradation).
     try:
-        from ..chat_engine import _analyze_and_update_relationships
+        from .relations import _analyze_and_update_relationships
         from ..post_round_pipeline import run_post_round_pipeline
 
         _pipeline_report = await run_post_round_pipeline(

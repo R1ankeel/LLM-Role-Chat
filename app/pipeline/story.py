@@ -6,8 +6,8 @@
   evidence/belief для mask (docs/relations.md §10, Sprint 5 §9).
 
 ``_compute_epistemic_evidence`` использует ``_build_pair_relationship_context``
-и ``_evidence_mode`` из фасада ``chat_engine`` (они переедут в
-``pipeline/relations.py`` в Milestone 6A) — импорт отложенный, внутри функции.
+и ``_evidence_mode`` из ``pipeline/relations.py`` (Milestone 6A) — импорт
+отложенный, внутри функции.
 """
 
 import logging
@@ -74,7 +74,7 @@ async def _compute_epistemic_evidence(
     beliefs — id персонажей, о которых у ``viewer`` уже есть убеждение из
     прошлых раундов (mask может читать beliefs вместо «неизвестно»).
     """
-    from ..chat_engine import _build_pair_relationship_context, _evidence_mode
+    from .relations import _build_pair_relationship_context, _evidence_mode
 
     evidenced: set[int] = set()
     for other in all_characters:

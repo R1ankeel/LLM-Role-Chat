@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import relationship_service
-from app.chat_engine import _constrain_pair_delta
+from app.pipeline.relations import _constrain_pair_delta
 from app.schemas import RelationshipDelta
 
 METRICS = ("affection", "trust", "attraction", "resentment", "jealousy")
