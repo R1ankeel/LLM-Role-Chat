@@ -151,6 +151,26 @@ export const useCharactersStore = defineStore('characters', () => {
     }
   }
 
+  /**
+   * Ручной переключатель участия NPC в автоматической генерации.
+   * Оптимистичное обновление UI; при ошибке API значение откатывается.
+   */
+  async function setActive(characterId: number, isActive: boolean) {
+    const index = characters.value.findIndex((c) => c.id === characterId)
+    const previous = index !== -1 ? characters.value[index].is_active : undefined
+    if (index !== -1) characters.value[index] = { ...characters.value[index], is_active: isActive }
+    try {
+      const updated = await api.updateCharacter(characterId, { is_active: isActive })
+      if (index !== -1) characters.value[index] = updated
+      return updated
+    } catch (e) {
+      if (index !== -1 && previous !== undefined) {
+        characters.value[index] = { ...characters.value[index], is_active: previous }
+      }
+      throw e
+    }
+  }
+
   async function remove(characterId: number) {
     mutating.value = true
     try {
@@ -223,6 +243,7 @@ export const useCharactersStore = defineStore('characters', () => {
     syncPlayerLocation,
     create,
     update,
+    setActive,
     remove,
     uploadAvatar,
     removeAvatar,

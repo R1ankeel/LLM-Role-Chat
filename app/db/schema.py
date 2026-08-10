@@ -212,6 +212,9 @@ def ensure_schema(db_engine) -> None:
             ("location", "TEXT NOT NULL DEFAULT ''"),
             # WPE 3.0 (Фаза 0): каноническая локация, nullable до backfill (Фаза 1)
             ("location_id", "INTEGER REFERENCES locations(id) ON DELETE SET NULL"),
+            # Ручное включение/выключение NPC в автоматической генерации:
+            # default 1 (true) — существующие и новые персонажи активны.
+            ("is_active", "INTEGER NOT NULL DEFAULT 1"),
         ]
         for column_name, column_type in new_character_columns:
             if column_name not in character_columns:

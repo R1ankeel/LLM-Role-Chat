@@ -61,6 +61,9 @@ class CharacterBase(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     order_index: int = 0
     is_player: bool = False
+    # Ручной переключатель участия в автоматической генерации (default=True).
+    # is_active=false не влияет на существование персонажа в мире/локации.
+    is_active: bool = True
 
 
 class InitialRelationship(BaseModel):
@@ -96,6 +99,7 @@ class CharacterUpdate(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     order_index: Optional[int] = None
     is_player: Optional[bool] = None
+    is_active: Optional[bool] = None
 
     @field_validator("avatar_crop", mode="before")
     @classmethod

@@ -17,6 +17,8 @@ export interface Character {
   temperature?: number | null
   order_index: number
   is_player: boolean
+  /** Участие NPC в автоматической генерации (ручной переключатель). */
+  is_active: boolean
   created_at: string
 }
 

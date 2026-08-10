@@ -192,6 +192,7 @@ export const mockApi: Api = {
       temperature: input.temperature ?? 0.8,
       order_index: input.order_index ?? list.length,
       is_player: false,
+      is_active: input.is_active ?? true,
       created_at: nowIso(),
     }
     list.push(character)
@@ -216,6 +217,7 @@ export const mockApi: Api = {
       if (patch.avatar_crop != null) char.avatar_crop = patch.avatar_crop
       if (patch.temperature != null) char.temperature = patch.temperature
       if (patch.order_index != null) char.order_index = patch.order_index
+      if (patch.is_active != null) char.is_active = patch.is_active
       return delay(clone(char))
     }
     throw new Error('Персонаж не найден')
@@ -407,6 +409,7 @@ export const mockApi: Api = {
         avatar_crop: '',
         order_index: 0,
         is_player: true,
+        is_active: true,
         created_at: chat.created_at,
       },
     ]

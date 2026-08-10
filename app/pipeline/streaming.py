@@ -161,6 +161,13 @@ async def process_user_message_streaming(
         logger.warning("[chat_id=%d] No characters in chat", chat_id)
         return
 
+    # Manual NPC toggle: только активные NPC участвуют в автоматической
+    # генерации (sequential generation). `characters` остаётся ПОЛНЫМ списком
+    # NPC — выключенный NPC по-прежнему существует в мире: его локация видна
+    # в World State, он участвует в perception/presence, сохраняет память и
+    # отношения, может быть целью взаимодействия (но не генерирует сам).
+    active_characters = [c for c in characters if getattr(c, "is_active", True)]
+
     character_ids = [c.id for c in characters]  # NPCs only
     # Per-NPC directive text for this round: only the frozen recipients of each
     # pending intervention hear its instruction (filtering by character_id on
@@ -246,6 +253,10 @@ async def process_user_message_streaming(
         characters,
         character_names,
     )
+
+    if not active_characters:
+        logger.warning("[chat_id=%d] No active NPCs in chat", chat_id)
+        return
 
     # Get scene state for this round (P3) — needed for the retrieval query too
     scene_state = await crud.get_scene_state_with_presence(db, chat_id)
@@ -414,8 +425,10 @@ async def process_user_message_streaming(
     # вынесен в `_round_step` (async-генератор); оркестрация цикла — очередь
     # приоритетов и буждение — делегируется round_engine (единственная
     # оркестрирующая функция, правило §9). Флаг off — run_round_fixed (откат
-    # без изменения поведения: исходный фиксированный порядок).
-    npc_id_set = {c.id for c in characters}
+    # без изменения поведения: исходный фиксированный порядок). В очередь
+    # попадают только активные NPC — выключенные не генерируют даже при
+    # буждении/адресации.
+    npc_id_set = {c.id for c in active_characters}
 
     async def _round_step(current_character, bus):
         nonlocal context_messages, round_generation_ok
@@ -939,10 +952,10 @@ async def process_user_message_streaming(
     # ходом через seed_target_ids. Флаг off — исходный фиксированный порядок.
     if settings.world_engine_event_bus_enabled:
         _round_iterator = round_engine.run_round(
-            characters, _round_step, seed_target_ids=event_targets
+            active_characters, _round_step, seed_target_ids=event_targets
         )
     else:
-        _round_iterator = round_engine.run_round_fixed(characters, _round_step)
+        _round_iterator = round_engine.run_round_fixed(active_characters, _round_step)
     async for _round_event in _round_iterator:
         yield _round_event
 

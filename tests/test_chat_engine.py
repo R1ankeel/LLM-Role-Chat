@@ -99,6 +99,61 @@ async def test_sequential_generation_order_and_context(
 
 
 @pytest.mark.asyncio
+async def test_inactive_npc_skipped_from_generation(db_session, chat, mock_client):
+    """Manual NPC toggle: inactive NPC does not generate but stays in the world."""
+    characters = await create_characters(db_session, chat.id, 3)
+    inactive = characters[1]
+    await crud.update_character(
+        db_session, inactive.id, schemas.CharacterUpdate(is_active=False)
+    )
+    # is_active persists in DB; the NPC still exists and keeps its state
+    reloaded = await crud.get_character(db_session, inactive.id)
+    assert reloaded is not None
+    assert reloaded.is_active is False
+    assert reloaded.location == ""
+
+    call_log: list[str] = []
+
+    async def fake_generate(**kwargs):
+        character = kwargs["character"]
+        call_log.append(character.name)
+        yield {
+            "type": "response",
+            "text": f"Reply from {character.name} with enough text for validation.",
+        }
+
+    with patch(
+        "app.chat_engine.ollama_client.generate",
+        side_effect=fake_generate,
+    ), patch("app.chat_engine.asyncio.create_task"), patch(
+        "app.chat_engine.asyncio.to_thread",
+        side_effect=_run_in_current_thread,
+    ):
+        messages = []
+        async for event in chat_engine.process_user_message_streaming(
+            mock_client,
+            db_session,
+            chat.id,
+            "Hello everyone",
+        ):
+            if event.get("type") == "message":
+                messages.append(event["message"])
+
+    # Inactive NPC gets no LLM call, no message, no slot in the round
+    assert call_log == ["Character A", "Character C"]
+    assert len(messages) == 3  # user + 2 active NPCs
+    saved = await crud.get_messages_by_chat(db_session, chat.id)
+    character_messages = [m for m in saved if m.role == "character"]
+    assert [m.character_id for m in character_messages] == [
+        characters[0].id,
+        characters[2].id,
+    ]
+    # World State (character locations) still contains the inactive NPC
+    locations = await crud.get_character_locations_by_chat(db_session, chat.id)
+    assert inactive.id in locations
+
+
+@pytest.mark.asyncio
 async def test_memory_isolation_per_character(db_session, chat, mock_client):
     """TEST 8: each character receives only its own memories in generate()."""
     characters = await create_characters(db_session, chat.id, 3)

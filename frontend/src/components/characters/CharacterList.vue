@@ -4,6 +4,7 @@ import { useCharactersStore } from '@/stores/characters'
 import { useUiStore } from '@/stores/ui'
 import { accentForName } from '@/utils/color'
 import { parseCrop } from '@/utils/avatarCrop'
+import type { Character } from '@/types/character'
 import Avatar from '@/components/common/Avatar.vue'
 import Badge from '@/components/common/Badge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -27,6 +28,20 @@ function openProfile(id: number) {
 
 function showDetails(id: number) {
   void characters.selectCharacter(id)
+}
+
+async function toggleActive(character: Character, isActive: boolean) {
+  try {
+    await characters.setActive(character.id, isActive)
+    ui.toast(
+      isActive
+        ? `«${character.name}» снова участвует в генерации`
+        : `«${character.name}» отключён от генерации`,
+      'success',
+    )
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Не удалось изменить активность NPC.', 'error')
+  }
 }
 </script>
 
@@ -57,7 +72,10 @@ function showDetails(id: number) {
         v-for="(character, index) in sorted"
         :key="character.id"
         class="character-row"
-        :class="{ 'character-row--active': characters.selectedId === character.id }"
+        :class="{
+          'character-row--active': characters.selectedId === character.id,
+          'character-row--inactive': !character.is_player && !character.is_active,
+        }"
         :style="{ animationDelay: `${Math.min(index, 10) * 24}ms` }"
         role="button"
         tabindex="0"
@@ -65,6 +83,27 @@ function showDetails(id: number) {
         @click="openProfile(character.id)"
         @keydown.enter="openProfile(character.id)"
       >
+        <label
+          v-if="!character.is_player"
+          class="character-row__toggle"
+          :title="
+            character.is_active
+              ? 'Отключить автоматическую генерацию'
+              : 'Включить автоматическую генерацию'
+          "
+          @click.stop
+        >
+          <input
+            type="checkbox"
+            class="character-row__checkbox"
+            :checked="character.is_active"
+            :aria-label="`Автоматическая генерация для «${character.name}» ${
+              character.is_active ? 'включена' : 'отключена'
+            }`"
+            @change="toggleActive(character, ($event.target as HTMLInputElement).checked)"
+          />
+          <span class="character-row__checkbox-ui" aria-hidden="true"></span>
+        </label>
         <Avatar
           :name="character.name"
           :image-url="character.avatar_url"
@@ -143,6 +182,71 @@ function showDetails(id: number) {
 
 .character-row--active {
   background: var(--bg-active);
+}
+
+.character-row--inactive .character-row__avatar,
+.character-row--inactive .character-row__name,
+.character-row--inactive .character-row__status {
+  opacity: 0.55;
+}
+
+.character-row--inactive .character-row__avatar {
+  filter: grayscale(0.35);
+}
+
+.character-row__toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.character-row__checkbox {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.character-row__checkbox-ui {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.character-row__checkbox-ui::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  width: 5px;
+  height: 8px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.character-row__checkbox:checked + .character-row__checkbox-ui {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.character-row__checkbox:checked + .character-row__checkbox-ui::after {
+  opacity: 1;
+}
+
+.character-row__checkbox:focus-visible + .character-row__checkbox-ui {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .character-row__info {

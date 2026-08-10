@@ -44,6 +44,10 @@ class Character(Base):
     temperature: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     is_player: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Ручной переключатель участия NPC в автоматической генерации:
+    # is_active=false НЕ удаляет персонажа из мира/локации/World State, а лишь
+    # исключает его из sequential generation (ручное включение/выключение).
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     chat: Mapped["Chat"] = relationship(back_populates="characters")

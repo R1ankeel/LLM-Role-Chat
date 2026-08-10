@@ -49,6 +49,7 @@ export interface CharacterCreateInput {
   location?: string
   temperature?: number | null
   order_index?: number
+  is_active?: boolean
 }
 
 /** PUT /characters/{id}. */
@@ -67,6 +68,7 @@ export interface CharacterUpdateInput {
   avatar_crop?: string
   temperature?: number | null
   order_index?: number
+  is_active?: boolean
 }
 
 /** POST /chats/{chat_id}/locations. */

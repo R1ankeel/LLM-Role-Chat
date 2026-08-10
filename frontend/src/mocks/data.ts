@@ -181,6 +181,7 @@ export const mockCharacters: Record<number, Character[]> = {
       avatar_crop: '',
       order_index: 0,
       is_player: true,
+      is_active: true,
       created_at: '2026-08-01T18:00:00Z',
     },
     {
@@ -200,6 +201,7 @@ export const mockCharacters: Record<number, Character[]> = {
       avatar_crop: '',
       order_index: 1,
       is_player: false,
+      is_active: true,
       created_at: '2026-08-01T18:00:00Z',
     },
     {
@@ -219,6 +221,7 @@ export const mockCharacters: Record<number, Character[]> = {
       avatar_crop: '',
       order_index: 2,
       is_player: false,
+      is_active: true,
       created_at: '2026-08-01T18:00:00Z',
     },
     {
@@ -238,6 +241,7 @@ export const mockCharacters: Record<number, Character[]> = {
       avatar_crop: '',
       order_index: 3,
       is_player: false,
+      is_active: true,
       created_at: '2026-08-01T18:00:00Z',
     },
   ],
@@ -259,6 +263,7 @@ export const mockCharacters: Record<number, Character[]> = {
       avatar_crop: '',
       order_index: 0,
       is_player: true,
+      is_active: true,
       created_at: '2026-08-01T16:30:00Z',
     },
     {
@@ -278,6 +283,7 @@ export const mockCharacters: Record<number, Character[]> = {
       avatar_crop: '',
       order_index: 1,
       is_player: false,
+      is_active: true,
       created_at: '2026-08-01T16:30:00Z',
     },
   ],
